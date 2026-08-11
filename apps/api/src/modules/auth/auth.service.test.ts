@@ -176,11 +176,16 @@ function createService(overrides: Partial<CreateAuthServiceOptions> = {}) {
   const repository = overrides.repository ?? createFakeRepository()
   const tokenService = overrides.tokenService ?? createFakeTokenService()
   const mailer = overrides.mailer ?? createFakeMailer()
+  // Real HIBP check hits the network — stub it out so unit tests stay hermetic;
+  // isPasswordPwned itself is covered directly in packages/utils/src/hibp.test.ts.
+  const checkPasswordPwned = overrides.checkPasswordPwned ?? (async () => false)
 
   return {
     service: createAuthService({
       repository,
       tokenService,
+      logger: { warn: () => {} },
+      checkPasswordPwned,
       mailer,
       accessTtlMinutes: 15,
       refreshTokenTtlDays: 30,
@@ -221,6 +226,36 @@ describe('createAuthService', () => {
       await expect(service.register({ ...input, username: 'ana2' })).rejects.toMatchObject({
         code: 'CONFLICT',
       })
+    })
+
+    it('rejects a password found in the HIBP breach corpus', async () => {
+      const { service } = createService({ checkPasswordPwned: async () => true })
+
+      await expect(
+        service.register({
+          username: 'ana',
+          email: 'ana@example.com',
+          password: 'password123456',
+          birthDate: '1990-01-01',
+        }),
+      ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+    })
+
+    it('proceeds with registration when the HIBP check itself fails (degrades gracefully)', async () => {
+      const { service } = createService({
+        checkPasswordPwned: async () => {
+          throw new Error('HIBP unreachable')
+        },
+      })
+
+      const result = await service.register({
+        username: 'ana',
+        email: 'ana@example.com',
+        password: 'correct horse battery staple',
+        birthDate: '1990-01-01',
+      })
+
+      expect(result.username).toBe('ana')
     })
   })
 

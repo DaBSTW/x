@@ -65,7 +65,7 @@ describe('auth end-to-end cycle', () => {
       payload: {
         username: 'ana_dev',
         email: 'ana@example.com',
-        password: 'correct horse battery staple',
+        password: 'vX7qk-unique-test-passphrase-42',
         birthDate: '1990-01-01',
       },
     })
@@ -80,7 +80,7 @@ describe('auth end-to-end cycle', () => {
       payload: {
         username: 'someone_else',
         email: 'ana@example.com',
-        password: 'correct horse battery staple',
+        password: 'vX7qk-unique-test-passphrase-42',
         birthDate: '1990-01-01',
       },
     })
@@ -107,7 +107,7 @@ describe('auth end-to-end cycle', () => {
     const loginResponse = await app.inject({
       method: 'POST',
       url: '/v1/auth/login',
-      payload: { email: 'ana@example.com', password: 'correct horse battery staple' },
+      payload: { email: 'ana@example.com', password: 'vX7qk-unique-test-passphrase-42' },
     })
     expect(loginResponse.statusCode).toBe(200)
     const { accessToken } = loginResponse.json().data
@@ -165,7 +165,7 @@ describe('auth end-to-end cycle', () => {
     const secondLoginResponse = await app.inject({
       method: 'POST',
       url: '/v1/auth/login',
-      payload: { email: 'ana@example.com', password: 'correct horse battery staple' },
+      payload: { email: 'ana@example.com', password: 'vX7qk-unique-test-passphrase-42' },
     })
     const secondRefreshCookie = getCookie(secondLoginResponse, 'refresh_token')
 
@@ -191,7 +191,7 @@ describe('auth end-to-end cycle', () => {
       payload: {
         username: 'multi_device',
         email: 'multi@example.com',
-        password: 'correct horse battery staple',
+        password: 'vX7qk-unique-test-passphrase-42',
         birthDate: '1990-01-01',
       },
     })
@@ -205,12 +205,12 @@ describe('auth end-to-end cycle', () => {
     const loginA = await app.inject({
       method: 'POST',
       url: '/v1/auth/login',
-      payload: { email: 'multi@example.com', password: 'correct horse battery staple' },
+      payload: { email: 'multi@example.com', password: 'vX7qk-unique-test-passphrase-42' },
     })
     const loginB = await app.inject({
       method: 'POST',
       url: '/v1/auth/login',
-      payload: { email: 'multi@example.com', password: 'correct horse battery staple' },
+      payload: { email: 'multi@example.com', password: 'vX7qk-unique-test-passphrase-42' },
     })
     const accessTokenA = loginA.json().data.accessToken
     const refreshCookieB = getCookie(loginB, 'refresh_token')

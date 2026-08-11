@@ -2,14 +2,16 @@ import {
   ConflictError,
   UnauthenticatedError,
   UnprocessableError,
+  ValidationError,
   generateId,
   generateOpaqueToken,
   hashPassword,
+  isPasswordPwned,
   needsRehash,
   sha256Hex,
   verifyPassword,
 } from '@x/utils'
-import type { Mailer } from '../../lib/mailer.js'
+import type { Mailer, MailerLogger } from '../../lib/mailer.js'
 import type { TokenService } from '../../plugins/tokens.js'
 import type { AuthRepository } from './auth.repository.js'
 
@@ -40,8 +42,11 @@ export type CreateAuthServiceOptions = {
   repository: AuthRepository
   tokenService: TokenService
   mailer: Mailer
+  logger: MailerLogger
   accessTtlMinutes: number
   refreshTokenTtlDays: number
+  /** Injectable for tests — defaults to the real HIBP k-anonymity check. */
+  checkPasswordPwned?: (password: string) => Promise<boolean>
 }
 
 const EMAIL_VERIFICATION_TTL_HOURS = 24
@@ -53,7 +58,15 @@ const dummyPasswordHashPromise = hashPassword('correct horse battery staple plac
 export type AuthService = ReturnType<typeof createAuthService>
 
 export function createAuthService(options: CreateAuthServiceOptions) {
-  const { repository, tokenService, mailer, accessTtlMinutes, refreshTokenTtlDays } = options
+  const {
+    repository,
+    tokenService,
+    mailer,
+    logger,
+    accessTtlMinutes,
+    refreshTokenTtlDays,
+    checkPasswordPwned = isPasswordPwned,
+  } = options
 
   async function register(input: RegisterInput) {
     const [existingEmail, existingUsername] = await Promise.all([
@@ -63,6 +76,8 @@ export function createAuthService(options: CreateAuthServiceOptions) {
     if (existingEmail) throw new ConflictError('email is already registered', { field: 'email' })
     if (existingUsername)
       throw new ConflictError('username is already taken', { field: 'username' })
+
+    await assertPasswordNotPwned(input.password)
 
     const userId = generateId()
     const passwordHash = await hashPassword(input.password)
@@ -84,6 +99,29 @@ export function createAuthService(options: CreateAuthServiceOptions) {
       username: input.username,
       email: input.email,
       emailVerified: false as const,
+    }
+  }
+
+  /**
+   * SPECS.md §11.2: reject a password known to be in a public breach corpus.
+   * A check that fails to *run* (HIBP unreachable/timeout) is not the same as
+   * "not pwned" — it's logged and registration proceeds, since a third-party
+   * outage on this one signal shouldn't block account creation entirely
+   * (CODESTYLE.md §8.3, SPECS.md §14.4 graceful degradation).
+   */
+  async function assertPasswordNotPwned(password: string): Promise<void> {
+    let pwned: boolean
+    try {
+      pwned = await checkPasswordPwned(password)
+    } catch (error) {
+      logger.warn({ error }, 'HIBP password check failed, proceeding without it')
+      return
+    }
+
+    if (pwned) {
+      throw new ValidationError('this password has appeared in a known data breach', {
+        field: 'password',
+      })
     }
   }
 
