@@ -1,0 +1,35 @@
+{
+  "name": "x",
+  "private": true,
+  "version": "0.0.0",
+  "license": "AGPL-3.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev --parallel",
+    "test": "turbo run test",
+    "test:e2e": "turbo run test:e2e",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "format": "biome format --write .",
+    "format:check": "biome ci .",
+    "setup": "pnpm install && docker compose up -d && pnpm --filter @x/db db:migrate && pnpm --filter @x/db db:seed",
+    "db:generate": "pnpm --filter @x/db db:generate",
+    "db:migrate": "pnpm --filter @x/db db:migrate",
+    "db:studio": "pnpm --filter @x/db db:studio",
+    "db:seed": "pnpm --filter @x/db db:seed",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@commitlint/cli": "^19.6.1",
+    "@commitlint/config-conventional": "^19.6.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.3.0",
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.2"
+  }
+}

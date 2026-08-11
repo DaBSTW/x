@@ -1,0 +1,20 @@
+# Default owners for everything in the repo, unless a later match takes precedence.
+*                       @DaBSTW/core
+
+apps/api/               @DaBSTW/backend
+apps/ws-gateway/        @DaBSTW/backend
+apps/workers/           @DaBSTW/backend
+apps/web/               @DaBSTW/frontend
+apps/admin/             @DaBSTW/frontend
+apps/mobile/            @DaBSTW/frontend
+
+packages/db/            @DaBSTW/backend
+packages/contracts/     @DaBSTW/backend
+packages/sdk/           @DaBSTW/backend
+packages/ui/            @DaBSTW/frontend
+packages/config/        @DaBSTW/core
+packages/utils/         @DaBSTW/backend
+
+infra/                  @DaBSTW/infra
+.github/                @DaBSTW/infra
+docs/adr/               @DaBSTW/core
