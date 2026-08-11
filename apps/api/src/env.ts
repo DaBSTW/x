@@ -21,6 +21,14 @@ const envSchema = z
     SMTP_HOST: z.string().default('localhost'),
     SMTP_PORT: z.coerce.number().int().positive().default(1025),
     MAIL_FROM: z.string().email().default('no-reply@x.example.com'),
+
+    // Object storage (S3/MinIO) — ROADMAP.md 1.5. Defaults match docker-compose.yml's minio service.
+    S3_ENDPOINT: z.string().url().default('http://localhost:9000'),
+    S3_REGION: z.string().default('us-east-1'),
+    S3_BUCKET: z.string().default('x-media'),
+    S3_ACCESS_KEY_ID: z.string().default('x-minio'),
+    S3_SECRET_ACCESS_KEY: z.string().default('x-minio-secret'),
+    S3_FORCE_PATH_STYLE: z.coerce.boolean().default(true),
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV !== 'production') return

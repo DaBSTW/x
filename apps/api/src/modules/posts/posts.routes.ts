@@ -49,6 +49,7 @@ export async function registerPostsRoutes(app: FastifyInstance, options: PostsRo
       const create = () =>
         postsService.create(user.id, {
           text: request.body.text ?? '',
+          mediaIds: request.body.mediaIds?.map((id) => BigInt(id)),
           inReplyToId: request.body.inReplyToId ? BigInt(request.body.inReplyToId) : undefined,
           quotedPostId: request.body.quotedPostId ? BigInt(request.body.quotedPostId) : undefined,
           replyPolicy: request.body.replyPolicy,

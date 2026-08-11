@@ -13,6 +13,8 @@ import {
 import type { Env } from './env.js'
 import { createFanoutQueue } from './lib/fanout-queue.js'
 import { createMailer } from './lib/mailer.js'
+import { createMediaQueue } from './lib/media-queue.js'
+import { createMediaStorage } from './lib/media-storage.js'
 import { createNotificationsQueue } from './lib/notifications-queue.js'
 import { createAuthRepository } from './modules/auth/auth.repository.js'
 import { registerAuthRoutes } from './modules/auth/auth.routes.js'
@@ -20,6 +22,9 @@ import { createAuthService } from './modules/auth/auth.service.js'
 import { createInteractionsRepository } from './modules/interactions/interactions.repository.js'
 import { registerInteractionsRoutes } from './modules/interactions/interactions.routes.js'
 import { createInteractionsService } from './modules/interactions/interactions.service.js'
+import { createMediaRepository } from './modules/media/media.repository.js'
+import { registerMediaRoutes } from './modules/media/media.routes.js'
+import { createMediaService } from './modules/media/media.service.js'
 import { createNotificationsRepository } from './modules/notifications/notifications.repository.js'
 import { registerNotificationsRoutes } from './modules/notifications/notifications.routes.js'
 import { createNotificationsService } from './modules/notifications/notifications.service.js'
@@ -92,10 +97,15 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
 
   const fanoutQueue = createFanoutQueue(env.REDIS_URL)
   const notificationsQueue = createNotificationsQueue(env.REDIS_URL)
+  const mediaQueue = createMediaQueue(env.REDIS_URL)
   app.addHook('onClose', async () => {
-    await Promise.all([fanoutQueue.close(), notificationsQueue.close()])
+    await Promise.all([fanoutQueue.close(), notificationsQueue.close(), mediaQueue.close()])
   })
   const publishNotification = notificationsQueue.enqueue
+
+  // Shared by posts (embedding media in a post) and media (the standalone
+  // /media/:id resource) so both agree on how a storage key becomes a URL.
+  const mediaUrlConfig = { bucket: env.S3_BUCKET, publicUrlBase: env.S3_ENDPOINT }
 
   const postsRepository = createPostsRepository(app.db)
   const postsService = createPostsService(
@@ -104,6 +114,22 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
       await fanoutQueue.enqueue({ postId: postId.toString(), authorId: authorId.toString() })
     },
     publishNotification,
+    mediaUrlConfig,
+  )
+
+  const mediaStorage = createMediaStorage({
+    endpoint: env.S3_ENDPOINT,
+    region: env.S3_REGION,
+    accessKeyId: env.S3_ACCESS_KEY_ID,
+    secretAccessKey: env.S3_SECRET_ACCESS_KEY,
+    forcePathStyle: env.S3_FORCE_PATH_STYLE,
+  })
+  const mediaRepository = createMediaRepository(app.db)
+  const mediaService = createMediaService(
+    mediaRepository,
+    mediaStorage,
+    mediaQueue.enqueue,
+    mediaUrlConfig,
   )
 
   const socialGraphRepository = createSocialGraphRepository(app.db)
@@ -187,6 +213,13 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   await app.register(
     async (instance) => {
       await registerNotificationsRoutes(instance, { notificationsService, tokenService })
+    },
+    { prefix: '/v1' },
+  )
+
+  await app.register(
+    async (instance) => {
+      await registerMediaRoutes(instance, { mediaService, tokenService })
     },
     { prefix: '/v1' },
   )

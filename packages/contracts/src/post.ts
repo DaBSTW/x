@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { paginatedResponseSchema, snowflakeIdSchema } from './common.js'
+import { postMediaItemSchema } from './media.js'
 import { userProfileSchema } from './user.js'
 
 export const entityKindSchema = z.enum(['mention', 'hashtag', 'url', 'cashtag'])
@@ -12,19 +13,21 @@ export const postEntitySchema = z.object({
 })
 export type PostEntity = z.infer<typeof postEntitySchema>
 
-// Text is optional at the schema level — createPostSchema's refine enforces
-// "text or media" (ROADMAP.md 1.1); media isn't implemented until 1.5, so
-// today text is effectively required.
+// Text or media — ROADMAP.md 1.1's "texto o media obligatorio", now that
+// media exists (1.5). 4 is @x/utils' MEDIA_LIMITS.MAX_ATTACHMENTS_PER_POST,
+// duplicated as a literal the same way text's 280 duplicates MAX_POST_GRAPHEMES
+// — contracts has no dependency on @x/utils.
 export const createPostSchema = z
   .object({
     text: z.string().max(280).optional(),
+    mediaIds: z.array(snowflakeIdSchema).max(4).optional(),
     inReplyToId: snowflakeIdSchema.optional(),
     quotedPostId: snowflakeIdSchema.optional(),
     replyPolicy: z.enum(['everyone', 'following', 'mentioned']).default('everyone'),
     isSensitive: z.boolean().default(false),
   })
-  .refine((input) => Boolean(input.text?.trim()), {
-    message: 'text is required (media attachments land in a later phase)',
+  .refine((input) => Boolean(input.text?.trim()) || (input.mediaIds?.length ?? 0) > 0, {
+    message: 'text or at least one media attachment is required',
     path: ['text'],
   })
 export type CreatePostInput = z.infer<typeof createPostSchema>
@@ -56,6 +59,7 @@ export const postSchema = z.object({
     isVerified: true,
   }),
   entities: z.array(postEntitySchema),
+  media: z.array(postMediaItemSchema),
   conversationId: snowflakeIdSchema,
   inReplyToId: snowflakeIdSchema.nullable(),
   counters: postCountersSchema,

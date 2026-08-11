@@ -153,6 +153,7 @@ describe('createInteractionsService', () => {
           isVerified: false,
         },
         entities: [],
+        media: [],
         conversationId: postId.toString(),
         inReplyToId: null,
         counters: { likes: 0, reposts: 0, replies: 0, quotes: 0, views: 0 },

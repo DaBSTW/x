@@ -10,6 +10,7 @@ function makePost(id: bigint): Post {
     createdAt: new Date().toISOString(),
     author: { id: '1', username: 'ana', displayName: 'Ana', avatarUrl: null, isVerified: false },
     entities: [],
+    media: [],
     conversationId: id.toString(),
     inReplyToId: null,
     counters: { likes: 0, reposts: 0, replies: 0, quotes: 0, views: 0 },

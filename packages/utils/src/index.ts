@@ -33,6 +33,36 @@ export {
 } from './notifications.js'
 export type { NotificationJobData, NotificationKind } from './notifications.js'
 export {
+  ALLOWED_IMAGE_MIME_TYPES,
+  MEDIA_LIMITS,
+  MEDIA_PROCESSING_QUEUE_NAME,
+  MEDIA_STATUS,
+  MEDIA_VARIANT_FORMATS,
+  MEDIA_VARIANT_WIDTHS,
+  detectImageMimeType,
+  extensionForMimeType,
+  mediaOriginalKey,
+  mediaVariantKey,
+  pickPrimaryVariant,
+} from './media.js'
+export type {
+  AllowedImageMimeType,
+  MediaProcessingJobData,
+  MediaStatus,
+  MediaVariant,
+  MediaVariantFormat,
+} from './media.js'
+export {
+  buildPublicUrl,
+  createPresignedUploadUrl,
+  createS3Client,
+  deleteObject,
+  getObjectBuffer,
+  headObjectSize,
+  putObjectBuffer,
+} from './s3.js'
+export type { S3Config } from './s3.js'
+export {
   AppError,
   BlockedByUserError,
   ConflictError,

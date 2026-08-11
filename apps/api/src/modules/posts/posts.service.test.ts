@@ -155,6 +155,14 @@ function createFakeRepository() {
       }
       return reposted
     },
+    // The real repository validates and attaches media atomically inside a
+    // SQL transaction (posts.repository.ts's insertPost) — that's exercised
+    // by posts.integration.test.ts against real Postgres, not here. This
+    // fake stays a no-op: findMediaForPosts always empty, matching a post
+    // with no attachments, which is all the service-level tests need.
+    async findMediaForPosts() {
+      return []
+    },
   }
 
   return { repository, authorsById }
@@ -205,12 +213,25 @@ describe('createPostsService', () => {
       expect(post.inReplyToId).toBeNull()
     })
 
-    it('rejects empty text', async () => {
+    it('rejects empty text with no media attached either', async () => {
       const service = createPostsService(repository)
 
       await expect(
         service.create(author.id, { text: '', replyPolicy: 'everyone', isSensitive: false }),
       ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+    })
+
+    it('accepts empty text when at least one media id is attached', async () => {
+      const service = createPostsService(repository)
+
+      const post = await service.create(author.id, {
+        text: '',
+        mediaIds: [generateId()],
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      expect(post.text).toBeNull()
     })
 
     it('rejects text over 280 graphemes', async () => {

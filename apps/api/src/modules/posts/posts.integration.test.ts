@@ -1,8 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
+import { CreateBucketCommand } from '@aws-sdk/client-s3'
+import { MinioContainer, type StartedMinioContainer } from '@testcontainers/minio'
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql'
 import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis'
-import { createDatabase, migrationsFolderUrl } from '@x/db'
+import { createDatabase, media, migrationsFolderUrl } from '@x/db'
+import { MEDIA_STATUS, createS3Client, generateId } from '@x/utils'
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
 import type { FastifyInstance } from 'fastify'
 import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers'
@@ -10,25 +13,40 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { buildApp } from '../../app.js'
 import type { Env } from '../../env.js'
 
+const S3_BUCKET = 'x-media'
+
 describe('posts routes', () => {
   let postgresContainer: StartedPostgreSqlContainer
   let redisContainer: StartedRedisContainer
   let mailpitContainer: StartedTestContainer
+  let minioContainer: StartedMinioContainer
   let app: FastifyInstance
   let accessToken: string
+  let posterId: string
 
   beforeAll(async () => {
-    ;[postgresContainer, redisContainer, mailpitContainer] = await Promise.all([
+    ;[postgresContainer, redisContainer, mailpitContainer, minioContainer] = await Promise.all([
       new PostgreSqlContainer('postgres:17-alpine').start(),
       new RedisContainer('redis:7-alpine').start(),
       new GenericContainer('axllent/mailpit:latest')
         .withExposedPorts(1025, 8025)
         .withWaitStrategy(Wait.forListeningPorts())
         .start(),
+      new MinioContainer('minio/minio:latest').start(),
     ])
 
     const migrationDb = createDatabase(postgresContainer.getConnectionUri())
     await migrate(migrationDb, { migrationsFolder: fileURLToPath(migrationsFolderUrl()) })
+
+    const s3Endpoint = minioContainer.getConnectionUrl()
+    const s3Client = createS3Client({
+      endpoint: s3Endpoint,
+      region: 'us-east-1',
+      accessKeyId: minioContainer.getUsername(),
+      secretAccessKey: minioContainer.getPassword(),
+      forcePathStyle: true,
+    })
+    await s3Client.send(new CreateBucketCommand({ Bucket: S3_BUCKET }))
 
     const env: Env = {
       NODE_ENV: 'test',
@@ -43,6 +61,12 @@ describe('posts routes', () => {
       SMTP_HOST: mailpitContainer.getHost(),
       SMTP_PORT: mailpitContainer.getMappedPort(1025),
       MAIL_FROM: 'no-reply@x.example.com',
+      S3_ENDPOINT: s3Endpoint,
+      S3_REGION: 'us-east-1',
+      S3_BUCKET,
+      S3_ACCESS_KEY_ID: minioContainer.getUsername(),
+      S3_SECRET_ACCESS_KEY: minioContainer.getPassword(),
+      S3_FORCE_PATH_STYLE: true,
     }
     app = await buildApp(env)
 
@@ -57,6 +81,7 @@ describe('posts routes', () => {
       },
     })
     expect(registerResponse.statusCode).toBe(201)
+    posterId = registerResponse.json().data.id
 
     const loginResponse = await app.inject({
       method: 'POST',
@@ -69,7 +94,12 @@ describe('posts routes', () => {
 
   afterAll(async () => {
     await app.close()
-    await Promise.all([postgresContainer.stop(), redisContainer.stop(), mailpitContainer.stop()])
+    await Promise.all([
+      postgresContainer.stop(),
+      redisContainer.stop(),
+      mailpitContainer.stop(),
+      minioContainer.stop(),
+    ])
   })
 
   function authHeader() {
@@ -114,6 +144,100 @@ describe('posts routes', () => {
       headers: authHeader(),
       payload: {},
     })
+    expect(response.statusCode).toBe(400)
+  })
+
+  it('attaches ready media to a text-only post and embeds it in the response', async () => {
+    const mediaId = generateId()
+    await app.db.insert(media).values({
+      id: mediaId,
+      ownerId: BigInt(posterId),
+      storageKey: `media/${mediaId}/original.webp`,
+      mimeType: 'image/webp',
+      width: 800,
+      height: 600,
+      sizeBytes: 12_345n,
+      blurhash: 'LEHV6nWB2yk8pyo0adR*',
+      variants: [{ width: 800, height: 600, format: 'webp', key: `media/${mediaId}/800.webp` }],
+      status: MEDIA_STATUS.READY,
+    })
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/posts',
+      headers: authHeader(),
+      payload: { text: 'con una imagen', mediaIds: [mediaId.toString()] },
+    })
+
+    expect(response.statusCode).toBe(201)
+    const post = response.json().data
+    expect(post.media).toHaveLength(1)
+    expect(post.media[0]).toMatchObject({
+      id: mediaId.toString(),
+      kind: 'image',
+      width: 800,
+      height: 600,
+      blurhash: 'LEHV6nWB2yk8pyo0adR*',
+    })
+    expect(post.media[0].url).toContain('800.webp')
+
+    // The same media survives a fresh read, not just the create response.
+    const getResponse = await app.inject({ method: 'GET', url: `/v1/posts/${post.id}` })
+    expect(getResponse.json().data.media).toHaveLength(1)
+  })
+
+  it('accepts a media-only post with no text', async () => {
+    const mediaId = generateId()
+    await app.db.insert(media).values({
+      id: mediaId,
+      ownerId: BigInt(posterId),
+      storageKey: `media/${mediaId}/original.webp`,
+      mimeType: 'image/webp',
+      sizeBytes: 100n,
+      status: MEDIA_STATUS.READY,
+    })
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/posts',
+      headers: authHeader(),
+      payload: { mediaIds: [mediaId.toString()] },
+    })
+
+    expect(response.statusCode).toBe(201)
+    expect(response.json().data.text).toBeNull()
+  })
+
+  it('rejects attaching media that does not belong to the caller', async () => {
+    const otherRegister = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/register',
+      payload: {
+        username: 'notposter',
+        email: 'notposter@example.com',
+        password: 'another unique passphrase 8y3',
+        birthDate: '1990-01-01',
+      },
+    })
+    const otherId = BigInt(otherRegister.json().data.id)
+
+    const mediaId = generateId()
+    await app.db.insert(media).values({
+      id: mediaId,
+      ownerId: otherId,
+      storageKey: `media/${mediaId}/original.webp`,
+      mimeType: 'image/webp',
+      sizeBytes: 100n,
+      status: MEDIA_STATUS.READY,
+    })
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/posts',
+      headers: authHeader(),
+      payload: { text: 'no debería funcionar', mediaIds: [mediaId.toString()] },
+    })
+
     expect(response.statusCode).toBe(400)
   })
 

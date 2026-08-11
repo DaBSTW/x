@@ -13,6 +13,8 @@ describe('parseEnv', () => {
     expect(env.NODE_ENV).toBe('development')
     expect(env.API_PORT).toBe(3001)
     expect(env.JWT_ACCESS_TTL_MINUTES).toBe(15)
+    expect(env.S3_BUCKET).toBe('x-media')
+    expect(env.S3_FORCE_PATH_STYLE).toBe(true)
   })
 
   it('throws EnvValidationError when DATABASE_URL is missing', () => {

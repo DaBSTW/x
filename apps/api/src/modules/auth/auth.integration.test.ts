@@ -48,6 +48,12 @@ describe('auth end-to-end cycle', () => {
       SMTP_HOST: mailpitContainer.getHost(),
       SMTP_PORT: mailpitContainer.getMappedPort(1025),
       MAIL_FROM: 'no-reply@x.example.com',
+      S3_ENDPOINT: 'http://localhost:9000',
+      S3_REGION: 'us-east-1',
+      S3_BUCKET: 'x-media',
+      S3_ACCESS_KEY_ID: 'x-minio',
+      S3_SECRET_ACCESS_KEY: 'x-minio-secret',
+      S3_FORCE_PATH_STYLE: true,
     }
     app = await buildApp(env)
   }, 120_000)

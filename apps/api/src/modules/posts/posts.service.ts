@@ -1,4 +1,4 @@
-import type { Post } from '@x/contracts'
+import type { Post, PostMediaItem } from '@x/contracts'
 import {
   ConflictError,
   ForbiddenError,
@@ -6,11 +6,13 @@ import {
   NotFoundError,
   type NotificationJobData,
   ValidationError,
+  buildPublicUrl,
   countCharacters,
   generateId,
   parseEntities,
+  pickPrimaryVariant,
 } from '@x/utils'
-import type { AuthorRow, PostEntityRow, PostRepository } from './posts.repository.js'
+import type { AuthorRow, PostEntityRow, PostMediaRow, PostRepository } from './posts.repository.js'
 import { ENTITY_KIND_CODES, ENTITY_KIND_NAMES } from './posts.types.js'
 
 const MAX_MENTIONS = 10
@@ -18,6 +20,7 @@ const MAX_HASHTAGS = 5
 
 export type CreatePostServiceInput = {
   text: string
+  mediaIds?: bigint[] | undefined
   inReplyToId?: bigint | undefined
   quotedPostId?: bigint | undefined
   replyPolicy: 'everyone' | 'following' | 'mentioned'
@@ -38,10 +41,25 @@ export type OnPostCreated = (postId: bigint, authorId: bigint) => Promise<void>
 /** Called for each notification-worthy event a post produces (reply, quote, mention) — ROADMAP.md 1.7. */
 export type PublishNotification = (data: NotificationJobData) => Promise<void>
 
+export type MediaUrlConfig = {
+  bucket: string
+  publicUrlBase: string
+}
+
+// Matches .env.example's S3_BUCKET/S3_ENDPOINT defaults — a real deployment
+// always passes its own config explicitly (see app.ts); this default only
+// exists so the ~30 existing tests that never touch media don't all need
+// updating for a config they'll never actually read from.
+const DEFAULT_MEDIA_URL_CONFIG: MediaUrlConfig = {
+  bucket: 'x-media',
+  publicUrlBase: 'http://localhost:9000',
+}
+
 export function createPostsService(
   repository: PostRepository,
   onPostCreated?: OnPostCreated,
   publishNotification?: PublishNotification,
+  mediaUrlConfig: MediaUrlConfig = DEFAULT_MEDIA_URL_CONFIG,
 ) {
   // Same failure posture as onPostCreated: a queue outage must never fail
   // the write that triggered the notification.
@@ -55,9 +73,10 @@ export function createPostsService(
   }
 
   async function create(authorId: bigint, input: CreatePostServiceInput): Promise<Post> {
+    const mediaIds = input.mediaIds ?? []
     const graphemeCount = countCharacters(input.text)
-    if (graphemeCount === 0) {
-      throw new ValidationError('post text is required')
+    if (graphemeCount === 0 && mediaIds.length === 0) {
+      throw new ValidationError('post text or at least one media attachment is required')
     }
     if (graphemeCount > MAX_POST_GRAPHEMES) {
       throw new ValidationError(`post text exceeds ${MAX_POST_GRAPHEMES} characters`, {
@@ -113,12 +132,14 @@ export function createPostsService(
         entity.kind === 'mention' ? (mentionIds.get(entity.value.toLowerCase()) ?? null) : null,
     }))
 
+    // text can legitimately be '' for a media-only post — the DB column
+    // stores NULL for "no text", matching how a repost's text is stored.
     await repository.insertPost(
       {
         id,
         authorId,
         kind,
-        text: input.text,
+        text: input.text || null,
         inReplyToId: input.inReplyToId ?? null,
         conversationId,
         quotedPostId: input.quotedPostId ?? null,
@@ -127,9 +148,13 @@ export function createPostsService(
       },
       entityRows,
       { postId: id },
+      mediaIds,
     )
 
-    const author = await repository.findAuthorById(authorId)
+    const [author, mediaRows] = await Promise.all([
+      repository.findAuthorById(authorId),
+      repository.findMediaForPosts([id]),
+    ])
     if (!author) throw new NotFoundError('user', authorId.toString())
 
     // Fan-out is an optimization, not a correctness requirement: lazy
@@ -176,7 +201,7 @@ export function createPostsService(
     return toPostDto(
       {
         id,
-        text: input.text,
+        text: input.text || null,
         createdAt: new Date(),
         conversationId,
         inReplyToId: input.inReplyToId ?? null,
@@ -184,6 +209,8 @@ export function createPostsService(
       author,
       { likesCount: 0, repostsCount: 0, repliesCount: 0, quotesCount: 0, viewsCount: 0n },
       entityRows,
+      mediaRows,
+      mediaUrlConfig,
     )
   }
 
@@ -191,14 +218,15 @@ export function createPostsService(
     const post = await repository.findPostById(id)
     if (!post) throw new NotFoundError('post', id.toString())
 
-    const [author, counters, entities] = await Promise.all([
+    const [author, counters, entities, mediaRows] = await Promise.all([
       repository.findAuthorById(post.authorId),
       repository.findPostCounters(id),
       repository.findPostEntities(id),
+      repository.findMediaForPosts([id]),
     ])
     if (!author) throw new NotFoundError('user', post.authorId.toString())
 
-    return toPostDto(post, author, counters ?? emptyCounters(), entities)
+    return toPostDto(post, author, counters ?? emptyCounters(), entities, mediaRows, mediaUrlConfig)
   }
 
   async function remove(postId: bigint, requesterId: bigint): Promise<void> {
@@ -248,11 +276,15 @@ export function createPostsService(
       })
     }
 
+    // A repost has no media of its own — SPECS.md §4.3's `text IS NULL` row;
+    // the original post's media is reachable through repost_of_id, not duplicated here.
     return toPostDto(
       { id, text: null, createdAt: new Date(), conversationId, inReplyToId: null },
       author,
       emptyCounters(),
       [],
+      [],
+      mediaUrlConfig,
     )
   }
 
@@ -281,14 +313,16 @@ export function createPostsService(
     const page = hasMore ? rows.slice(0, limit) : rows
 
     const postIds = page.map((row) => row.id)
-    const [authors, countersRows, entityRows] = await Promise.all([
+    const [authors, countersRows, entityRows, mediaRows] = await Promise.all([
       repository.findAuthorsByIds([...new Set(page.map((row) => row.authorId))]),
       repository.findCountersForPosts(postIds),
       repository.findEntitiesForPosts(postIds),
+      repository.findMediaForPosts(postIds),
     ])
     const authorsById = new Map(authors.map((author) => [author.id, author]))
     const countersByPostId = new Map(countersRows.map((row) => [row.postId, row]))
     const entitiesByPostId = groupBy(entityRows, (row) => row.postId)
+    const mediaByPostId = groupBy(mediaRows, (row) => row.postId)
 
     const items = page.map((row) => {
       const author = authorsById.get(row.authorId)
@@ -298,6 +332,8 @@ export function createPostsService(
         author,
         countersByPostId.get(row.id) ?? emptyCounters(),
         entitiesByPostId.get(row.id) ?? [],
+        mediaByPostId.get(row.id) ?? [],
+        mediaUrlConfig,
       )
     })
 
@@ -314,16 +350,18 @@ export function createPostsService(
   async function getManyByIds(ids: bigint[]): Promise<Post[]> {
     if (ids.length === 0) return []
 
-    const [rows, countersRows, entityRows] = await Promise.all([
+    const [rows, countersRows, entityRows, mediaRows] = await Promise.all([
       repository.findPostsByIds(ids),
       repository.findCountersForPosts(ids),
       repository.findEntitiesForPosts(ids),
+      repository.findMediaForPosts(ids),
     ])
     const authors = await repository.findAuthorsByIds([...new Set(rows.map((row) => row.authorId))])
     const rowsById = new Map(rows.map((row) => [row.id, row]))
     const authorsById = new Map(authors.map((author) => [author.id, author]))
     const countersByPostId = new Map(countersRows.map((row) => [row.postId, row]))
     const entitiesByPostId = groupBy(entityRows, (row) => row.postId)
+    const mediaByPostId = groupBy(mediaRows, (row) => row.postId)
 
     const items: Post[] = []
     for (const id of ids) {
@@ -336,6 +374,8 @@ export function createPostsService(
           author,
           countersByPostId.get(id) ?? emptyCounters(),
           entitiesByPostId.get(id) ?? [],
+          mediaByPostId.get(id) ?? [],
+          mediaUrlConfig,
         ),
       )
     }
@@ -370,6 +410,8 @@ function toPostDto(
   author: AuthorRow,
   counters: CountersRowLike,
   entities: Array<{ kind: number; value: string; startIndex: number; endIndex: number }>,
+  mediaRows: PostMediaRow[],
+  mediaUrlConfig: MediaUrlConfig,
 ): Post {
   return {
     id: post.id.toString(),
@@ -388,6 +430,7 @@ function toPostDto(
       start: entity.startIndex,
       end: entity.endIndex,
     })),
+    media: mediaRows.map((row) => toPostMediaItem(row, mediaUrlConfig)),
     conversationId: (post.conversationId ?? post.id).toString(),
     inReplyToId: post.inReplyToId?.toString() ?? null,
     counters: {
@@ -397,6 +440,29 @@ function toPostDto(
       quotes: counters.quotesCount,
       views: Number(counters.viewsCount),
     },
+  }
+}
+
+/**
+ * A post only ever embeds media that's already `ready` (insertPost's WHERE
+ * clause guarantees that at attach time), so unlike media.service.ts's
+ * toMediaDto this never needs to represent pending/failed — just render it.
+ */
+function toPostMediaItem(row: PostMediaRow, config: MediaUrlConfig): PostMediaItem {
+  const variants = row.variants.map((variant) => ({
+    ...variant,
+    url: buildPublicUrl(config.publicUrlBase, config.bucket, variant.key),
+  }))
+  const primary = pickPrimaryVariant(variants)
+
+  return {
+    id: row.id.toString(),
+    kind: row.kind,
+    url: primary?.url ?? buildPublicUrl(config.publicUrlBase, config.bucket, row.storageKey),
+    width: row.width,
+    height: row.height,
+    blurhash: row.blurhash,
+    altText: row.altText,
   }
 }
 

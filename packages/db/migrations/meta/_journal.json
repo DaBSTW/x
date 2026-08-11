@@ -22,6 +22,13 @@
       "when": 1786451767600,
       "tag": "0002_brave_mephisto",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786456962982,
+      "tag": "0003_great_scarlet_spider",
+      "breakpoints": true
     }
   ]
 }

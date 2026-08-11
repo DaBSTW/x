@@ -2,12 +2,14 @@ import type { Database } from '@x/db'
 import {
   type NewPost,
   type NewPostCounters,
+  media,
   postCounters,
   postEntities,
   posts,
   userCounters,
   users,
 } from '@x/db'
+import { MEDIA_STATUS, ValidationError } from '@x/utils'
 import { and, desc, eq, inArray, isNull, lt, sql } from 'drizzle-orm'
 
 export type PostEntityRow = {
@@ -27,6 +29,8 @@ export type AuthorRow = {
   isVerified: boolean
 }
 
+export type PostMediaRow = typeof media.$inferSelect
+
 export type PostRepository = ReturnType<typeof createPostsRepository>
 
 export function createPostsRepository(db: Database) {
@@ -35,6 +39,7 @@ export function createPostsRepository(db: Database) {
       post: NewPost,
       entities: PostEntityRow[],
       counters: NewPostCounters,
+      mediaIds: bigint[] = [],
     ): Promise<void> {
       await db.transaction(async (tx) => {
         await tx.insert(posts).values(post)
@@ -46,6 +51,31 @@ export function createPostsRepository(db: Database) {
           .update(userCounters)
           .set({ postsCount: sql`${userCounters.postsCount} + 1` })
           .where(eq(userCounters.userId, post.authorId))
+
+        if (mediaIds.length > 0) {
+          // The WHERE clause is the actual validation: only rows the caller
+          // owns, that finished processing, and that aren't already attached
+          // elsewhere can match. If fewer rows matched than requested, some
+          // id was invalid/foreign/not-ready/already-used — throwing here
+          // rolls back the whole transaction, so no half-attached post exists.
+          const attached = await tx
+            .update(media)
+            .set({ postId: post.id })
+            .where(
+              and(
+                inArray(media.id, mediaIds),
+                eq(media.ownerId, post.authorId),
+                eq(media.status, MEDIA_STATUS.READY),
+                isNull(media.postId),
+              ),
+            )
+            .returning({ id: media.id })
+          if (attached.length !== mediaIds.length) {
+            throw new ValidationError(
+              'one or more media attachments are invalid, not owned, not ready, or already attached to another post',
+            )
+          }
+        }
       })
     },
 
@@ -79,6 +109,11 @@ export function createPostsRepository(db: Database) {
     async findCountersForPosts(postIds: bigint[]) {
       if (postIds.length === 0) return []
       return db.select().from(postCounters).where(inArray(postCounters.postId, postIds))
+    },
+
+    async findMediaForPosts(postIds: bigint[]) {
+      if (postIds.length === 0) return []
+      return db.select().from(media).where(inArray(media.postId, postIds))
     },
 
     async findAuthorById(id: bigint): Promise<AuthorRow | null> {
