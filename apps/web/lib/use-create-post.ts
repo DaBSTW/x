@@ -21,6 +21,7 @@ export function useCreatePost() {
       const { data, error } = await apiClient.POST('/posts', {
         body: {
           ...(input.text !== undefined && { text: input.text }),
+          ...(input.mediaIds !== undefined && { mediaIds: input.mediaIds }),
           ...(input.inReplyToId !== undefined && { inReplyToId: input.inReplyToId }),
           ...(input.quotedPostId !== undefined && { quotedPostId: input.quotedPostId }),
           replyPolicy: input.replyPolicy,

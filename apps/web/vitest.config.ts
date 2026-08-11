@@ -25,6 +25,7 @@ export default defineConfig({
         'lib/auth-store.ts',
         'lib/theme-store.ts',
         'lib/format.ts',
+        'lib/media-grid-layout.ts',
         'components/ui/button.tsx',
         'components/rich-text.tsx',
       ],

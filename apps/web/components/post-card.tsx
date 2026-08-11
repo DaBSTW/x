@@ -1,5 +1,6 @@
 'use client'
 
+import { MediaGrid } from '@/components/media-grid'
 import { RichText } from '@/components/rich-text'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { cn } from '@/lib/cn'
@@ -58,6 +59,11 @@ function PostCardComponent({ post }: PostCardProps) {
           <p className="whitespace-pre-wrap text-sm">
             <RichText text={post.text} entities={post.entities} />
           </p>
+        )}
+        {post.media.length > 0 && (
+          <div className="mt-1">
+            <MediaGrid media={post.media} />
+          </div>
         )}
         <div className="mt-1 flex max-w-md items-center justify-between">
           <ActionButton

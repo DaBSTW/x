@@ -5,27 +5,46 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/cn'
 import { useCreatePost } from '@/lib/use-create-post'
 import { useCurrentUser } from '@/lib/use-current-user'
+import { type MediaAttachment, isReadyAttachment, useMediaUpload } from '@/lib/use-media-upload'
+import { ALLOWED_IMAGE_MIME_TYPES, MEDIA_LIMITS } from '@x/utils/media'
 import { MAX_POST_GRAPHEMES, countCharacters } from '@x/utils/text'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { toast } from 'sonner'
 
 export function Composer() {
   const [text, setText] = useState('')
   const { data: me } = useCurrentUser()
   const createPost = useCreatePost()
+  const { attachments, addFiles, removeAttachment, reset: resetAttachments } = useMediaUpload()
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const count = countCharacters(text)
   const remaining = MAX_POST_GRAPHEMES - count
   const isOverLimit = remaining < 0
-  const isEmpty = text.trim().length === 0
-  const canSubmit = !isEmpty && !isOverLimit && !createPost.isPending
+  const readyMediaIds = attachments
+    .filter(isReadyAttachment)
+    .map((attachment) => attachment.mediaId)
+  const isBusy = attachments.some((a) => a.status === 'uploading' || a.status === 'processing')
+  const hasFailedAttachment = attachments.some((a) => a.status === 'error')
+  const isEmpty = text.trim().length === 0 && readyMediaIds.length === 0
+  const canSubmit =
+    !isEmpty && !isOverLimit && !isBusy && !hasFailedAttachment && !createPost.isPending
+  const canAttachMore = attachments.length < MEDIA_LIMITS.MAX_ATTACHMENTS_PER_POST
 
   const submit = () => {
     if (!canSubmit) return
     createPost.mutate(
-      { text, replyPolicy: 'everyone', isSensitive: false },
       {
-        onSuccess: () => setText(''),
+        text,
+        ...(readyMediaIds.length > 0 && { mediaIds: readyMediaIds }),
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      },
+      {
+        onSuccess: () => {
+          setText('')
+          resetAttachments()
+        },
         onError: (error) => {
           toast.error(error instanceof Error ? error.message : 'No se pudo publicar el post.')
         },
@@ -48,21 +67,117 @@ export function Composer() {
           rows={3}
           className="w-full resize-none bg-transparent text-lg placeholder:text-muted-foreground focus-visible:outline-none"
         />
-        <div className="flex items-center justify-end gap-3">
-          <span
-            className={cn(
-              'text-sm tabular-nums',
-              isOverLimit ? 'text-destructive' : 'text-muted-foreground',
-            )}
-            aria-live="polite"
-          >
-            {remaining}
-          </span>
-          <Button type="button" onClick={submit} disabled={!canSubmit}>
-            {createPost.isPending ? 'Publicando…' : 'Postear'}
-          </Button>
+        {attachments.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {attachments.map((attachment) => (
+              <AttachmentThumbnail
+                key={attachment.localId}
+                attachment={attachment}
+                onRemove={() => removeAttachment(attachment.localId)}
+              />
+            ))}
+          </div>
+        )}
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept={ALLOWED_IMAGE_MIME_TYPES.join(',')}
+              multiple
+              className="hidden"
+              onChange={(event) => {
+                if (event.target.files && event.target.files.length > 0) {
+                  addFiles(event.target.files)
+                }
+                event.target.value = ''
+              }}
+            />
+            <button
+              type="button"
+              aria-label="Adjuntar imagen"
+              title="Adjuntar imagen"
+              disabled={!canAttachMore}
+              onClick={() => fileInputRef.current?.click()}
+              className="flex items-center justify-center rounded-full p-2 text-primary transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
+            >
+              <ImageIcon />
+            </button>
+          </div>
+          <div className="flex items-center gap-3">
+            <span
+              className={cn(
+                'text-sm tabular-nums',
+                isOverLimit ? 'text-destructive' : 'text-muted-foreground',
+              )}
+              aria-live="polite"
+            >
+              {remaining}
+            </span>
+            <Button type="button" onClick={submit} disabled={!canSubmit}>
+              {createPost.isPending ? 'Publicando…' : 'Postear'}
+            </Button>
+          </div>
         </div>
       </div>
     </div>
+  )
+}
+
+function AttachmentThumbnail({
+  attachment,
+  onRemove,
+}: {
+  attachment: MediaAttachment
+  onRemove: () => void
+}) {
+  return (
+    <div className="relative h-20 w-20 overflow-hidden rounded-lg border border-border">
+      <img src={attachment.previewUrl} alt="" className="h-full w-full object-cover" />
+      {(attachment.status === 'uploading' || attachment.status === 'processing') && (
+        <div className="absolute inset-0 flex items-center justify-center bg-background/60">
+          <span
+            aria-label="Subiendo imagen"
+            className="h-5 w-5 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent"
+          />
+        </div>
+      )}
+      {attachment.status === 'error' && (
+        <div
+          title={attachment.error}
+          className="absolute inset-0 flex items-center justify-center bg-destructive/80 p-1 text-center text-[10px] leading-tight text-destructive-foreground"
+        >
+          No se pudo subir
+        </div>
+      )}
+      <button
+        type="button"
+        aria-label="Quitar imagen"
+        onClick={onRemove}
+        className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-background/80 text-xs leading-none text-foreground hover:bg-background"
+      >
+        ×
+      </button>
+    </div>
+  )
+}
+
+function ImageIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="20"
+      height="20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <circle cx="8.5" cy="8.5" r="1.5" />
+      <path d="M21 15l-5-5L5 21" />
+    </svg>
   )
 }

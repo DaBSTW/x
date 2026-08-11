@@ -198,16 +198,16 @@
 
 ### 1.8 Frontend del MVP 🟡
 
-- [x] `<Composer>`: texto, contador visual (`@x/utils/text`'s `countCharacters`, el mismo módulo que valida en el servidor), envío. ⚪ Adjuntar imágenes/preview: el backend de 1.5 ya existe (upload-url/finalize/`mediaIds` en `POST /posts`), pero el flujo de subida en el cliente (seleccionar archivo → PUT al presigned URL → finalize → adjuntar) todavía no está construido en `<Composer>` — queda como su propio checkpoint, no bloqueado por nada más que tiempo.
-- [x] `<PostCard>`: autor, texto con entidades enlazadas, acciones (like/repost/bookmark reales, responder como acción reconocida pero aún no funcional), timestamp relativo (`Intl.RelativeTimeFormat`, SPECS.md §7.6). ⚪ `post.media` ya llega poblado desde la API (1.5) pero `<PostCard>` todavía no lo renderiza — depende de `<MediaGrid>`, bullet siguiente.
+- [x] `<Composer>`: texto, contador visual (`@x/utils/text`'s `countCharacters`, el mismo módulo que valida en el servidor), envío. Adjuntar imágenes: `useMediaUpload` (`apps/web/lib/use-media-upload.ts`) orquesta seleccionar archivo → validar tipo/tamaño en cliente (`@x/utils/media`) → `upload-url` → PUT directo a S3/MinIO → `finalize` → poll de `GET /media/:id` hasta `ready`/`failed`; hasta 4 miniaturas con su propio estado (subiendo/procesando/error) y botón de quitar, envío bloqueado mientras algo sigue procesando o falló.
+- [x] `<PostCard>`: autor, texto con entidades enlazadas, acciones (like/repost/bookmark reales, responder como acción reconocida pero aún no funcional), timestamp relativo (`Intl.RelativeTimeFormat`, SPECS.md §7.6), `<MediaGrid media={post.media} />` cuando el post trae imágenes.
 - [x] `<RichText>`: renderizado por offsets de `entities` — **nunca** HTML crudo. Cubierto con tests de componente (`@testing-library/react`) contra `parseEntities` real, no offsets inventados a mano.
 - [x] `<Timeline>`: `useInfiniteQuery` + `useVirtualizer` (`useWindowVirtualizer`, ya que el shell no tiene contenedor de scroll de altura fija), `overscan: 5`, altura estable vía medición dinámica (`measureElement`), `role="feed"` + `aria-posinset`/`aria-setsize` (SPECS.md §7.5)
-- [ ] ⚪ `<MediaGrid>`: layouts para 1, 2, 3 y 4 imágenes con `aspect-ratio` — 1.5 ya expone `post.media` (url/width/height/blurhash/altText) para consumirlo; el componente en sí y su integración en `<PostCard>` quedan pendientes, junto con el flujo de subida del `<Composer>` de arriba
+- [x] `<MediaGrid>`: layouts para 1 (aspect-ratio propio, recortado entre 1:2 y 1.91:1), y 2/3/4 (marco 16:9 fijo compartido, la propia convención de X) — el layout es lógica pura y testeada (`lib/media-grid-layout.ts`), separada del componente. Placeholder de blurhash decodificado a un canvas en memoria y mostrado como `data:` URL hasta que la imagen real termina de cargar (`onLoad` cruza la opacidad). ⚪ Editar `alt_text` desde la UI no está construido (`PATCH /media/:id` ya existe, pero nada en `<Composer>` lo llama todavía) — el texto alternativo solo se muestra si ya venía cargado.
 - [x] **Actualizaciones optimistas** en like, repost y bookmark con rollback ante error — snapshot de toda query `['timeline', …]` antes de mutar, restaurado en `onError` (SPECS.md §7.3)
 - [x] Skeleton de carga en `<Timeline>`. ⚪ Perfil y notificaciones diferidos — esas páginas todavía no existen (1.6/1.7 frontend sin empezar)
 - [x] Estados vacíos con acción sugerida: timeline sin seguidos → tarjetas de `GET /users/suggestions` (nuevo endpoint, ver 1.2) con botón "Seguir" funcional, no un mensaje muerto
 
-⚪ Cobertura de estos componentes: los hooks de datos (`use-timeline`, `use-post-mutations`, `use-create-post`, `use-follow`, `use-suggestions`, `use-current-user`) y los componentes que sobre todo los orquestan (`Composer`, `PostCard`, `Timeline`, `EmptyTimeline`) quedan fuera del umbral de cobertura unitaria de `apps/web` (`vitest.config.ts`'s `coverage.include`), tal como ya deferían `use-session`/`use-auth-mutations` desde 0.6 — el plan siempre fue Playwright e2e contra páginas reales (SPECS.md §14, README.md's `pnpm test:e2e`), que aún no está instalado en el repo. La lógica pura sin hooks (`<RichText>`, `lib/format.ts`) sí se añadió al umbral y tiene tests reales. Playwright e2e (`Registro, publicar, seguir, DM, notificaciones` per SPECS.md §14) sigue pendiente como su propia pieza de infraestructura.
+⚪ Cobertura de estos componentes: los hooks de datos (`use-timeline`, `use-post-mutations`, `use-create-post`, `use-follow`, `use-suggestions`, `use-current-user`, `use-media-upload`) y los componentes que sobre todo los orquestan (`Composer`, `PostCard`, `Timeline`, `EmptyTimeline`, `MediaGrid` — este último también por el canvas de blurhash, que jsdom no implementa) quedan fuera del umbral de cobertura unitaria de `apps/web` (`vitest.config.ts`'s `coverage.include`), tal como ya deferían `use-session`/`use-auth-mutations` desde 0.6 — el plan siempre fue Playwright e2e contra páginas reales (SPECS.md §14, README.md's `pnpm test:e2e`), que aún no está instalado en el repo. La lógica pura sin hooks (`<RichText>`, `lib/format.ts`, `lib/media-grid-layout.ts`) sí se añadió al umbral y tiene tests reales. Playwright e2e (`Registro, publicar, seguir, DM, notificaciones` per SPECS.md §14) sigue pendiente como su propia pieza de infraestructura.
 
 ### ✅ Criterio de aceptación de la fase 1
 
@@ -218,12 +218,12 @@
 🟡 Validación real, pieza por pieza: seguirse ✅, dar like/repost ✅ (backend + UI), ver
 el resultado en el propio timeline en <5 s ✅ (worker de fan-out verificado con
 Testcontainers: 2.70 s para 100 000 seguidores — ver 1.3). Publicar un post con imagen
-y alt-text ✅ **a nivel de API** (`POST /media/upload-url` → PUT → `finalize` →
-`POST /posts` con `mediaIds`, probado de punta a punta contra MinIO real, alt-text vía
-`PATCH /media/:id`), pero ⚪ no todavía como flujo de usuario real: `<Composer>` no
-tiene UI de adjuntar imágenes (1.8). El p95 < 200 ms a 1000 usuarios concurrentes en
-staging sigue sin poderse certificar — no hay despliegue de staging en este entorno
-(mismo hueco señalado en 1.3's nota de k6).
+✅ de punta a punta como flujo de usuario real (`<Composer>` → `upload-url` → PUT →
+`finalize` → `POST /posts` con `mediaIds` → `<PostCard>`/`<MediaGrid>` mostrándolo) —
+⚪ salvo *editar* el alt-text desde el cliente, que sigue sin UI (`PATCH /media/:id`
+existe, pero nada en `<Composer>` lo llama todavía). El p95 < 200 ms a 1000 usuarios
+concurrentes en staging sigue sin poderse certificar — no hay despliegue de staging en
+este entorno (mismo hueco señalado en 1.3's nota de k6).
 
 ---
 
