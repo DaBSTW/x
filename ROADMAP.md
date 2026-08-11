@@ -127,7 +127,7 @@
 - [x] `GET /posts/:id`, `DELETE /posts/:id` (soft delete)
 - [x] `GET /users/:username/posts` con paginación por cursor
 - [x] Resolución de `conversation_id` (raíz del hilo == su propio id)
-- [x] Validaciones: máx. 10 menciones, máx. 5 hashtags, texto o media obligatorio (media llega en 1.5; hoy el texto es obligatorio)
+- [x] Validaciones: máx. 10 menciones, máx. 5 hashtags, texto o media obligatorio (ambos opcionales a nivel de schema; el `refine` exige al menos uno — desde 1.5, `mediaIds` satisface esto igual que `text`)
 
 ### 1.2 Grafo social 🔴
 
@@ -167,20 +167,22 @@
 
 ### 1.5 Multimedia — imágenes 🟡
 
-- [ ] `POST /media/upload-url` → URL prefirmada de S3/MinIO + `media_id`
-- [ ] `POST /media/:id/finalize` → valida y encola procesamiento
-- [ ] **Validación por magic bytes**, nunca por `Content-Type` del cliente
-- [ ] Protección contra bomba de descompresión (límite de píxeles totales)
-- [ ] **Strip completo de EXIF** (crítico: elimina geolocalización), aplicando orientación al píxel
-- [ ] Worker con `sharp`: variantes WebP + AVIF en 4 anchos (340/600/1200/orig)
-- [ ] Generación de **blurhash** para placeholder
-- [ ] Adjuntar hasta 4 imágenes a un post; `alt_text` editable
-- [ ] Límite: 5 MB, 8192×8192 máx.
+- [x] `POST /media/upload-url` → URL prefirmada de S3/MinIO + `media_id`. Simplificado frente al diagrama de flujo de SPECS.md §9.1 (PUT presignado directo, sin `fields` de un POST presignado multiparte) — el bullet del roadmap solo pedía "URL prefirmada + media_id", y un PUT único es un cliente mucho más simple sin perder ninguna propiedad de seguridad.
+- [x] `POST /media/:id/finalize` → valida (síncrono, feedback inmediato) y encola procesamiento (asíncrono, cola `media-processing` de BullMQ, `apps/workers` como consumidor)
+- [x] **Validación por magic bytes**, nunca por `Content-Type` del cliente — sniff de la firma real (JPEG/PNG/WebP/AVIF/HEIC) antes de aceptar el archivo, cubierto con tests contra buffers reales (no inventados a mano)
+- [x] Protección contra bomba de descompresión (límite de píxeles totales) — `sharp`/libvips `limitInputPixels` en el momento de decodificar variantes (worker), más una comprobación explícita de ancho/alto en `finalize` (API) antes de encolar nada
+- [x] **Strip completo de EXIF** (crítico: elimina geolocalización), aplicando orientación al píxel — `.rotate()` graba la orientación en los píxeles; no llamar a `.withMetadata()` después es lo que realmente elimina el resto del EXIF (comportamiento por defecto de sharp). Verificado con una imagen real etiquetada con orientación EXIF 6 en el test unitario del worker.
+- [x] Worker con `sharp`: variantes WebP + AVIF en 4 anchos (340/600/1200/orig) — "orig" es el ancho propio de la imagen, nunca upscaled por encima del original
+- [x] Generación de **blurhash** para placeholder
+- [x] Adjuntar hasta 4 imágenes a un post; `alt_text` editable (`PATCH /media/:id`). El adjuntado es atómico dentro de la misma transacción que crea el post: la cláusula `WHERE` de la actualización (`owner_id` = autor, `status = ready`, `post_id IS NULL`) es la propia validación — si algún id no encaja, la transacción entera revierte.
+- [x] Límite: 5 MB, 8192×8192 máx.
+- [x] Reintentos (`attempts: 3`, backoff exponencial) en la cola de procesamiento — no es un bullet explícito de esta sección, pero a diferencia de fan-out/notificaciones (sin red de seguridad si fallan, pero autocurables: fan-out por reconstrucción perezosa, SPECS.md §6.1), un transcode fallido no tiene fallback, así que sí justifica reintentos reales; el estado terminal `failed` se escribe solo cuando se agotan.
+- ⚪ Lo que queda fuera de este checkpoint, explícitamente: GIF/vídeo (SPECS.md §9.2, fases posteriores), escaneo ClamAV/CSAM, evento WebSocket `media.ready` (no hay `ws-gateway` todavía — fase 2), cabeceras CDN de entrega. Ninguno es un bullet de esta sección.
 
 ### 1.6 Perfiles 🟡
 
 - [x] `GET /users/:username` — perfil público, con contadores (followers/following/posts) desde `user_counters`
-- [x] `PATCH /users/me` — display name, bio, ubicación, web (⚪ avatar/banner: llegan con la subida de media de 1.5, que aún no existe — no hay archivo que subir todavía)
+- [x] `PATCH /users/me` — display name, bio, ubicación, web. ⚪ Avatar/banner: la infraestructura de media de 1.5 ya existe, pero `PATCH /users/me` todavía no acepta un `avatarMediaId`/`bannerMediaId` — es una extensión pequeña y real, pendiente como su propio checkpoint en vez de mezclarse con éste.
 - [ ] Página de perfil con **SSR** (React Server Component) para SEO
 - [ ] Metadatos Open Graph y Twitter Card por perfil y por post
 - [ ] Pestañas: Posts / Respuestas / Media / Me gusta
@@ -196,11 +198,11 @@
 
 ### 1.8 Frontend del MVP 🟡
 
-- [x] `<Composer>`: texto, contador visual (`@x/utils/text`'s `countCharacters`, el mismo módulo que valida en el servidor), envío. ⚪ Adjuntar imágenes/preview diferido junto con 1.5 (multimedia) — no hay backend de media todavía.
-- [x] `<PostCard>`: autor, texto con entidades enlazadas, acciones (like/repost/bookmark reales, responder como acción reconocida pero aún no funcional), timestamp relativo (`Intl.RelativeTimeFormat`, SPECS.md §7.6). ⚪ Media diferida junto con 1.5.
+- [x] `<Composer>`: texto, contador visual (`@x/utils/text`'s `countCharacters`, el mismo módulo que valida en el servidor), envío. ⚪ Adjuntar imágenes/preview: el backend de 1.5 ya existe (upload-url/finalize/`mediaIds` en `POST /posts`), pero el flujo de subida en el cliente (seleccionar archivo → PUT al presigned URL → finalize → adjuntar) todavía no está construido en `<Composer>` — queda como su propio checkpoint, no bloqueado por nada más que tiempo.
+- [x] `<PostCard>`: autor, texto con entidades enlazadas, acciones (like/repost/bookmark reales, responder como acción reconocida pero aún no funcional), timestamp relativo (`Intl.RelativeTimeFormat`, SPECS.md §7.6). ⚪ `post.media` ya llega poblado desde la API (1.5) pero `<PostCard>` todavía no lo renderiza — depende de `<MediaGrid>`, bullet siguiente.
 - [x] `<RichText>`: renderizado por offsets de `entities` — **nunca** HTML crudo. Cubierto con tests de componente (`@testing-library/react`) contra `parseEntities` real, no offsets inventados a mano.
 - [x] `<Timeline>`: `useInfiniteQuery` + `useVirtualizer` (`useWindowVirtualizer`, ya que el shell no tiene contenedor de scroll de altura fija), `overscan: 5`, altura estable vía medición dinámica (`measureElement`), `role="feed"` + `aria-posinset`/`aria-setsize` (SPECS.md §7.5)
-- [ ] ⚪ `<MediaGrid>`: layouts para 1, 2, 3 y 4 imágenes con `aspect-ratio` — diferido por completo: depende de 1.5 (multimedia), que no existe aún; no hay datos de media que renderizar
+- [ ] ⚪ `<MediaGrid>`: layouts para 1, 2, 3 y 4 imágenes con `aspect-ratio` — 1.5 ya expone `post.media` (url/width/height/blurhash/altText) para consumirlo; el componente en sí y su integración en `<PostCard>` quedan pendientes, junto con el flujo de subida del `<Composer>` de arriba
 - [x] **Actualizaciones optimistas** en like, repost y bookmark con rollback ante error — snapshot de toda query `['timeline', …]` antes de mutar, restaurado en `onError` (SPECS.md §7.3)
 - [x] Skeleton de carga en `<Timeline>`. ⚪ Perfil y notificaciones diferidos — esas páginas todavía no existen (1.6/1.7 frontend sin empezar)
 - [x] Estados vacíos con acción sugerida: timeline sin seguidos → tarjetas de `GET /users/suggestions` (nuevo endpoint, ver 1.2) con botón "Seguir" funcional, no un mensaje muerto
@@ -212,6 +214,16 @@
 > Dos usuarios pueden seguirse, publicar un post con imagen y alt-text, dar like y
 > repostear, y ver el resultado en su timeline en menos de 5 segundos. El p95 de
 > lectura de timeline es < 200 ms con 1000 usuarios concurrentes en staging.
+
+🟡 Validación real, pieza por pieza: seguirse ✅, dar like/repost ✅ (backend + UI), ver
+el resultado en el propio timeline en <5 s ✅ (worker de fan-out verificado con
+Testcontainers: 2.70 s para 100 000 seguidores — ver 1.3). Publicar un post con imagen
+y alt-text ✅ **a nivel de API** (`POST /media/upload-url` → PUT → `finalize` →
+`POST /posts` con `mediaIds`, probado de punta a punta contra MinIO real, alt-text vía
+`PATCH /media/:id`), pero ⚪ no todavía como flujo de usuario real: `<Composer>` no
+tiene UI de adjuntar imágenes (1.8). El p95 < 200 ms a 1000 usuarios concurrentes en
+staging sigue sin poderse certificar — no hay despliegue de staging en este entorno
+(mismo hueco señalado en 1.3's nota de k6).
 
 ---
 

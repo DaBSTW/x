@@ -8,6 +8,17 @@ const envSchema = z.object({
   // Redis round trip — SPECS.md §6.1.
   FANOUT_WORKER_CONCURRENCY: z.coerce.number().int().positive().default(4),
   NOTIFICATIONS_WORKER_CONCURRENCY: z.coerce.number().int().positive().default(4),
+  // Lower than the others by default: sharp's transcoding is CPU-bound per
+  // job, unlike fan-out/notifications' mostly-I/O work — ROADMAP.md 1.5.
+  MEDIA_WORKER_CONCURRENCY: z.coerce.number().int().positive().default(2),
+
+  // Object storage (S3/MinIO) — same defaults as apps/api's env.ts, matching docker-compose.yml's minio service.
+  S3_ENDPOINT: z.string().url().default('http://localhost:9000'),
+  S3_REGION: z.string().default('us-east-1'),
+  S3_BUCKET: z.string().default('x-media'),
+  S3_ACCESS_KEY_ID: z.string().default('x-minio'),
+  S3_SECRET_ACCESS_KEY: z.string().default('x-minio-secret'),
+  S3_FORCE_PATH_STYLE: z.coerce.boolean().default(true),
   // Snowflake ID worker bits — this process generates notification ids, so
   // it needs its own value in a multi-instance deployment, same as apps/api
   // (see .env.example). @x/utils' generateId() reads this directly.

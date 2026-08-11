@@ -10,6 +10,7 @@ export default defineConfig({
       include: [
         'src/fanout/fanout.processor.ts',
         'src/counters/counters.flush-worker.ts',
+        'src/media/media.processor.ts',
         'src/env.ts',
       ],
       thresholds: { lines: 80, statements: 80, branches: 80, functions: 80 },
