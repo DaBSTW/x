@@ -134,6 +134,37 @@ describe('timeline routes', () => {
     expect(response.json().data.map((p: { id: string }) => p.id)).toEqual([post.id])
   })
 
+  it("hydrates the caller's viewer state (liked/bookmarked/reposted)", async () => {
+    const alice = await registerAndLogin('viewalice')
+    const dave = await registerAndLogin('viewdave')
+    await follow(alice.accessToken, dave.userId)
+    const post = await createPost(dave.accessToken, 'un post para reaccionar')
+    await app.redis.zadd(timelineKey(BigInt(alice.userId)), post.id, post.id)
+
+    await app.inject({
+      method: 'POST',
+      url: `/v1/posts/${post.id}/like`,
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+    })
+    await app.inject({
+      method: 'POST',
+      url: `/v1/posts/${post.id}/bookmark`,
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+    })
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/timeline/home',
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+    })
+
+    expect(response.json().data[0].viewer).toEqual({
+      liked: true,
+      bookmarked: true,
+      reposted: false,
+    })
+  })
+
   it('merges in posts from followed celebrity accounts even without fan-out', async () => {
     const alice = await registerAndLogin('celebalice')
     const star = await registerAndLogin('bigstar')

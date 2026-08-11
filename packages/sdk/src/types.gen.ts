@@ -487,6 +487,11 @@ export interface paths {
                                     quotes: number;
                                     views: number;
                                 };
+                                viewer?: {
+                                    liked: boolean;
+                                    reposted: boolean;
+                                    bookmarked: boolean;
+                                };
                             };
                         };
                     };
@@ -590,6 +595,11 @@ export interface paths {
                                     replies: number;
                                     quotes: number;
                                     views: number;
+                                };
+                                viewer?: {
+                                    liked: boolean;
+                                    reposted: boolean;
+                                    bookmarked: boolean;
                                 };
                             };
                         };
@@ -739,6 +749,11 @@ export interface paths {
                                     replies: number;
                                     quotes: number;
                                     views: number;
+                                };
+                                viewer?: {
+                                    liked: boolean;
+                                    reposted: boolean;
+                                    bookmarked: boolean;
                                 };
                             }[];
                             meta: {
@@ -1074,6 +1089,11 @@ export interface paths {
                                     replies: number;
                                     quotes: number;
                                     views: number;
+                                };
+                                viewer?: {
+                                    liked: boolean;
+                                    reposted: boolean;
+                                    bookmarked: boolean;
                                 };
                             }[];
                             meta: {
@@ -1436,6 +1456,11 @@ export interface paths {
                                     replies: number;
                                     quotes: number;
                                     views: number;
+                                };
+                                viewer?: {
+                                    liked: boolean;
+                                    reposted: boolean;
+                                    bookmarked: boolean;
                                 };
                             };
                         };

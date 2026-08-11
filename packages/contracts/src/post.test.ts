@@ -44,4 +44,25 @@ describe('postSchema', () => {
 
     expect(result.success).toBe(true)
   })
+
+  it('accepts an optional viewer block, hydrated or not', () => {
+    const base = {
+      id: '123',
+      text: 'hola',
+      createdAt: '2026-08-11T00:00:00Z',
+      author: { id: '1', username: 'ana', displayName: 'Ana', avatarUrl: null, isVerified: false },
+      entities: [],
+      conversationId: '123',
+      inReplyToId: null,
+      counters: { likes: 0, reposts: 0, replies: 0, quotes: 0, views: 0 },
+    }
+
+    expect(postSchema.safeParse(base).success).toBe(true)
+    expect(
+      postSchema.safeParse({
+        ...base,
+        viewer: { liked: true, reposted: false, bookmarked: false },
+      }).success,
+    ).toBe(true)
+  })
 })

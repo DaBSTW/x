@@ -20,6 +20,7 @@
     "@x/config": "workspace:*",
     "@x/contracts": "workspace:*",
     "@x/sdk": "workspace:*",
+    "@x/utils": "workspace:*",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "next": "^15.1.3",

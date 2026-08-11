@@ -760,6 +760,26 @@
                             "views"
                           ],
                           "additionalProperties": false
+                        },
+                        "viewer": {
+                          "type": "object",
+                          "properties": {
+                            "liked": {
+                              "type": "boolean"
+                            },
+                            "reposted": {
+                              "type": "boolean"
+                            },
+                            "bookmarked": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "liked",
+                            "reposted",
+                            "bookmarked"
+                          ],
+                          "additionalProperties": false
                         }
                       },
                       "required": [
@@ -1036,6 +1056,26 @@
                             "replies",
                             "quotes",
                             "views"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "viewer": {
+                          "type": "object",
+                          "properties": {
+                            "liked": {
+                              "type": "boolean"
+                            },
+                            "reposted": {
+                              "type": "boolean"
+                            },
+                            "bookmarked": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "liked",
+                            "reposted",
+                            "bookmarked"
                           ],
                           "additionalProperties": false
                         }
@@ -1414,6 +1454,26 @@
                               "replies",
                               "quotes",
                               "views"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "viewer": {
+                            "type": "object",
+                            "properties": {
+                              "liked": {
+                                "type": "boolean"
+                              },
+                              "reposted": {
+                                "type": "boolean"
+                              },
+                              "bookmarked": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "liked",
+                              "reposted",
+                              "bookmarked"
                             ],
                             "additionalProperties": false
                           }
@@ -2168,6 +2228,26 @@
                               "replies",
                               "quotes",
                               "views"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "viewer": {
+                            "type": "object",
+                            "properties": {
+                              "liked": {
+                                "type": "boolean"
+                              },
+                              "reposted": {
+                                "type": "boolean"
+                              },
+                              "bookmarked": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "liked",
+                              "reposted",
+                              "bookmarked"
                             ],
                             "additionalProperties": false
                           }
@@ -2950,6 +3030,26 @@
                             "replies",
                             "quotes",
                             "views"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "viewer": {
+                          "type": "object",
+                          "properties": {
+                            "liked": {
+                              "type": "boolean"
+                            },
+                            "reposted": {
+                              "type": "boolean"
+                            },
+                            "bookmarked": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "liked",
+                            "reposted",
+                            "bookmarked"
                           ],
                           "additionalProperties": false
                         }

@@ -114,4 +114,30 @@ describe('createTimelineService', () => {
 
     expect(items.map((post) => post.id)).toEqual(['30'])
   })
+
+  it('hydrates viewer state per post when a lookup is provided', async () => {
+    const repository = createFakeRepository({ readPrecomputed: async () => [30n, 20n, 10n] })
+    const service = createTimelineService(repository, createFakeHydrator(), {
+      findLikedPostIds: async () => new Set([30n]),
+      findBookmarkedPostIds: async () => new Set([10n]),
+      findRepostedPostIds: async () => new Set(),
+    })
+
+    const { items } = await service.getHome(1n, 20, null)
+
+    expect(items.map((post) => post.viewer)).toEqual([
+      { liked: true, bookmarked: false, reposted: false },
+      { liked: false, bookmarked: false, reposted: false },
+      { liked: false, bookmarked: true, reposted: false },
+    ])
+  })
+
+  it('leaves viewer undefined without a lookup', async () => {
+    const repository = createFakeRepository({ readPrecomputed: async () => [30n] })
+    const service = createTimelineService(repository, createFakeHydrator())
+
+    const { items } = await service.getHome(1n, 20, null)
+
+    expect(items[0]?.viewer).toBeUndefined()
+  })
 })

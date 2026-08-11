@@ -140,6 +140,21 @@ function createFakeRepository() {
       }
       return null
     },
+    async findRepostedPostIds(authorId, repostOfIds) {
+      const reposted = new Set<bigint>()
+      for (const post of postsById.values()) {
+        if (
+          post.authorId === authorId &&
+          post.kind === 'repost' &&
+          post.repostOfId !== null &&
+          repostOfIds.includes(post.repostOfId) &&
+          !post.deletedAt
+        ) {
+          reposted.add(post.repostOfId)
+        }
+      }
+      return reposted
+    },
   }
 
   return { repository, authorsById }

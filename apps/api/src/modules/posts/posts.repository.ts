@@ -198,5 +198,22 @@ export function createPostsRepository(db: Database) {
         .limit(1)
       return row?.id ?? null
     },
+
+    /** Viewer-state hydration (SPECS.md §5.4's `viewer.reposted`) — which of these original posts the requester has an active repost of. */
+    async findRepostedPostIds(authorId: bigint, repostOfIds: bigint[]): Promise<Set<bigint>> {
+      if (repostOfIds.length === 0) return new Set()
+      const rows = await db
+        .select({ repostOfId: posts.repostOfId })
+        .from(posts)
+        .where(
+          and(
+            eq(posts.authorId, authorId),
+            inArray(posts.repostOfId, repostOfIds),
+            eq(posts.kind, 'repost'),
+            isNull(posts.deletedAt),
+          ),
+        )
+      return new Set(rows.map((row) => row.repostOfId).filter((id): id is bigint => id !== null))
+    },
   }
 }

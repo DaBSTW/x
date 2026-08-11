@@ -36,6 +36,13 @@ export const postCountersSchema = z.object({
   views: z.number().int().nonnegative(),
 })
 
+export const viewerStateSchema = z.object({
+  liked: z.boolean(),
+  reposted: z.boolean(),
+  bookmarked: z.boolean(),
+})
+export type ViewerState = z.infer<typeof viewerStateSchema>
+
 export const postSchema = z.object({
   id: snowflakeIdSchema,
   text: z.string().nullable(),
@@ -51,6 +58,10 @@ export const postSchema = z.object({
   conversationId: snowflakeIdSchema,
   inReplyToId: snowflakeIdSchema.nullable(),
   counters: postCountersSchema,
+  // Only populated where the caller's identity and a batch lookup are both
+  // already in hand (GET /timeline/home) — absent elsewhere, not false;
+  // the client should not treat a missing `viewer` as "definitely not liked".
+  viewer: viewerStateSchema.optional(),
 })
 export type Post = z.infer<typeof postSchema>
 

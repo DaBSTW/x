@@ -162,7 +162,7 @@
 - [x] Job nocturno de **reconciliación** (`apps/workers/scripts/reconcile-counters.ts`): recalcula desde `likes`/`bookmarks`/`posts` para publicaciones con actividad en 24h. Verificado con datos reales (Testcontainers) corrigiendo un drift simulado. Falta el cron externo que lo dispare cada noche — tarea de ops, no de código (ver docs/adr/0003).
 - [x] Test de concurrencia: 100 likes simultáneos → contador exacto al final — ejecutado de verdad (Testcontainers): 100 `like()` concurrentes sobre el mismo post, `post:{id}:counters` en Redis termina en exactamente 100
 
-⚪ El campo `viewer` (`liked`/`reposted`/`bookmarked`) del ejemplo de respuesta de SPECS.md §5.4 no está en el contrato todavía — no es un bullet explícito de esta sección y requeriría autenticación opcional en rutas hoy públicas (`GET /posts/:id`, `GET /timeline/home`). Diferido; los propios endpoints de mutación devuelven el resultado correcto sin él.
+- [x] Campo `viewer` (`liked`/`reposted`/`bookmarked`) del ejemplo de respuesta de SPECS.md §5.4, en `GET /timeline/home`: lookup en lote (`IN`-query) por like/bookmark/repost del caller sobre la página ya hidratada — la ruta ya exige autenticación, así que no hace falta el auth opcional que motivó el diferimiento original. ⚪ `GET /posts/:id` sigue sin `viewer`: esa ruta es pública y sí necesitaría auth opcional; queda diferido ahí.
 
 ### 1.5 Multimedia — imágenes 🟡
 

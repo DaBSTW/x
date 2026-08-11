@@ -113,9 +113,6 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
     publishNotification,
   )
 
-  const timelineRepository = createTimelineRepository(app.db, app.redis)
-  const timelineService = createTimelineService(timelineRepository, postsService)
-
   const interactionsRepository = createInteractionsRepository(app.db)
   const interactionsService = createInteractionsService(
     interactionsRepository,
@@ -124,6 +121,13 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
     app.redis,
     publishNotification,
   )
+
+  const timelineRepository = createTimelineRepository(app.db, app.redis)
+  const timelineService = createTimelineService(timelineRepository, postsService, {
+    findLikedPostIds: interactionsRepository.findLikedPostIds,
+    findBookmarkedPostIds: interactionsRepository.findBookmarkedPostIds,
+    findRepostedPostIds: postsRepository.findRepostedPostIds,
+  })
 
   const profilesRepository = createProfilesRepository(app.db)
   const profilesService = createProfilesService(profilesRepository)

@@ -90,6 +90,12 @@ function createFakeInteractionsRepository(): InteractionsRepository {
     async deleteBookmark(userId, postId) {
       return bookmarks.delete(key(userId, postId))
     },
+    async findLikedPostIds(userId, postIds) {
+      return new Set(postIds.filter((postId) => likes.has(key(userId, postId))))
+    },
+    async findBookmarkedPostIds(userId, postIds) {
+      return new Set(postIds.filter((postId) => bookmarks.has(key(userId, postId))))
+    },
   }
 }
 
