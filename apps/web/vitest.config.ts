@@ -26,6 +26,7 @@ export default defineConfig({
         'lib/theme-store.ts',
         'lib/format.ts',
         'lib/media-grid-layout.ts',
+        'lib/notification-text.ts',
         'components/ui/button.tsx',
         'components/rich-text.tsx',
       ],
