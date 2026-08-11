@@ -77,6 +77,21 @@ describe('profiles routes', () => {
     expect(profile.counters).toEqual({ followers: 0, following: 0, posts: 0 })
   })
 
+  it('GET /users/me returns the authenticated user, not a user literally named "me"', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/users/me',
+      headers: { authorization: `Bearer ${aliceToken}` },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(response.json().data.username).toBe('alice')
+  })
+
+  it('GET /users/me requires authentication', async () => {
+    const response = await app.inject({ method: 'GET', url: '/v1/users/me' })
+    expect(response.statusCode).toBe(401)
+  })
+
   it('is case-insensitive on username', async () => {
     const response = await app.inject({ method: 'GET', url: '/v1/users/ALICE' })
     expect(response.statusCode).toBe(200)

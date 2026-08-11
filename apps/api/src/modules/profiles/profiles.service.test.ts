@@ -85,6 +85,21 @@ describe('createProfilesService', () => {
     })
   })
 
+  describe('getById', () => {
+    it('maps a row to the contract shape', async () => {
+      const service = createProfilesService(repository)
+      const profile = await service.getById(userId)
+      expect(profile.username).toBe('ana')
+    })
+
+    it('throws NotFoundError for an unknown id', async () => {
+      const service = createProfilesService(repository)
+      await expect(service.getById(999999999999999999n)).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      })
+    })
+  })
+
   describe('updateMe', () => {
     it('applies a partial patch and returns the updated profile', async () => {
       const service = createProfilesService(repository)

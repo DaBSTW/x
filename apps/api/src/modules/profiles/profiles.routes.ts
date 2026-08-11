@@ -16,6 +16,23 @@ export async function registerProfilesRoutes(app: FastifyInstance, options: Prof
   const requireAuth = createRequireAuth(tokenService)
   const server = app.withTypeProvider<ZodTypeProvider>()
 
+  // Registered ahead of the parametric route below for readability;
+  // find-my-way (Fastify's router) always prefers a static segment over a
+  // `:param` one regardless of registration order, so "me" can never be
+  // captured as `:username`.
+  server.get(
+    '/users/me',
+    {
+      schema: { response: { 200: userProfileResponseSchema, 401: errorResponseSchema } },
+      preHandler: [requireAuth],
+    },
+    async (request, reply) => {
+      const user = getAuthenticatedUser(request)
+      const profile = await profilesService.getById(user.id)
+      return reply.send({ data: profile })
+    },
+  )
+
   server.get(
     '/users/:username',
     {

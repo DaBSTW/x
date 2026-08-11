@@ -11,14 +11,18 @@ export function createProfilesService(repository: ProfilesRepository) {
     return toProfileDto(row)
   }
 
-  async function updateMe(userId: bigint, patch: ProfilePatch): Promise<UserProfile> {
-    await repository.updateProfile(userId, patch)
+  async function getById(userId: bigint): Promise<UserProfile> {
     const row = await repository.findProfileById(userId)
     if (!row) throw new NotFoundError('user', userId.toString())
     return toProfileDto(row)
   }
 
-  return { getByUsername, updateMe }
+  async function updateMe(userId: bigint, patch: ProfilePatch): Promise<UserProfile> {
+    await repository.updateProfile(userId, patch)
+    return getById(userId)
+  }
+
+  return { getByUsername, getById, updateMe }
 }
 
 function toProfileDto(row: ProfileRow): UserProfile {
