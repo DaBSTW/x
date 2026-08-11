@@ -49,7 +49,13 @@ export default tseslint.config(
   {
     // CLI entrypoints, not services — CODESTYLE.md §8.1 scopes the
     // console.log ban to services.
-    files: ['**/scripts/**/*.ts', '**/src/migrate.ts', '**/src/seed/run.ts', '**/src/server.ts'],
+    files: [
+      '**/scripts/**/*.ts',
+      '**/load-tests/**/*.ts',
+      '**/src/migrate.ts',
+      '**/src/seed/run.ts',
+      '**/src/server.ts',
+    ],
     rules: {
       'no-console': 'off',
     },

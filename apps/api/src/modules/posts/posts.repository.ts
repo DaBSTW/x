@@ -84,6 +84,15 @@ export function createPostsRepository(db: Database) {
       return row ?? null
     },
 
+    /** Batch hydration for timeline reads — a single `WHERE id = ANY($1)` (SPECS.md §6.1), order is not guaranteed. */
+    async findPostsByIds(ids: bigint[]) {
+      if (ids.length === 0) return []
+      return db
+        .select()
+        .from(posts)
+        .where(and(inArray(posts.id, ids), isNull(posts.deletedAt)))
+    },
+
     async findAuthorsByIds(ids: bigint[]): Promise<AuthorRow[]> {
       if (ids.length === 0) return []
       return db

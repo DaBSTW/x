@@ -22,6 +22,9 @@ import { createPostsService } from './modules/posts/posts.service.js'
 import { createSocialGraphRepository } from './modules/social-graph/social-graph.repository.js'
 import { registerSocialGraphRoutes } from './modules/social-graph/social-graph.routes.js'
 import { createSocialGraphService } from './modules/social-graph/social-graph.service.js'
+import { createTimelineRepository } from './modules/timeline/timeline.repository.js'
+import { registerTimelineRoutes } from './modules/timeline/timeline.routes.js'
+import { createTimelineService } from './modules/timeline/timeline.service.js'
 import dbPlugin from './plugins/db.js'
 import errorHandlerPlugin from './plugins/error-handler.js'
 import redisPlugin from './plugins/redis.js'
@@ -90,6 +93,9 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   const socialGraphRepository = createSocialGraphRepository(app.db)
   const socialGraphService = createSocialGraphService(socialGraphRepository, app.redis)
 
+  const timelineRepository = createTimelineRepository(app.db, app.redis)
+  const timelineService = createTimelineService(timelineRepository, postsService)
+
   app.get('/health', async () => ({ status: 'ok' }))
 
   await app.register(
@@ -114,6 +120,13 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   await app.register(
     async (instance) => {
       await registerSocialGraphRoutes(instance, { socialGraphService, tokenService })
+    },
+    { prefix: '/v1' },
+  )
+
+  await app.register(
+    async (instance) => {
+      await registerTimelineRoutes(instance, { timelineService, tokenService })
     },
     { prefix: '/v1' },
   )

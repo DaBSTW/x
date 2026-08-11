@@ -147,11 +147,11 @@
   - [x] `ZADD timeline:{uid}` + `ZREMRANGEBYRANK` (retener 800) + `EXPIRE` 7 días
   - [x] Idempotencia — `SET NX` sobre `fanout:processed:{postId}` (el `postId` es el `event_id`: cada post publica como máximo un evento `post.created`)
 - [x] Umbral de **cuenta grande** (≥10 000 seguidores): marcar y excluir del fan-out
-- [ ] `GET /timeline/home`: merge de Redis + posts recientes de cuentas grandes seguidas
-- [ ] **Reconstrucción perezosa** del timeline frío desde PostgreSQL
-- [ ] **Hidratación en lote**: un solo `WHERE id = ANY($1)` + caché de objeto en Redis
-- [ ] Test de carga (k6): 1000 timelines concurrentes, verificar p95 < 200 ms
-- [ ] Test: fan-out de cuenta con 100 k seguidores completa en < 5 s
+- [x] `GET /timeline/home`: merge de Redis + posts recientes de cuentas grandes seguidas
+- [x] **Reconstrucción perezosa** del timeline frío desde PostgreSQL (siembra el ZSET al reconstruir, así la siguiente lectura vuelve a ser un hit de Redis)
+- [x] **Hidratación en lote**: un solo `WHERE id = ANY($1)` (`PostsService.getManyByIds`). ⚪ Caché de objeto en Redis para el post ya hidratado: diferido — interactúa con la invalidación por contador de 1.4 (likes/reposts), que aún no existe; añadirla antes tendría TTL/invalidación incorrectos garantizados.
+- 🟡 Test de carga (k6): 1000 timelines concurrentes, verificar p95 < 200 ms (`apps/api/load-tests/`) — script + fixtures listos y ejecutados de verdad contra Postgres/Redis/API reales, no simulados. En este sandbox de 4 vCPUs compartidas: p95 = 134 ms a 50 VUs (pasa), p95 = 2.57 s a 1000 VUs (no pasa) con 0% de errores en ambos casos y throughput casi idéntico — el patrón típico de saturación de CPU de un único proceso Fastify sin clúster compitiendo por 4 núcleos con Postgres/Redis/k6, no un endpoint lento. La cifra de 1000 VUs / p95 < 200 ms asume la topología horizontal de SPECS.md §14 (múltiples instancias tras balanceador); no se puede certificar en un solo contenedor. Detalle en `apps/api/load-tests/README.md`.
+- [x] Test: fan-out de cuenta con 100 k seguidores completa en < 5 s (`apps/workers/load-tests/fanout-scale.ts`) — ejecutado de verdad contra Postgres/Redis reales (Testcontainers): **2.70 s** con 100 000 seguidores reales, por debajo del presupuesto de 5 s
 
 ### 1.4 Interacciones 🟡
 

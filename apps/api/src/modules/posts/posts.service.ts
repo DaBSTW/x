@@ -192,7 +192,45 @@ export function createPostsService(repository: PostRepository, onPostCreated?: O
     return { items, hasMore }
   }
 
-  return { create, getById, remove, listByUsername }
+  /**
+   * Batch hydration for timeline reads (SPECS.md §6.1): one round trip per
+   * table regardless of page size. `ids` order is preserved in the result;
+   * ids that are missing or soft-deleted are silently dropped rather than
+   * failing the whole page — a stale timeline reference is expected, not an
+   * error.
+   */
+  async function getManyByIds(ids: bigint[]): Promise<Post[]> {
+    if (ids.length === 0) return []
+
+    const [rows, countersRows, entityRows] = await Promise.all([
+      repository.findPostsByIds(ids),
+      repository.findCountersForPosts(ids),
+      repository.findEntitiesForPosts(ids),
+    ])
+    const authors = await repository.findAuthorsByIds([...new Set(rows.map((row) => row.authorId))])
+    const rowsById = new Map(rows.map((row) => [row.id, row]))
+    const authorsById = new Map(authors.map((author) => [author.id, author]))
+    const countersByPostId = new Map(countersRows.map((row) => [row.postId, row]))
+    const entitiesByPostId = groupBy(entityRows, (row) => row.postId)
+
+    const items: Post[] = []
+    for (const id of ids) {
+      const row = rowsById.get(id)
+      const author = row && authorsById.get(row.authorId)
+      if (!row || !author) continue
+      items.push(
+        toPostDto(
+          row,
+          author,
+          countersByPostId.get(id) ?? emptyCounters(),
+          entitiesByPostId.get(id) ?? [],
+        ),
+      )
+    }
+    return items
+  }
+
+  return { create, getById, remove, listByUsername, getManyByIds }
 }
 
 type PostRowLike = {

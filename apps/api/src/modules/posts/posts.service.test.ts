@@ -64,6 +64,11 @@ function createFakeRepository() {
     async findPostCounters(postId) {
       return countersByPostId.get(postId) ?? null
     },
+    async findPostsByIds(ids) {
+      return ids
+        .map((id) => postsById.get(id))
+        .filter((post): post is Post => post !== undefined && !post.deletedAt)
+    },
     async findPostEntities(postId) {
       return entitiesByPostId.get(postId) ?? []
     },
@@ -353,6 +358,45 @@ describe('createPostsService', () => {
       await expect(service.listByUsername('ghost', 20, null)).rejects.toMatchObject({
         code: 'NOT_FOUND',
       })
+    })
+  })
+
+  describe('getManyByIds', () => {
+    it('returns posts in the order ids were given, not insertion order', async () => {
+      const service = createPostsService(repository)
+      const first = await service.create(author.id, {
+        text: 'primero',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      const second = await service.create(author.id, {
+        text: 'segundo',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      const items = await service.getManyByIds([BigInt(second.id), BigInt(first.id)])
+
+      expect(items.map((post) => post.id)).toEqual([second.id, first.id])
+    })
+
+    it('silently drops ids that do not exist or are deleted', async () => {
+      const service = createPostsService(repository)
+      const created = await service.create(author.id, {
+        text: 'hola',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      await service.remove(BigInt(created.id), author.id)
+
+      const items = await service.getManyByIds([BigInt(created.id), 999999999999999999n])
+
+      expect(items).toEqual([])
+    })
+
+    it('returns an empty array without querying the repository for an empty input', async () => {
+      const service = createPostsService(repository)
+      expect(await service.getManyByIds([])).toEqual([])
     })
   })
 })

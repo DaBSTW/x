@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --coverage",
     "test:integration": "vitest run --coverage --config vitest.integration.config.ts",
-    "generate:openapi": "tsx scripts/generate-openapi.ts"
+    "generate:openapi": "tsx scripts/generate-openapi.ts",
+    "generate-jwt-keys": "tsx scripts/generate-jwt-keys.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",
