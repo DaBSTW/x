@@ -20,3 +20,20 @@ export function useFollow() {
     },
   })
 }
+
+/** DELETE /users/{id}/follow — <FollowButton>'s other half. No suggestions refresh: an unfollowed account isn't a suggestion candidate either way. */
+export function useUnfollow() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (userId: string) => {
+      const { error } = await apiClient.DELETE('/users/{id}/follow', {
+        params: { path: { id: userId } },
+      })
+      if (error) throw new Error(error.error.message)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['timeline', 'home'] })
+    },
+  })
+}

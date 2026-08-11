@@ -1,7 +1,9 @@
+import type { ProfilePostsFilter } from '@x/contracts'
 import type { Database } from '@x/db'
 import {
   type NewPost,
   type NewPostCounters,
+  likes,
   media,
   postCounters,
   postEntities,
@@ -10,7 +12,7 @@ import {
   users,
 } from '@x/db'
 import { MEDIA_STATUS, ValidationError } from '@x/utils'
-import { and, desc, eq, inArray, isNull, lt, sql } from 'drizzle-orm'
+import { and, desc, eq, exists, inArray, isNull, lt, ne, sql } from 'drizzle-orm'
 
 export type PostEntityRow = {
   postId: bigint
@@ -182,9 +184,59 @@ export function createPostsRepository(db: Database) {
       })
     },
 
-    /** Cursor pagination by Snowflake id — never OFFSET (CODESTYLE.md §13). */
-    async listPostsByAuthor(authorId: bigint, limit: number, cursor: bigint | null) {
+    /**
+     * Cursor pagination by Snowflake id — never OFFSET (CODESTYLE.md §13).
+     * `filter` backs the profile page's Posts/Respuestas/Media tabs: replies
+     * are `kind = 'reply'`, Posts is everything else, Media requires at
+     * least one attached row (an `EXISTS`, not a join — a post can have up
+     * to 4 media rows, and a join would need a `DISTINCT` to not duplicate
+     * it).
+     */
+    async listPostsByAuthor(
+      authorId: bigint,
+      limit: number,
+      cursor: bigint | null,
+      filter: Exclude<ProfilePostsFilter, 'likes'> = 'posts',
+    ) {
       const conditions = [eq(posts.authorId, authorId), isNull(posts.deletedAt)]
+      if (filter === 'replies') {
+        conditions.push(eq(posts.kind, 'reply'))
+      } else if (filter === 'posts') {
+        conditions.push(ne(posts.kind, 'reply'))
+      } else {
+        conditions.push(
+          exists(db.select({ one: sql`1` }).from(media).where(eq(media.postId, posts.id))),
+        )
+      }
+      if (cursor !== null) {
+        conditions.push(lt(posts.id, cursor))
+      }
+      return db
+        .select()
+        .from(posts)
+        .where(and(...conditions))
+        .orderBy(desc(posts.id))
+        .limit(limit)
+    },
+
+    /**
+     * The profile page's "Me gusta" tab — posts *liked* by this user, not
+     * authored by them, so it goes through `likes` instead of `author_id`.
+     * Ordered by the post's own Snowflake id rather than when the like
+     * happened: a deliberate simplification that reuses the exact same
+     * cursor shape as every other list here, instead of a second keyset
+     * over `(likes.created_at, post_id)` — see ROADMAP.md 1.6.
+     */
+    async listLikedPostsByUser(userId: bigint, limit: number, cursor: bigint | null) {
+      const conditions = [
+        isNull(posts.deletedAt),
+        exists(
+          db
+            .select({ one: sql`1` })
+            .from(likes)
+            .where(and(eq(likes.userId, userId), eq(likes.postId, posts.id))),
+        ),
+      ]
       if (cursor !== null) {
         conditions.push(lt(posts.id, cursor))
       }

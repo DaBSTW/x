@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatCompactNumber, formatRelativeTime } from './format'
+import { formatCompactNumber, formatJoinDate, formatRelativeTime } from './format'
 
 describe('formatRelativeTime', () => {
   const now = new Date('2026-08-11T12:00:00.000Z')
@@ -43,5 +43,13 @@ describe('formatCompactNumber', () => {
 
   it('compacts millions', () => {
     expect(formatCompactNumber(3_400_000)).toBe('3,4 M')
+  })
+})
+
+describe('formatJoinDate', () => {
+  it('renders the month and year in Spanish', () => {
+    // Mid-month UTC so no reasonable local timezone shifts it into a
+    // different month.
+    expect(formatJoinDate('2026-08-15T12:00:00.000Z')).toBe('agosto de 2026')
   })
 })

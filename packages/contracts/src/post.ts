@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { paginatedResponseSchema, snowflakeIdSchema } from './common.js'
+import { paginatedResponseSchema, paginationQuerySchema, snowflakeIdSchema } from './common.js'
 import { postMediaItemSchema } from './media.js'
 import { userProfileSchema } from './user.js'
 
@@ -72,3 +72,14 @@ export type Post = z.infer<typeof postSchema>
 
 export const postResponseSchema = z.object({ data: postSchema })
 export const postListResponseSchema = paginatedResponseSchema(postSchema)
+
+// GET /users/:username/posts's four tabs (ROADMAP.md 1.8, SPECS.md §7.2):
+// posts/replies split on `kind`, media requires an attached row, likes goes
+// through the `likes` table instead of authorship — see posts.repository.ts.
+export const profilePostsFilterSchema = z.enum(['posts', 'replies', 'media', 'likes'])
+export type ProfilePostsFilter = z.infer<typeof profilePostsFilterSchema>
+
+export const profilePostsQuerySchema = paginationQuerySchema.extend({
+  filter: profilePostsFilterSchema.default('posts'),
+})
+export type ProfilePostsQuery = z.infer<typeof profilePostsQuerySchema>

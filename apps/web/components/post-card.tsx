@@ -51,9 +51,11 @@ function PostCardComponent({ post }: PostCardProps) {
           <span className="text-muted-foreground" aria-hidden="true">
             ·
           </span>
-          <time dateTime={post.createdAt} className="text-muted-foreground">
-            {formatRelativeTime(post.createdAt)}
-          </time>
+          <Link href={`/${post.author.username}/status/${post.id}`} className="hover:underline">
+            <time dateTime={post.createdAt} className="text-muted-foreground">
+              {formatRelativeTime(post.createdAt)}
+            </time>
+          </Link>
         </div>
         {post.text !== null && (
           <p className="whitespace-pre-wrap text-sm">

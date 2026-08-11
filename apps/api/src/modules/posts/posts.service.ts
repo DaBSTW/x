@@ -1,4 +1,4 @@
-import type { Post, PostMediaItem } from '@x/contracts'
+import type { Post, PostMediaItem, ProfilePostsFilter } from '@x/contracts'
 import {
   ConflictError,
   ForbiddenError,
@@ -304,11 +304,15 @@ export function createPostsService(
     usernameLower: string,
     limit: number,
     cursor: bigint | null,
+    filter: ProfilePostsFilter = 'posts',
   ): Promise<{ items: Post[]; hasMore: boolean }> {
     const authorId = await repository.findUserIdByUsername(usernameLower)
     if (!authorId) throw new NotFoundError('user', usernameLower)
 
-    const rows = await repository.listPostsByAuthor(authorId, limit + 1, cursor)
+    const rows =
+      filter === 'likes'
+        ? await repository.listLikedPostsByUser(authorId, limit + 1, cursor)
+        : await repository.listPostsByAuthor(authorId, limit + 1, cursor, filter)
     const hasMore = rows.length > limit
     const page = hasMore ? rows.slice(0, limit) : rows
 

@@ -1,5 +1,6 @@
 const relativeTimeFormatter = new Intl.RelativeTimeFormat('es', { numeric: 'auto', style: 'short' })
 const compactNumberFormatter = new Intl.NumberFormat('es', { notation: 'compact' })
+const joinDateFormatter = new Intl.DateTimeFormat('es', { month: 'long', year: 'numeric' })
 
 const UNITS: Array<{ unit: Intl.RelativeTimeFormatUnit; ms: number }> = [
   { unit: 'year', ms: 365 * 24 * 60 * 60 * 1000 },
@@ -23,4 +24,9 @@ export function formatRelativeTime(iso: string, now: Date = new Date()): string 
 /** "1,2 mil" — SPECS.md §7.6's Intl.NumberFormat compact notation. */
 export function formatCompactNumber(value: number): string {
   return compactNumberFormatter.format(value)
+}
+
+/** "agosto de 2026" — the profile header's "Se unió en" (SPECS.md §7.2). */
+export function formatJoinDate(iso: string): string {
+  return joinDateFormatter.format(new Date(iso))
 }

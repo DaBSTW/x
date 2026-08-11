@@ -315,4 +315,86 @@ describe('posts routes', () => {
     const response = await app.inject({ method: 'GET', url: '/v1/users/ghost-user/posts' })
     expect(response.statusCode).toBe(404)
   })
+
+  // The "posts"/"replies" split is plain in-memory logic, covered by
+  // posts.service.test.ts — these two exercise the filters that actually
+  // depend on real SQL (an EXISTS against media/likes), which a fake
+  // repository can't meaningfully stand in for.
+  it('filters to only posts with attached media when filter=media', async () => {
+    const mediaId = generateId()
+    await app.db.insert(media).values({
+      id: mediaId,
+      ownerId: BigInt(posterId),
+      storageKey: `media/${mediaId}/original.webp`,
+      mimeType: 'image/webp',
+      sizeBytes: 100n,
+      status: MEDIA_STATUS.READY,
+    })
+    const withMedia = await app.inject({
+      method: 'POST',
+      url: '/v1/posts',
+      headers: authHeader(),
+      payload: { text: 'con media, para el filtro', mediaIds: [mediaId.toString()] },
+    })
+    const withoutMedia = await app.inject({
+      method: 'POST',
+      url: '/v1/posts',
+      headers: authHeader(),
+      payload: { text: 'sin media, para el filtro' },
+    })
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/users/poster/posts?filter=media&limit=50',
+    })
+
+    expect(response.statusCode).toBe(200)
+    const ids = response.json().data.map((post: { id: string }) => post.id)
+    expect(ids).toContain(withMedia.json().data.id)
+    expect(ids).not.toContain(withoutMedia.json().data.id)
+  })
+
+  it('filters to posts the user liked, not authored, when filter=likes', async () => {
+    const otherRegister = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/register',
+      payload: {
+        username: 'likedby',
+        email: 'likedby@example.com',
+        password: 'yet another unique passphrase 7z',
+        birthDate: '1990-01-01',
+      },
+    })
+    expect(otherRegister.statusCode).toBe(201)
+    const otherLogin = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: 'likedby@example.com', password: 'yet another unique passphrase 7z' },
+    })
+    const otherToken = otherLogin.json().data.accessToken
+
+    const othersPost = await app.inject({
+      method: 'POST',
+      url: '/v1/posts',
+      headers: { authorization: `Bearer ${otherToken}` },
+      payload: { text: 'post de otro usuario' },
+    })
+    const othersPostId = othersPost.json().data.id
+
+    const likeResponse = await app.inject({
+      method: 'POST',
+      url: `/v1/posts/${othersPostId}/like`,
+      headers: authHeader(),
+    })
+    expect(likeResponse.statusCode).toBe(204)
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/users/poster/posts?filter=likes&limit=50',
+    })
+
+    expect(response.statusCode).toBe(200)
+    const ids = response.json().data.map((post: { id: string }) => post.id)
+    expect(ids).toContain(othersPostId)
+  })
 })

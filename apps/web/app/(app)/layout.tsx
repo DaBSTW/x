@@ -1,6 +1,7 @@
 'use client'
 
 import { ThemeToggle } from '@/components/theme-toggle'
+import { useCurrentUser } from '@/lib/use-current-user'
 import { useSession } from '@/lib/use-session'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
@@ -9,6 +10,7 @@ import { useEffect } from 'react'
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   const { isLoading, isAuthenticated } = useSession()
+  const { data: me } = useCurrentUser()
 
   // Route protection is a navigation side-effect, not a data fetch — the
   // data fetch itself (the session query) already went through TanStack
@@ -37,6 +39,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         <span className="text-lg font-semibold">X</span>
         <nav className="flex flex-col gap-2 text-sm">
           <Link href="/home">Inicio</Link>
+          {me && <Link href={`/${me.username}`}>Perfil</Link>}
         </nav>
         <div className="mt-auto">
           <ThemeToggle />

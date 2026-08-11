@@ -1,9 +1,9 @@
 import {
   createPostSchema,
   errorResponseSchema,
-  paginationQuerySchema,
   postListResponseSchema,
   postResponseSchema,
+  profilePostsQuerySchema,
   snowflakeIdSchema,
 } from '@x/contracts'
 import { decodeCursor, encodeCursor } from '@x/utils'
@@ -111,7 +111,7 @@ export async function registerPostsRoutes(app: FastifyInstance, options: PostsRo
     {
       schema: {
         params: z.object({ username: z.string() }),
-        querystring: paginationQuerySchema,
+        querystring: profilePostsQuerySchema,
         response: { 200: postListResponseSchema, 404: errorResponseSchema },
       },
     },
@@ -121,6 +121,7 @@ export async function registerPostsRoutes(app: FastifyInstance, options: PostsRo
         request.params.username.toLowerCase(),
         request.query.limit,
         cursor,
+        request.query.filter,
       )
       const lastItem = items.at(-1)
       const nextCursor = hasMore && lastItem ? encodeCursor(BigInt(lastItem.id)) : null

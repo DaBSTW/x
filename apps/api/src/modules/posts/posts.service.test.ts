@@ -39,6 +39,9 @@ function createFakeRepository() {
   const entitiesByPostId = new Map<bigint, PostEntityRow[]>()
   const countersByPostId = new Map<bigint, PostCounters>()
   const authorsById = new Map<bigint, AuthorRow>()
+  // `${userId}:${postId}` — enough to fake listLikedPostsByUser without
+  // modeling the whole likes table.
+  const likedPostIds = new Set<string>()
 
   const repository: PostRepository = {
     async insertPost(post, entities, counters) {
@@ -107,9 +110,24 @@ function createFakeRepository() {
       const post = postsById.get(id)
       if (post) post.deletedAt = new Date()
     },
-    async listPostsByAuthor(authorId, limit, cursor) {
+    // 'media' always comes back empty, matching findMediaForPosts' own
+    // no-op below — real EXISTS-against-media filtering is covered by
+    // posts.integration.test.ts against real Postgres, not this fake.
+    async listPostsByAuthor(authorId, limit, cursor, filter = 'posts') {
       return [...postsById.values()]
         .filter((post) => post.authorId === authorId && !post.deletedAt)
+        .filter((post) => {
+          if (filter === 'replies') return post.kind === 'reply'
+          if (filter === 'media') return false
+          return post.kind !== 'reply'
+        })
+        .filter((post) => cursor === null || post.id < cursor)
+        .sort((a, b) => (b.id > a.id ? 1 : -1))
+        .slice(0, limit)
+    },
+    async listLikedPostsByUser(userId, limit, cursor) {
+      return [...postsById.values()]
+        .filter((post) => !post.deletedAt && likedPostIds.has(`${userId}:${post.id}`))
         .filter((post) => cursor === null || post.id < cursor)
         .sort((a, b) => (b.id > a.id ? 1 : -1))
         .slice(0, limit)
@@ -165,7 +183,7 @@ function createFakeRepository() {
     },
   }
 
-  return { repository, authorsById }
+  return { repository, authorsById, likedPostIds }
 }
 
 function addAuthor(
@@ -187,6 +205,7 @@ function addAuthor(
 describe('createPostsService', () => {
   let repository: PostRepository
   let authorsById: Map<bigint, AuthorRow>
+  let likedPostIds: Set<string>
   let author: AuthorRow
   let published: unknown[]
 
@@ -194,6 +213,7 @@ describe('createPostsService', () => {
     const fake = createFakeRepository()
     repository = fake.repository
     authorsById = fake.authorsById
+    likedPostIds = fake.likedPostIds
     author = addAuthor(authorsById)
     published = []
   })
@@ -597,6 +617,64 @@ describe('createPostsService', () => {
       await expect(service.listByUsername('ghost', 20, null)).rejects.toMatchObject({
         code: 'NOT_FOUND',
       })
+    })
+
+    it('excludes replies from the default "posts" filter', async () => {
+      const service = createPostsService(repository)
+      const root = await service.create(author.id, {
+        text: 'raíz',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      await service.create(author.id, {
+        text: 'respuesta',
+        inReplyToId: BigInt(root.id),
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      const page = await service.listByUsername(author.username.toLowerCase(), 20, null, 'posts')
+
+      expect(page.items.map((item) => item.id)).toEqual([root.id])
+    })
+
+    it('returns only replies when filter is "replies"', async () => {
+      const service = createPostsService(repository)
+      const root = await service.create(author.id, {
+        text: 'raíz',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      const reply = await service.create(author.id, {
+        text: 'respuesta',
+        inReplyToId: BigInt(root.id),
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      const page = await service.listByUsername(author.username.toLowerCase(), 20, null, 'replies')
+
+      expect(page.items.map((item) => item.id)).toEqual([reply.id])
+    })
+
+    it('returns posts liked by the user rather than authored by them when filter is "likes"', async () => {
+      const service = createPostsService(repository)
+      const other = addAuthor(authorsById, { id: generateId(), username: 'bob' })
+      const likedPost = await service.create(other.id, {
+        text: 'post de bob',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      await service.create(author.id, {
+        text: 'post propio, no debería aparecer',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      likedPostIds.add(`${author.id}:${likedPost.id}`)
+
+      const page = await service.listByUsername(author.username.toLowerCase(), 20, null, 'likes')
+
+      expect(page.items.map((item) => item.id)).toEqual([likedPost.id])
     })
   })
 

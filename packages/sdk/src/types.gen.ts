@@ -804,6 +804,7 @@ export interface paths {
                 query?: {
                     limit?: number;
                     cursor?: string;
+                    filter?: "posts" | "replies" | "media" | "likes";
                 };
                 header?: never;
                 path: {

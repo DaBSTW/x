@@ -1638,6 +1638,21 @@
           },
           {
             "schema": {
+              "type": "string",
+              "enum": [
+                "posts",
+                "replies",
+                "media",
+                "likes"
+              ],
+              "default": "posts"
+            },
+            "in": "query",
+            "name": "filter",
+            "required": false
+          },
+          {
+            "schema": {
               "type": "string"
             },
             "in": "path",
