@@ -309,9 +309,10 @@ Efecto secundario corregido en el mismo checkpoint: crear una respuesta o una ci
 
 ### 2.8 Listas y guardados 🟡
 
-- [ ] CRUD de `lists` (públicas y privadas) + `list_members`
-- [ ] `GET /timeline/list/:id`
+- [x] CRUD de `lists` (públicas y privadas) + `list_members` — nuevo módulo `apps/api/src/modules/lists`, mismo patrón CRUD que `social-graph`: sólo el dueño puede editar/borrar/gestionar miembros (403 si no), una lista privada 404 para cualquiera que no sea su dueño — incluido `GET /users/:username/lists`, que oculta las privadas ajenas fila por fila en vez de 404ear la página entera. `memberCount` se calcula con `COUNT(*)` en lectura, sin contador cacheado en Redis: `list_members` no tiene el volumen de escritura de likes/reposts que justificó esa caché en 1.4
+- [x] `GET /timeline/list/:id` — mismo `postHydrator.getManyByIds` que bookmarks (bloqueos gratis), y también `dropMuted` (exportado de `timeline.service.ts` y reutilizado tal cual): una lista sigue siendo un feed "ambiental" que se recorre pasivamente, a diferencia de bookmarks, que es una colección deliberada — de ahí que una lo aplique y el otro no
 - [x] `GET /timeline/bookmarks` — reutiliza `postHydrator.getManyByIds` (bloqueos incluidos, gratis) y el mismo `withViewerState` que `getHome`, pero sin `muteLookup` a propósito: guardar un post es una decisión deliberada, silenciar a alguien después no debería des-guardarlo. Frontend: `/bookmarks`, con `<PostFeedList>` extraído de `<Timeline>` (antes vivía sólo ahí) para que ambas listas compartan la virtualización con `@tanstack/react-virtual` sin duplicarla
+- ⚪ Frontend de listas: `/lists` (crear + ver las propias) y `/lists/:id` (cabecera + timeline + borrar, sólo el dueño) están construidos y probados con Playwright — pero sin UI para añadir/quitar miembros todavía. La API los soporta por completo (`POST/DELETE /lists/:id/members/:userId`); armar esa UI necesita un buscador de usuarios por nombre (ni siquiera 2.3 completo, bastaría un input simple), y no entró en este checkpoint. `/lists/:id` se resuelve en el cliente, no con SSR como `/[username]`: `server-api-client.ts` es siempre anónimo a propósito, así que una lista privada 404earía en SSR incluso para su propio dueño
 
 ### 2.9 Notificaciones push 🟡
 

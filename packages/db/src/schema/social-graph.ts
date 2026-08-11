@@ -24,8 +24,8 @@ export const follows = pgTable(
 export type Follow = typeof follows.$inferSelect
 export type NewFollow = typeof follows.$inferInsert
 
-// Tables + endpoints only (ROADMAP.md 1.2) — nothing here filters feeds,
-// replies, or search yet; that application lands in phase 2 (2.6).
+// Table + endpoints from ROADMAP.md 1.2; posts.service.ts, timeline.service.ts
+// and apps/workers' notifications worker apply it to reads (ROADMAP.md 2.6).
 export const blocks = pgTable(
   'blocks',
   {

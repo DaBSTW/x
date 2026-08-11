@@ -126,7 +126,12 @@ async function resolvePrecomputedIds(
   return page.slice(0, limit)
 }
 
-async function dropMuted(muteLookup: MuteLookup, viewerId: bigint, items: Post[]): Promise<Post[]> {
+/** Shared with lists.service.ts's getTimeline — both are scrollable "timelines" in ROADMAP.md 2.6's sense, unlike bookmarks' deliberately-saved list. */
+export async function dropMuted(
+  muteLookup: MuteLookup,
+  viewerId: bigint,
+  items: Post[],
+): Promise<Post[]> {
   const authorIds = [...new Set(items.map((post) => BigInt(post.author.id)))]
   const muted = await muteLookup.findMutedAuthorIds(viewerId, authorIds)
   if (muted.size === 0) return items

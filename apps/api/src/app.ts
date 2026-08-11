@@ -22,6 +22,9 @@ import { createAuthService } from './modules/auth/auth.service.js'
 import { createInteractionsRepository } from './modules/interactions/interactions.repository.js'
 import { registerInteractionsRoutes } from './modules/interactions/interactions.routes.js'
 import { createInteractionsService } from './modules/interactions/interactions.service.js'
+import { createListsRepository } from './modules/lists/lists.repository.js'
+import { registerListsRoutes } from './modules/lists/lists.routes.js'
+import { createListsService } from './modules/lists/lists.service.js'
 import { createMediaRepository } from './modules/media/media.repository.js'
 import { registerMediaRoutes } from './modules/media/media.routes.js'
 import { createMediaService } from './modules/media/media.service.js'
@@ -175,6 +178,9 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
     interactionsRepository,
   )
 
+  const listsRepository = createListsRepository(app.db)
+  const listsService = createListsService(listsRepository, postsService, socialGraphRepository)
+
   const profilesRepository = createProfilesRepository(app.db)
   const profilesService = createProfilesService(profilesRepository, mediaUrlConfig)
 
@@ -240,6 +246,13 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   await app.register(
     async (instance) => {
       await registerMediaRoutes(instance, { mediaService, tokenService })
+    },
+    { prefix: '/v1' },
+  )
+
+  await app.register(
+    async (instance) => {
+      await registerListsRoutes(instance, { listsService, tokenService })
     },
     { prefix: '/v1' },
   )
