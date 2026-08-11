@@ -1,0 +1,214 @@
+import {
+  ConflictError,
+  UnauthenticatedError,
+  UnprocessableError,
+  generateId,
+  generateOpaqueToken,
+  hashPassword,
+  needsRehash,
+  sha256Hex,
+  verifyPassword,
+} from '@x/utils'
+import type { Mailer } from '../../lib/mailer.js'
+import type { TokenService } from '../../plugins/tokens.js'
+import type { AuthRepository } from './auth.repository.js'
+
+export type RegisterInput = {
+  username: string
+  email: string
+  password: string
+  birthDate: string
+}
+
+export type LoginInput = {
+  email: string
+  password: string
+}
+
+export type RequestMeta = {
+  ipAddress: string | null
+  userAgent: string | null
+}
+
+export type TokenPair = {
+  accessToken: string
+  expiresInSeconds: number
+  refreshToken: string
+}
+
+export type CreateAuthServiceOptions = {
+  repository: AuthRepository
+  tokenService: TokenService
+  mailer: Mailer
+  accessTtlMinutes: number
+  refreshTokenTtlDays: number
+}
+
+const EMAIL_VERIFICATION_TTL_HOURS = 24
+// A precomputed hash spends the same Argon2id time as a real lookup would,
+// so a login for a nonexistent account isn't distinguishable by timing —
+// SPECS.md §11.3 "enumeración de cuentas".
+const dummyPasswordHashPromise = hashPassword('correct horse battery staple placeholder')
+
+export type AuthService = ReturnType<typeof createAuthService>
+
+export function createAuthService(options: CreateAuthServiceOptions) {
+  const { repository, tokenService, mailer, accessTtlMinutes, refreshTokenTtlDays } = options
+
+  async function register(input: RegisterInput) {
+    const [existingEmail, existingUsername] = await Promise.all([
+      repository.findUserByEmail(input.email),
+      repository.findUserByUsernameLower(input.username.toLowerCase()),
+    ])
+    if (existingEmail) throw new ConflictError('email is already registered', { field: 'email' })
+    if (existingUsername)
+      throw new ConflictError('username is already taken', { field: 'username' })
+
+    const userId = generateId()
+    const passwordHash = await hashPassword(input.password)
+
+    await repository.insertUserWithCounters({
+      id: userId,
+      username: input.username,
+      usernameLower: input.username.toLowerCase(),
+      email: input.email,
+      passwordHash,
+      displayName: input.username,
+      birthDate: input.birthDate,
+    })
+
+    await issueEmailVerificationToken(userId, input.email)
+
+    return {
+      id: userId,
+      username: input.username,
+      email: input.email,
+      emailVerified: false as const,
+    }
+  }
+
+  async function issueEmailVerificationToken(userId: bigint, email: string): Promise<void> {
+    const rawToken = generateOpaqueToken()
+    await repository.insertEmailVerificationToken({
+      tokenHash: sha256Hex(rawToken),
+      userId,
+      expiresAt: new Date(Date.now() + EMAIL_VERIFICATION_TTL_HOURS * 60 * 60 * 1000),
+    })
+    await mailer.sendVerificationEmail(email, rawToken)
+  }
+
+  async function verifyEmail(rawToken: string): Promise<void> {
+    const tokenHash = sha256Hex(rawToken)
+    const record = await repository.findEmailVerificationToken(tokenHash)
+
+    if (!record || record.usedAt || record.expiresAt < new Date()) {
+      throw new UnprocessableError('verification token is invalid or expired')
+    }
+
+    await repository.markEmailVerified(record.userId, tokenHash)
+  }
+
+  async function login(input: LoginInput, meta: RequestMeta): Promise<TokenPair> {
+    const user = await repository.findUserByEmail(input.email)
+
+    if (!user?.passwordHash) {
+      await verifyPassword(await dummyPasswordHashPromise, input.password)
+      throw new UnauthenticatedError('invalid email or password')
+    }
+
+    const passwordValid = await verifyPassword(user.passwordHash, input.password)
+    if (!passwordValid) {
+      throw new UnauthenticatedError('invalid email or password')
+    }
+
+    if (needsRehash(user.passwordHash)) {
+      await repository.updatePasswordHash(user.id, await hashPassword(input.password))
+    }
+
+    return issueTokenPair(user.id, meta)
+  }
+
+  async function issueTokenPair(userId: bigint, meta: RequestMeta): Promise<TokenPair> {
+    const sessionId = generateId()
+    const { row, rawToken } = buildRefreshTokenRow(userId, sessionId, meta)
+    await repository.insertRefreshToken(row)
+    return toTokenPair(userId, sessionId, rawToken)
+  }
+
+  function buildRefreshTokenRow(userId: bigint, sessionId: bigint, meta: RequestMeta) {
+    const rawToken = generateOpaqueToken()
+    return {
+      rawToken,
+      row: {
+        id: generateId(),
+        userId,
+        sessionId,
+        tokenHash: sha256Hex(rawToken),
+        expiresAt: new Date(Date.now() + refreshTokenTtlDays * 24 * 60 * 60 * 1000),
+        userAgent: meta.userAgent,
+        ipAddress: meta.ipAddress,
+      },
+    }
+  }
+
+  async function toTokenPair(
+    userId: bigint,
+    sessionId: bigint,
+    rawRefreshToken: string,
+  ): Promise<TokenPair> {
+    const accessToken = await tokenService.signAccessToken({
+      sub: userId.toString(),
+      sid: sessionId.toString(),
+    })
+    return { accessToken, expiresInSeconds: accessTtlMinutes * 60, refreshToken: rawRefreshToken }
+  }
+
+  async function refresh(rawRefreshToken: string, meta: RequestMeta): Promise<TokenPair> {
+    const tokenHash = sha256Hex(rawRefreshToken)
+    const record = await repository.findRefreshTokenByHash(tokenHash)
+
+    if (!record) {
+      throw new UnauthenticatedError('invalid refresh token')
+    }
+
+    if (record.revokedAt) {
+      // The token was already rotated (or explicitly revoked) — this is reuse
+      // of a stale token, a strong signal of theft. Kill the whole family.
+      // SPECS.md §11.1.
+      await repository.revokeSession(record.sessionId)
+      throw new UnauthenticatedError('refresh token reuse detected, session revoked', {
+        sessionId: record.sessionId.toString(),
+      })
+    }
+
+    if (record.expiresAt < new Date()) {
+      throw new UnauthenticatedError('refresh token expired')
+    }
+
+    const { row, rawToken } = buildRefreshTokenRow(record.userId, record.sessionId, meta)
+    await repository.rotateRefreshToken(tokenHash, row)
+
+    return toTokenPair(record.userId, record.sessionId, rawToken)
+  }
+
+  async function logout(rawRefreshToken: string): Promise<void> {
+    await repository.revokeToken(sha256Hex(rawRefreshToken))
+  }
+
+  async function logoutAll(userId: bigint): Promise<void> {
+    await repository.revokeAllSessionsForUser(userId)
+  }
+
+  async function listSessions(userId: bigint, currentSessionId: bigint) {
+    const rows = await repository.listActiveSessions(userId)
+    return rows.map((row) => ({
+      id: row.sessionId.toString(),
+      userAgent: row.userAgent,
+      ipAddress: row.ipAddress,
+      createdAt: row.createdAt.toISOString(),
+      isCurrent: row.sessionId === currentSessionId,
+    }))
+  }
+
+  return { register, verifyEmail, login, refresh, logout, logoutAll, listSessions }
+}

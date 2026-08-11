@@ -1,5 +1,6 @@
 export { createDatabase, schema } from './client.js'
 export type { Database } from './client.js'
+export { migrationsFolderUrl } from './migrations-path.js'
 export * from './schema/auth.js'
 export * from './schema/posts.js'
 export * from './schema/social-graph.js'

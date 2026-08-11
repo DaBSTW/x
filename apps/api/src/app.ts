@@ -1,0 +1,87 @@
+import cookie from '@fastify/cookie'
+import cors from '@fastify/cors'
+import helmet from '@fastify/helmet'
+import swagger from '@fastify/swagger'
+import scalarApiReference from '@scalar/fastify-api-reference'
+import Fastify, { type FastifyInstance } from 'fastify'
+import {
+  type ZodTypeProvider,
+  jsonSchemaTransform,
+  serializerCompiler,
+  validatorCompiler,
+} from 'fastify-type-provider-zod'
+import type { Env } from './env.js'
+import { createMailer } from './lib/mailer.js'
+import { createAuthRepository } from './modules/auth/auth.repository.js'
+import { registerAuthRoutes } from './modules/auth/auth.routes.js'
+import { createAuthService } from './modules/auth/auth.service.js'
+import dbPlugin from './plugins/db.js'
+import errorHandlerPlugin from './plugins/error-handler.js'
+import redisPlugin from './plugins/redis.js'
+import { createTokenService } from './plugins/tokens.js'
+
+export async function buildApp(env: Env): Promise<FastifyInstance> {
+  const app = Fastify({
+    logger: { level: env.NODE_ENV === 'test' ? 'silent' : 'info' },
+    genReqId: () => crypto.randomUUID(),
+  }).withTypeProvider<ZodTypeProvider>()
+
+  app.setValidatorCompiler(validatorCompiler)
+  app.setSerializerCompiler(serializerCompiler)
+
+  await app.register(errorHandlerPlugin)
+  await app.register(helmet)
+  await app.register(cors, { origin: env.CORS_ORIGIN, credentials: true })
+  await app.register(cookie)
+  await app.register(dbPlugin, { databaseUrl: env.DATABASE_URL })
+  await app.register(redisPlugin, { redisUrl: env.REDIS_URL })
+
+  await app.register(swagger, {
+    openapi: {
+      openapi: '3.1.0',
+      info: { title: 'X API', version: '1.0.0' },
+      servers: [{ url: '/v1' }],
+    },
+    transform: jsonSchemaTransform,
+  })
+  await app.register(scalarApiReference, { routePrefix: '/docs' })
+
+  const tokenService = await createTokenService({
+    privateKeyPem: env.JWT_ACCESS_PRIVATE_KEY,
+    publicKeyPem: env.JWT_ACCESS_PUBLIC_KEY,
+    accessTtlMinutes: env.JWT_ACCESS_TTL_MINUTES,
+  })
+
+  const mailer = createMailer({
+    host: env.SMTP_HOST,
+    port: env.SMTP_PORT,
+    from: env.MAIL_FROM,
+    webUrl: env.WEB_URL,
+    logger: app.log,
+  })
+
+  const authRepository = createAuthRepository(app.db)
+  const authService = createAuthService({
+    repository: authRepository,
+    tokenService,
+    mailer,
+    accessTtlMinutes: env.JWT_ACCESS_TTL_MINUTES,
+    refreshTokenTtlDays: env.REFRESH_TOKEN_TTL_DAYS,
+  })
+
+  app.get('/health', async () => ({ status: 'ok' }))
+
+  await app.register(
+    async (instance) => {
+      await registerAuthRoutes(instance, {
+        authService,
+        tokenService,
+        refreshTokenTtlDays: env.REFRESH_TOKEN_TTL_DAYS,
+        nodeEnv: env.NODE_ENV,
+      })
+    },
+    { prefix: '/v1/auth' },
+  )
+
+  return app
+}

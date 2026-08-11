@@ -1,5 +1,7 @@
+import { fileURLToPath } from 'node:url'
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
 import { createDatabase } from './client.js'
+import { migrationsFolderUrl } from './migrations-path.js'
 
 const connectionString = process.env.DATABASE_URL
 if (!connectionString) {
@@ -9,7 +11,7 @@ if (!connectionString) {
 
 const db = createDatabase(connectionString)
 
-await migrate(db, { migrationsFolder: new URL('../migrations', import.meta.url).pathname })
+await migrate(db, { migrationsFolder: fileURLToPath(migrationsFolderUrl()) })
 
 // biome-ignore lint/suspicious/noConsoleLog: script output, not a running service — CODESTYLE.md §8.1 scopes the console.log ban to services.
 console.log('migrations applied')
