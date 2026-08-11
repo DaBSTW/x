@@ -31,7 +31,12 @@ export async function registerSocialGraphRoutes(
     {
       schema: {
         params: z.object({ id: snowflakeIdSchema }),
-        response: { 204: z.null(), 404: errorResponseSchema, 409: errorResponseSchema },
+        response: {
+          204: z.null(),
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+          409: errorResponseSchema,
+        },
       },
       preHandler: [requireAuth],
     },
@@ -45,7 +50,10 @@ export async function registerSocialGraphRoutes(
   server.delete(
     '/users/:id/follow',
     {
-      schema: { params: z.object({ id: snowflakeIdSchema }), response: { 204: z.null() } },
+      schema: {
+        params: z.object({ id: snowflakeIdSchema }),
+        response: { 204: z.null(), 401: errorResponseSchema },
+      },
       preHandler: [requireAuth],
     },
     async (request, reply) => {

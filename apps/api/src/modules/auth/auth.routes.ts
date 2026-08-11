@@ -136,7 +136,10 @@ export async function registerAuthRoutes(app: FastifyInstance, options: AuthRout
 
   server.post(
     '/logout-all',
-    { schema: { response: { 204: z.null() } }, preHandler: [requireAuth] },
+    {
+      schema: { response: { 204: z.null(), 401: errorResponseSchema } },
+      preHandler: [requireAuth],
+    },
     async (request, reply) => {
       const user = getAuthenticatedUser(request)
       await authService.logoutAll(user.id)
@@ -147,7 +150,10 @@ export async function registerAuthRoutes(app: FastifyInstance, options: AuthRout
 
   server.get(
     '/sessions',
-    { schema: { response: { 200: listSessionsResponseSchema } }, preHandler: [requireAuth] },
+    {
+      schema: { response: { 200: listSessionsResponseSchema, 401: errorResponseSchema } },
+      preHandler: [requireAuth],
+    },
     async (request, reply) => {
       const user = getAuthenticatedUser(request)
       const sessions = await authService.listSessions(user.id, user.sessionId)

@@ -33,7 +33,12 @@ export async function registerPostsRoutes(app: FastifyInstance, options: PostsRo
       schema: {
         body: createPostSchema,
         headers: z.object({ 'idempotency-key': z.string().uuid().optional() }),
-        response: { 201: postResponseSchema, 400: errorResponseSchema, 404: errorResponseSchema },
+        response: {
+          201: postResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+        },
       },
       preHandler: [requireAuth],
     },
@@ -84,7 +89,12 @@ export async function registerPostsRoutes(app: FastifyInstance, options: PostsRo
     {
       schema: {
         params: z.object({ id: snowflakeIdSchema }),
-        response: { 204: z.null(), 403: errorResponseSchema, 404: errorResponseSchema },
+        response: {
+          204: z.null(),
+          401: errorResponseSchema,
+          403: errorResponseSchema,
+          404: errorResponseSchema,
+        },
       },
       preHandler: [requireAuth],
     },

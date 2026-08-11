@@ -1,4 +1,4 @@
-import { paginationQuerySchema, postListResponseSchema } from '@x/contracts'
+import { errorResponseSchema, paginationQuerySchema, postListResponseSchema } from '@x/contracts'
 import { decodeCursor, encodeCursor } from '@x/utils'
 import type { FastifyInstance } from 'fastify'
 import type { ZodTypeProvider } from 'fastify-type-provider-zod'
@@ -21,7 +21,7 @@ export async function registerTimelineRoutes(app: FastifyInstance, options: Time
     {
       schema: {
         querystring: paginationQuerySchema,
-        response: { 200: postListResponseSchema },
+        response: { 200: postListResponseSchema, 401: errorResponseSchema },
       },
       preHandler: [requireAuth],
     },
