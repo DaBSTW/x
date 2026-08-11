@@ -8,6 +8,15 @@ export { parseEntities } from './text/entities.js'
 export type { EntityKind, ParsedEntity } from './text/entities.js'
 export { MAX_POST_GRAPHEMES, countCharacters } from './text/character-count.js'
 export { decodeCursor, encodeCursor } from './pagination.js'
+export { FANOUT_QUEUE_NAME } from './queues.js'
+export type { FanoutJobData } from './queues.js'
+export {
+  CELEBRITY_FOLLOWER_THRESHOLD,
+  FANOUT_BATCH_SIZE,
+  TIMELINE_RETENTION_SIZE,
+  TIMELINE_TTL_SECONDS,
+  timelineKey,
+} from './timeline-constants.js'
 export {
   AppError,
   BlockedByUserError,

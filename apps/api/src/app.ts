@@ -11,6 +11,7 @@ import {
   validatorCompiler,
 } from 'fastify-type-provider-zod'
 import type { Env } from './env.js'
+import { createFanoutQueue } from './lib/fanout-queue.js'
 import { createMailer } from './lib/mailer.js'
 import { createAuthRepository } from './modules/auth/auth.repository.js'
 import { registerAuthRoutes } from './modules/auth/auth.routes.js'
@@ -76,8 +77,15 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
     refreshTokenTtlDays: env.REFRESH_TOKEN_TTL_DAYS,
   })
 
+  const fanoutQueue = createFanoutQueue(env.REDIS_URL)
+  app.addHook('onClose', async () => {
+    await fanoutQueue.close()
+  })
+
   const postsRepository = createPostsRepository(app.db)
-  const postsService = createPostsService(postsRepository)
+  const postsService = createPostsService(postsRepository, async (postId, authorId) => {
+    await fanoutQueue.enqueue({ postId: postId.toString(), authorId: authorId.toString() })
+  })
 
   const socialGraphRepository = createSocialGraphRepository(app.db)
   const socialGraphService = createSocialGraphService(socialGraphRepository, app.redis)

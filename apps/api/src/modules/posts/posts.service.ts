@@ -30,7 +30,10 @@ const REPLY_POLICY_CODES: Record<CreatePostServiceInput['replyPolicy'], number> 
 
 export type PostsService = ReturnType<typeof createPostsService>
 
-export function createPostsService(repository: PostRepository) {
+/** Called after a post is durably persisted, to trigger timeline fan-out — SPECS.md §6.1. */
+export type OnPostCreated = (postId: bigint, authorId: bigint) => Promise<void>
+
+export function createPostsService(repository: PostRepository, onPostCreated?: OnPostCreated) {
   async function create(authorId: bigint, input: CreatePostServiceInput): Promise<Post> {
     const graphemeCount = countCharacters(input.text)
     if (graphemeCount === 0) {
@@ -104,6 +107,17 @@ export function createPostsService(repository: PostRepository) {
 
     const author = await repository.findAuthorById(authorId)
     if (!author) throw new NotFoundError('user', authorId.toString())
+
+    // Fan-out is an optimization, not a correctness requirement: lazy
+    // timeline reconstruction from Postgres is always a valid fallback
+    // (SPECS.md §6.1), so a queue failure here must not fail the request.
+    if (onPostCreated) {
+      try {
+        await onPostCreated(id, authorId)
+      } catch {
+        // Swallowed intentionally — see comment above.
+      }
+    }
 
     return toPostDto(
       {

@@ -241,6 +241,35 @@ describe('createPostsService', () => {
         }),
       ).rejects.toMatchObject({ code: 'NOT_FOUND' })
     })
+
+    it('invokes onPostCreated with the new post and author ids', async () => {
+      const calls: Array<{ postId: bigint; authorId: bigint }> = []
+      const service = createPostsService(repository, async (postId, authorId) => {
+        calls.push({ postId, authorId })
+      })
+
+      const post = await service.create(author.id, {
+        text: 'hola mundo',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      expect(calls).toEqual([{ postId: BigInt(post.id), authorId: author.id }])
+    })
+
+    it('does not fail post creation when onPostCreated rejects', async () => {
+      const service = createPostsService(repository, async () => {
+        throw new Error('queue unavailable')
+      })
+
+      await expect(
+        service.create(author.id, {
+          text: 'hola mundo',
+          replyPolicy: 'everyone',
+          isSensitive: false,
+        }),
+      ).resolves.toMatchObject({ text: 'hola mundo' })
+    })
   })
 
   describe('getById', () => {
