@@ -114,6 +114,32 @@ function createFakeRepository() {
         .sort((a, b) => (b.id > a.id ? 1 : -1))
         .slice(0, limit)
     },
+    async insertRepost(repost, counters) {
+      postsById.set(
+        repost.id,
+        makePost({
+          id: repost.id,
+          authorId: repost.authorId,
+          kind: 'repost',
+          repostOfId: repost.repostOfId,
+          conversationId: repost.conversationId,
+        }),
+      )
+      countersByPostId.set(counters.postId, makeCounters(counters.postId))
+    },
+    async findActiveRepost(authorId, repostOfId) {
+      for (const post of postsById.values()) {
+        if (
+          post.authorId === authorId &&
+          post.repostOfId === repostOfId &&
+          post.kind === 'repost' &&
+          !post.deletedAt
+        ) {
+          return post.id
+        }
+      }
+      return null
+    },
   }
 
   return { repository, authorsById }
@@ -324,6 +350,93 @@ describe('createPostsService', () => {
       await expect(service.remove(BigInt(created.id), other.id)).rejects.toMatchObject({
         code: 'FORBIDDEN',
       })
+    })
+  })
+
+  describe('repost', () => {
+    it('creates a repost with null text pointing at the original', async () => {
+      const service = createPostsService(repository)
+      const original = await service.create(author.id, {
+        text: 'post original',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      const reposter = addAuthor(authorsById, { id: generateId(), username: 'bob' })
+
+      const repost = await service.repost(reposter.id, BigInt(original.id))
+
+      expect(repost.text).toBeNull()
+      expect(repost.conversationId).toBe(original.id)
+      expect(repost.author.username).toBe('bob')
+    })
+
+    it('rejects reposting the same post twice by the same author', async () => {
+      const service = createPostsService(repository)
+      const original = await service.create(author.id, {
+        text: 'post original',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      await service.repost(author.id, BigInt(original.id))
+
+      await expect(service.repost(author.id, BigInt(original.id))).rejects.toMatchObject({
+        code: 'CONFLICT',
+      })
+    })
+
+    it('throws NotFoundError when reposting a nonexistent post', async () => {
+      const service = createPostsService(repository)
+      await expect(service.repost(author.id, 999999999999999999n)).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      })
+    })
+
+    it('invokes onPostCreated, same as a regular post', async () => {
+      const calls: bigint[] = []
+      const service = createPostsService(repository, async (postId) => {
+        calls.push(postId)
+      })
+      const original = await service.create(author.id, {
+        text: 'post original',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      calls.length = 0 // drop the call from creating `original` itself
+
+      const repost = await service.repost(author.id, BigInt(original.id))
+
+      expect(calls).toEqual([BigInt(repost.id)])
+    })
+  })
+
+  describe('unrepost', () => {
+    it('removes an existing repost', async () => {
+      const service = createPostsService(repository)
+      const original = await service.create(author.id, {
+        text: 'post original',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      await service.repost(author.id, BigInt(original.id))
+
+      await expect(service.unrepost(author.id, BigInt(original.id))).resolves.toBe(true)
+
+      // Reposting again must succeed — the previous one no longer counts as active.
+      await expect(service.repost(author.id, BigInt(original.id))).resolves.toMatchObject({
+        text: null,
+      })
+    })
+
+    it('is idempotent when there is nothing to undo', async () => {
+      const service = createPostsService(repository)
+      const original = await service.create(author.id, {
+        text: 'post original',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      await expect(service.unrepost(author.id, BigInt(original.id))).resolves.toBe(false)
     })
   })
 

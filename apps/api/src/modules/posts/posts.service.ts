@@ -1,5 +1,6 @@
 import type { Post } from '@x/contracts'
 import {
+  ConflictError,
   ForbiddenError,
   MAX_POST_GRAPHEMES,
   NotFoundError,
@@ -156,6 +157,54 @@ export function createPostsService(repository: PostRepository, onPostCreated?: O
     await repository.softDeletePost(postId)
   }
 
+  /** SPECS.md §4.3: a repost is its own post row, `text IS NULL`, `repost_of_id` set — it fans out like any other post. */
+  async function repost(authorId: bigint, originalPostId: bigint): Promise<Post> {
+    const original = await repository.findPostById(originalPostId)
+    if (!original) throw new NotFoundError('post', originalPostId.toString())
+    if (await repository.findActiveRepost(authorId, originalPostId)) {
+      throw new ConflictError('already reposted this post')
+    }
+
+    const id = generateId()
+    const conversationId = original.conversationId ?? original.id
+    await repository.insertRepost(
+      { id, authorId, repostOfId: originalPostId, conversationId },
+      {
+        postId: id,
+      },
+    )
+
+    const author = await repository.findAuthorById(authorId)
+    if (!author) throw new NotFoundError('user', authorId.toString())
+
+    if (onPostCreated) {
+      try {
+        await onPostCreated(id, authorId)
+      } catch {
+        // Swallowed intentionally — see the comment in create().
+      }
+    }
+
+    return toPostDto(
+      { id, text: null, createdAt: new Date(), conversationId, inReplyToId: null },
+      author,
+      emptyCounters(),
+      [],
+    )
+  }
+
+  /**
+   * Idempotent — undoing a repost that doesn't exist is a no-op, matching
+   * unfollow's precedent. Returns whether a repost actually existed, so
+   * callers know whether to also decrement a counter.
+   */
+  async function unrepost(authorId: bigint, originalPostId: bigint): Promise<boolean> {
+    const repostId = await repository.findActiveRepost(authorId, originalPostId)
+    if (!repostId) return false
+    await repository.softDeletePost(repostId)
+    return true
+  }
+
   async function listByUsername(
     usernameLower: string,
     limit: number,
@@ -230,7 +279,7 @@ export function createPostsService(repository: PostRepository, onPostCreated?: O
     return items
   }
 
-  return { create, getById, remove, listByUsername, getManyByIds }
+  return { create, getById, remove, repost, unrepost, listByUsername, getManyByIds }
 }
 
 type PostRowLike = {

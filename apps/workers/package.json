@@ -10,7 +10,8 @@
     "start": "node --import tsx/esm dist/server.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --coverage",
-    "test:integration": "vitest run --coverage --config vitest.integration.config.ts"
+    "test:integration": "vitest run --coverage --config vitest.integration.config.ts",
+    "reconcile-counters": "tsx scripts/reconcile-counters.ts"
   },
   "dependencies": {
     "@x/config": "workspace:*",

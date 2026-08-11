@@ -1,25 +1,37 @@
 import { createDatabase } from '@x/db'
+import { COUNTER_FLUSH_INTERVAL_MS } from '@x/utils'
+import { Redis } from 'ioredis'
+import { createCountersFlushWorker } from './counters/counters.flush-worker.js'
+import { createCountersRepository } from './counters/counters.repository.js'
 import { parseEnv } from './env.js'
 import { createFanoutRepository } from './fanout/fanout.repository.js'
 import { createFanoutWorker } from './fanout/fanout.worker.js'
 
 const env = parseEnv(process.env)
 const db = createDatabase(env.DATABASE_URL)
-const repository = createFanoutRepository(db)
 
 const fanoutWorker = createFanoutWorker({
-  repository,
+  repository: createFanoutRepository(db),
   redisUrl: env.REDIS_URL,
   concurrency: env.FANOUT_WORKER_CONCURRENCY,
 })
-
 fanoutWorker.worker.on('failed', (job, error) => {
   console.error(`fan-out job ${job?.id ?? '(unknown)'} failed:`, error)
 })
 
-console.info('workers: fan-out worker ready')
+const countersRedis = new Redis(env.REDIS_URL)
+const countersFlushWorker = createCountersFlushWorker(
+  createCountersRepository(db),
+  countersRedis,
+  COUNTER_FLUSH_INTERVAL_MS,
+)
+countersFlushWorker.start()
+
+console.info('workers: fan-out worker and counters flush worker ready')
 
 async function shutdown(): Promise<void> {
+  countersFlushWorker.stop()
+  countersRedis.disconnect()
   await fanoutWorker.close()
   process.exit(0)
 }

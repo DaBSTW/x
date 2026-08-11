@@ -155,12 +155,14 @@
 
 ### 1.4 Interacciones 🟡
 
-- [ ] `POST/DELETE /posts/:id/like` — contador en Redis primero
-- [ ] `POST/DELETE /posts/:id/repost` — crea post de tipo `repost`, entra en el fan-out
-- [ ] `POST/DELETE /posts/:id/bookmark`
-- [ ] **Worker de agregación de contadores**: lote cada 5 s agrupado por `post_id`
-- [ ] Job nocturno de **reconciliación** de contadores desde las tablas fuente
-- [ ] Test de concurrencia: 100 likes simultáneos → contador exacto al final
+- [x] `POST/DELETE /posts/:id/like` — contador en Redis primero (`post:{id}:counters` HASH, `HINCRBY`; 1000/24h por usuario)
+- [x] `POST/DELETE /posts/:id/repost` — crea post de tipo `repost` (`text IS NULL`) vía `PostsService.repost`, entra en el fan-out igual que cualquier post
+- [x] `POST/DELETE /posts/:id/bookmark`
+- [x] **Worker de agregación de contadores** (`apps/workers/src/counters/`): `SPOP` sobre `dirty:post_counters` cada 5 s, agrupado por `post_id`, `UPDATE post_counters` (Redis es autoritativo para el valor, no un delta)
+- [x] Job nocturno de **reconciliación** (`apps/workers/scripts/reconcile-counters.ts`): recalcula desde `likes`/`bookmarks`/`posts` para publicaciones con actividad en 24h. Verificado con datos reales (Testcontainers) corrigiendo un drift simulado. Falta el cron externo que lo dispare cada noche — tarea de ops, no de código (ver docs/adr/0003).
+- [x] Test de concurrencia: 100 likes simultáneos → contador exacto al final — ejecutado de verdad (Testcontainers): 100 `like()` concurrentes sobre el mismo post, `post:{id}:counters` en Redis termina en exactamente 100
+
+⚪ El campo `viewer` (`liked`/`reposted`/`bookmarked`) del ejemplo de respuesta de SPECS.md §5.4 no está en el contrato todavía — no es un bullet explícito de esta sección y requeriría autenticación opcional en rutas hoy públicas (`GET /posts/:id`, `GET /timeline/home`). Diferido; los propios endpoints de mutación devuelven el resultado correcto sin él.
 
 ### 1.5 Multimedia — imágenes 🟡
 

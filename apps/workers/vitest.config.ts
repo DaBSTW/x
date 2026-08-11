@@ -7,7 +7,11 @@ export default defineConfig({
       provider: 'v8',
       // Repository queries and the BullMQ wiring itself touch real
       // Postgres/Redis — exercised by test:integration, not unit tests.
-      include: ['src/fanout/fanout.processor.ts', 'src/env.ts'],
+      include: [
+        'src/fanout/fanout.processor.ts',
+        'src/counters/counters.flush-worker.ts',
+        'src/env.ts',
+      ],
       thresholds: { lines: 80, statements: 80, branches: 80, functions: 80 },
     },
   },

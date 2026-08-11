@@ -142,5 +142,39 @@ export function createPostsRepository(db: Database) {
         .orderBy(desc(posts.id))
         .limit(limit)
     },
+
+    /** A repost is its own `posts` row: `kind = 'repost'`, `text` left `NULL` (SPECS.md §4.3). */
+    async insertRepost(
+      repost: { id: bigint; authorId: bigint; repostOfId: bigint; conversationId: bigint },
+      counters: NewPostCounters,
+    ): Promise<void> {
+      await db.transaction(async (tx) => {
+        await tx.insert(posts).values({
+          id: repost.id,
+          authorId: repost.authorId,
+          kind: 'repost',
+          repostOfId: repost.repostOfId,
+          conversationId: repost.conversationId,
+        })
+        await tx.insert(postCounters).values(counters)
+      })
+    },
+
+    /** The requester's own active (non-deleted) repost of `repostOfId`, if any — at most one per (author, original post). */
+    async findActiveRepost(authorId: bigint, repostOfId: bigint): Promise<bigint | null> {
+      const [row] = await db
+        .select({ id: posts.id })
+        .from(posts)
+        .where(
+          and(
+            eq(posts.authorId, authorId),
+            eq(posts.repostOfId, repostOfId),
+            eq(posts.kind, 'repost'),
+            isNull(posts.deletedAt),
+          ),
+        )
+        .limit(1)
+      return row?.id ?? null
+    },
   }
 }

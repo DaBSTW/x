@@ -16,6 +16,9 @@ import { createMailer } from './lib/mailer.js'
 import { createAuthRepository } from './modules/auth/auth.repository.js'
 import { registerAuthRoutes } from './modules/auth/auth.routes.js'
 import { createAuthService } from './modules/auth/auth.service.js'
+import { createInteractionsRepository } from './modules/interactions/interactions.repository.js'
+import { registerInteractionsRoutes } from './modules/interactions/interactions.routes.js'
+import { createInteractionsService } from './modules/interactions/interactions.service.js'
 import { createPostsRepository } from './modules/posts/posts.repository.js'
 import { registerPostsRoutes } from './modules/posts/posts.routes.js'
 import { createPostsService } from './modules/posts/posts.service.js'
@@ -96,6 +99,14 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   const timelineRepository = createTimelineRepository(app.db, app.redis)
   const timelineService = createTimelineService(timelineRepository, postsService)
 
+  const interactionsRepository = createInteractionsRepository(app.db)
+  const interactionsService = createInteractionsService(
+    interactionsRepository,
+    postsRepository,
+    postsService,
+    app.redis,
+  )
+
   app.get('/health', async () => ({ status: 'ok' }))
 
   await app.register(
@@ -127,6 +138,13 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   await app.register(
     async (instance) => {
       await registerTimelineRoutes(instance, { timelineService, tokenService })
+    },
+    { prefix: '/v1' },
+  )
+
+  await app.register(
+    async (instance) => {
+      await registerInteractionsRoutes(instance, { interactionsService, tokenService })
     },
     { prefix: '/v1' },
   )
