@@ -1,6 +1,6 @@
 import type { Database } from '@x/db'
 import { follows, userCounters, users } from '@x/db'
-import { and, desc, eq, lt, sql } from 'drizzle-orm'
+import { and, desc, eq, isNull, lt, ne, sql } from 'drizzle-orm'
 
 export type SocialGraphRepository = ReturnType<typeof createSocialGraphRepository>
 
@@ -101,6 +101,29 @@ export function createSocialGraphRepository(db: Database) {
         .innerJoin(users, eq(users.id, follows.followeeId))
         .where(and(...conditions))
         .orderBy(desc(follows.createdAt))
+        .limit(limit)
+    },
+
+    /**
+     * "Who to follow": most-followed accounts the viewer doesn't already
+     * follow. The left join keeps this a single query instead of an N+1 —
+     * a NULL `follows.followerId` after the join means no matching follow
+     * row exists for (viewer, candidate).
+     */
+    async findSuggestions(userId: bigint, limit: number) {
+      return db
+        .select({
+          id: users.id,
+          username: users.username,
+          displayName: users.displayName,
+          avatarUrl: users.avatarUrl,
+          isVerified: users.isVerified,
+        })
+        .from(users)
+        .innerJoin(userCounters, eq(userCounters.userId, users.id))
+        .leftJoin(follows, and(eq(follows.followerId, userId), eq(follows.followeeId, users.id)))
+        .where(and(ne(users.id, userId), isNull(follows.followerId)))
+        .orderBy(desc(userCounters.followersCount))
         .limit(limit)
     },
   }

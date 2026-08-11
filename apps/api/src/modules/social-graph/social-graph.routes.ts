@@ -3,6 +3,7 @@ import {
   followListResponseSchema,
   paginationQuerySchema,
   snowflakeIdSchema,
+  suggestionsResponseSchema,
 } from '@x/contracts'
 import { decodeCursor, encodeCursor } from '@x/utils'
 import type { FastifyInstance } from 'fastify'
@@ -51,6 +52,25 @@ export async function registerSocialGraphRoutes(
       const user = getAuthenticatedUser(request)
       await socialGraphService.unfollow(user.id, BigInt(request.params.id))
       return reply.status(204).send(null)
+    },
+  )
+
+  // Static segment sharing `/users/*` with profiles.routes.ts's `/users/:username`
+  // — find-my-way always prefers the static match, so this can never be
+  // captured as a username (verified precedent: profiles.routes.ts's `/users/me`).
+  server.get(
+    '/users/suggestions',
+    {
+      schema: {
+        querystring: paginationQuerySchema.pick({ limit: true }),
+        response: { 200: suggestionsResponseSchema, 401: errorResponseSchema },
+      },
+      preHandler: [requireAuth],
+    },
+    async (request, reply) => {
+      const user = getAuthenticatedUser(request)
+      const suggestions = await socialGraphService.getSuggestions(user.id, request.query.limit)
+      return reply.send({ data: suggestions })
     },
   )
 

@@ -93,6 +93,16 @@ function createFakeRepository() {
           return { ...user, followedAt: f.createdAt }
         })
     },
+    async findSuggestions(userId, limit) {
+      const alreadyFollowed = new Set(
+        followsList.filter((f) => f.followerId === userId).map((f) => f.followeeId),
+      )
+      const followerCountOf = (id: bigint) => followsList.filter((f) => f.followeeId === id).length
+      return [...users.values()]
+        .filter((user) => user.id !== userId && !alreadyFollowed.has(user.id))
+        .sort((a, b) => followerCountOf(b.id) - followerCountOf(a.id))
+        .slice(0, limit)
+    },
   }
 
   function addUser(overrides: Partial<FakeUser> = {}): FakeUser {
@@ -216,6 +226,35 @@ describe('createSocialGraphService', () => {
       await expect(service.listFollowers('ghost', 20, null)).rejects.toMatchObject({
         code: 'NOT_FOUND',
       })
+    })
+  })
+
+  describe('getSuggestions', () => {
+    it('excludes the viewer and anyone already followed', async () => {
+      const service = createSocialGraphService(repository, redis)
+      const alice = addUser({ username: 'alice' })
+      const bob = addUser({ username: 'bob' })
+      addUser({ username: 'carol' })
+      await service.follow(alice.id, bob.id)
+
+      const suggestions = await service.getSuggestions(alice.id, 20)
+
+      expect(suggestions.map((item) => item.username)).toEqual(['carol'])
+    })
+
+    it('ranks more-followed accounts first', async () => {
+      const service = createSocialGraphService(repository, redis)
+      const alice = addUser({ username: 'alice' })
+      const popular = addUser({ username: 'popular' })
+      addUser({ username: 'quiet' })
+      const bystander1 = addUser({ username: 'bystander1' })
+      const bystander2 = addUser({ username: 'bystander2' })
+      await service.follow(bystander1.id, popular.id)
+      await service.follow(bystander2.id, popular.id)
+
+      const suggestions = await service.getSuggestions(alice.id, 2)
+
+      expect(suggestions.map((item) => item.username)).toEqual(['popular', 'quiet'])
     })
   })
 })

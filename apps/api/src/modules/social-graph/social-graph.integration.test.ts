@@ -144,4 +144,33 @@ describe('social graph routes', () => {
     const response = await app.inject({ method: 'POST', url: `/v1/users/${bobId}/follow` })
     expect(response.statusCode).toBe(401)
   })
+
+  it('suggests accounts the caller does not already follow', async () => {
+    await registerAndLogin('suggdave', 'suggdave@example.com')
+    await registerAndLogin('suggerin', 'suggerin@example.com')
+    const daveProfile = await app.inject({ method: 'GET', url: '/v1/users/suggdave' })
+    const daveId = daveProfile.json().data.id as string
+    await app.inject({
+      method: 'POST',
+      url: `/v1/users/${daveId}/follow`,
+      headers: { authorization: `Bearer ${aliceToken}` },
+    })
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/users/suggestions',
+      headers: { authorization: `Bearer ${aliceToken}` },
+    })
+
+    expect(response.statusCode).toBe(200)
+    const usernames = response.json().data.map((u: { username: string }) => u.username)
+    expect(usernames).not.toContain('suggdave') // already followed
+    expect(usernames).not.toContain('alice') // the viewer themself
+    expect(usernames).toContain('suggerin') // not followed yet — a valid suggestion
+  })
+
+  it('requires authentication for suggestions', async () => {
+    const response = await app.inject({ method: 'GET', url: '/v1/users/suggestions' })
+    expect(response.statusCode).toBe(401)
+  })
 })

@@ -83,7 +83,12 @@ export function createSocialGraphService(
     return toPage(rows, limit)
   }
 
-  return { follow, unfollow, listFollowers, listFollowing }
+  async function getSuggestions(userId: bigint, limit: number): Promise<FollowListItem[]> {
+    const rows = await repository.findSuggestions(userId, limit)
+    return rows.map((row) => ({ ...row, id: row.id.toString() }))
+  }
+
+  return { follow, unfollow, listFollowers, listFollowing, getSuggestions }
 }
 
 type FollowRow = {
