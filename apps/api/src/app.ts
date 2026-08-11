@@ -18,6 +18,9 @@ import { createAuthService } from './modules/auth/auth.service.js'
 import { createPostsRepository } from './modules/posts/posts.repository.js'
 import { registerPostsRoutes } from './modules/posts/posts.routes.js'
 import { createPostsService } from './modules/posts/posts.service.js'
+import { createSocialGraphRepository } from './modules/social-graph/social-graph.repository.js'
+import { registerSocialGraphRoutes } from './modules/social-graph/social-graph.routes.js'
+import { createSocialGraphService } from './modules/social-graph/social-graph.service.js'
 import dbPlugin from './plugins/db.js'
 import errorHandlerPlugin from './plugins/error-handler.js'
 import redisPlugin from './plugins/redis.js'
@@ -76,6 +79,9 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   const postsRepository = createPostsRepository(app.db)
   const postsService = createPostsService(postsRepository)
 
+  const socialGraphRepository = createSocialGraphRepository(app.db)
+  const socialGraphService = createSocialGraphService(socialGraphRepository, app.redis)
+
   app.get('/health', async () => ({ status: 'ok' }))
 
   await app.register(
@@ -93,6 +99,13 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   await app.register(
     async (instance) => {
       await registerPostsRoutes(instance, { postsService, tokenService })
+    },
+    { prefix: '/v1' },
+  )
+
+  await app.register(
+    async (instance) => {
+      await registerSocialGraphRoutes(instance, { socialGraphService, tokenService })
     },
     { prefix: '/v1' },
   )

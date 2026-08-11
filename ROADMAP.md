@@ -131,10 +131,10 @@
 
 ### 1.2 Grafo social 🔴
 
-- [ ] `POST/DELETE /users/:id/follow` con actualización de contadores
-- [ ] `GET /users/:username/followers` y `/following` paginados
-- [ ] Caché en Redis de la lista de seguidos (`SET`, TTL 1 h) para el timeline
-- [ ] Validación: no auto-seguirse, no seguir a quien te bloqueó
+- [x] `POST/DELETE /users/:id/follow` con actualización de contadores
+- [x] `GET /users/:username/followers` y `/following` paginados
+- [x] Caché en Redis de la lista de seguidos (`SET`, TTL 1 h) para el timeline
+- [x] Validación: no auto-seguirse (bloqueo no aplicado aún — la tabla `blocks` es el bullet ⚪ siguiente, todavía sin construir)
 - [ ] ⚪ `blocks` y `mutes` (tablas + endpoints; la aplicación en filtros va en fase 2)
 
 ### 1.3 Timeline cronológico 🔴
