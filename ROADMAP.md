@@ -79,19 +79,19 @@
 
 - [x] `packages/contracts`: esquemas Zod de todas las entidades (User, Post, Media…)
 - [x] Generación automática de **OpenAPI 3.1** desde los esquemas Fastify
-- [ ] `packages/sdk`: cliente tipado generado desde OpenAPI, consumido por web y móvil
-- [ ] Test de contrato en CI: si el schema cambia de forma incompatible, el build falla
+- [x] `packages/sdk`: cliente tipado generado desde OpenAPI, consumido por web y móvil
+- [x] Test de contrato en CI: si el schema cambia de forma incompatible, el build falla
 
 ### 0.6 Frontend base 🟡
 
-- [ ] Next.js 15 con App Router, React 19, TypeScript
-- [ ] Tailwind CSS 4 + tokens de diseño (colores, espaciado, tipografía) como CSS variables
-- [ ] Tema claro/oscuro con `prefers-color-scheme` + override manual persistido
-- [ ] shadcn/ui inicializado con los componentes base (Button, Input, Dialog, Avatar, Toast)
-- [ ] TanStack Query configurado con `staleTime: 30s`, retry con backoff
-- [ ] Rutas `(marketing)`: landing, `/login`, `/signup` conectadas a la API real
-- [ ] Layout `(app)` autenticado con sidebar y protección de ruta
-- [ ] Manejo global de errores: `error.tsx`, `not-found.tsx`, toasts para errores de API
+- [x] Next.js 15 con App Router, React 19, TypeScript
+- [x] Tailwind CSS 4 + tokens de diseño (colores, espaciado, tipografía) como CSS variables
+- [x] Tema claro/oscuro con `prefers-color-scheme` + override manual persistido
+- [x] shadcn/ui inicializado con los componentes base (Button, Input, Dialog, Avatar, Toast)
+- [x] TanStack Query configurado con `staleTime: 30s`, retry con backoff
+- [x] Rutas `(marketing)`: landing, `/login`, `/signup` conectadas a la API real
+- [x] Layout `(app)` autenticado con sidebar y protección de ruta
+- [x] Manejo global de errores: `error.tsx`, `not-found.tsx`, toasts para errores de API
 
 ### 0.7 CI/CD e infraestructura 🟡
 
