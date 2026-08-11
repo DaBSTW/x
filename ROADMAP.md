@@ -178,8 +178,8 @@
 
 ### 1.6 Perfiles 🟡
 
-- [ ] `GET /users/:username` — perfil público
-- [ ] `PATCH /users/me` — display name, bio, ubicación, web, avatar, banner
+- [x] `GET /users/:username` — perfil público, con contadores (followers/following/posts) desde `user_counters`
+- [x] `PATCH /users/me` — display name, bio, ubicación, web (⚪ avatar/banner: llegan con la subida de media de 1.5, que aún no existe — no hay archivo que subir todavía)
 - [ ] Página de perfil con **SSR** (React Server Component) para SEO
 - [ ] Metadatos Open Graph y Twitter Card por perfil y por post
 - [ ] Pestañas: Posts / Respuestas / Media / Me gusta

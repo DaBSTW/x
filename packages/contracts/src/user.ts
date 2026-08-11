@@ -10,6 +10,13 @@ export const usernameSchema = z
 
 export const passwordSchema = z.string().min(10, 'password must be at least 10 characters').max(256)
 
+export const userCountersSchema = z.object({
+  followers: z.number().int().nonnegative(),
+  following: z.number().int().nonnegative(),
+  posts: z.number().int().nonnegative(),
+})
+export type UserCounters = z.infer<typeof userCountersSchema>
+
 export const userProfileSchema = z.object({
   id: snowflakeIdSchema,
   username: usernameSchema,
@@ -22,8 +29,11 @@ export const userProfileSchema = z.object({
   isProtected: z.boolean(),
   isVerified: z.boolean(),
   createdAt: z.string().datetime(),
+  counters: userCountersSchema,
 })
 export type UserProfile = z.infer<typeof userProfileSchema>
+
+export const userProfileResponseSchema = z.object({ data: userProfileSchema })
 
 export const updateUserSchema = z.object({
   displayName: z.string().min(1).max(50).optional(),

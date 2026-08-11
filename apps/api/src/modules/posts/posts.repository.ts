@@ -1,6 +1,14 @@
 import type { Database } from '@x/db'
-import { type NewPost, type NewPostCounters, postCounters, postEntities, posts, users } from '@x/db'
-import { and, desc, eq, inArray, isNull, lt } from 'drizzle-orm'
+import {
+  type NewPost,
+  type NewPostCounters,
+  postCounters,
+  postEntities,
+  posts,
+  userCounters,
+  users,
+} from '@x/db'
+import { and, desc, eq, inArray, isNull, lt, sql } from 'drizzle-orm'
 
 export type PostEntityRow = {
   postId: bigint
@@ -34,6 +42,10 @@ export function createPostsRepository(db: Database) {
         if (entities.length > 0) {
           await tx.insert(postEntities).values(entities)
         }
+        await tx
+          .update(userCounters)
+          .set({ postsCount: sql`${userCounters.postsCount} + 1` })
+          .where(eq(userCounters.userId, post.authorId))
       })
     },
 
@@ -125,8 +137,14 @@ export function createPostsRepository(db: Database) {
       return new Map(rows.map((row) => [row.usernameLower, row.id]))
     },
 
-    async softDeletePost(id: bigint): Promise<void> {
-      await db.update(posts).set({ deletedAt: new Date() }).where(eq(posts.id, id))
+    async softDeletePost(id: bigint, authorId: bigint): Promise<void> {
+      await db.transaction(async (tx) => {
+        await tx.update(posts).set({ deletedAt: new Date() }).where(eq(posts.id, id))
+        await tx
+          .update(userCounters)
+          .set({ postsCount: sql`greatest(${userCounters.postsCount} - 1, 0)` })
+          .where(eq(userCounters.userId, authorId))
+      })
     },
 
     /** Cursor pagination by Snowflake id — never OFFSET (CODESTYLE.md §13). */
@@ -157,6 +175,10 @@ export function createPostsRepository(db: Database) {
           conversationId: repost.conversationId,
         })
         await tx.insert(postCounters).values(counters)
+        await tx
+          .update(userCounters)
+          .set({ postsCount: sql`${userCounters.postsCount} + 1` })
+          .where(eq(userCounters.userId, repost.authorId))
       })
     },
 

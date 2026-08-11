@@ -154,7 +154,7 @@ export function createPostsService(repository: PostRepository, onPostCreated?: O
     if (post.authorId !== requesterId) {
       throw new ForbiddenError('only the author can delete this post')
     }
-    await repository.softDeletePost(postId)
+    await repository.softDeletePost(postId, requesterId)
   }
 
   /** SPECS.md §4.3: a repost is its own post row, `text IS NULL`, `repost_of_id` set — it fans out like any other post. */
@@ -201,7 +201,7 @@ export function createPostsService(repository: PostRepository, onPostCreated?: O
   async function unrepost(authorId: bigint, originalPostId: bigint): Promise<boolean> {
     const repostId = await repository.findActiveRepost(authorId, originalPostId)
     if (!repostId) return false
-    await repository.softDeletePost(repostId)
+    await repository.softDeletePost(repostId, authorId)
     return true
   }
 

@@ -15,9 +15,29 @@ describe('userProfileSchema', () => {
       isProtected: false,
       isVerified: true,
       createdAt: '2026-08-11T14:32:00Z',
+      counters: { followers: 0, following: 0, posts: 0 },
     })
 
     expect(result.success).toBe(true)
+  })
+
+  it('rejects a negative counter', () => {
+    const result = userProfileSchema.safeParse({
+      id: '1823456789012345678',
+      username: 'ana',
+      displayName: 'Ana',
+      bio: null,
+      location: null,
+      websiteUrl: null,
+      avatarUrl: null,
+      bannerUrl: null,
+      isProtected: false,
+      isVerified: true,
+      createdAt: '2026-08-11T14:32:00Z',
+      counters: { followers: -1, following: 0, posts: 0 },
+    })
+
+    expect(result.success).toBe(false)
   })
 })
 

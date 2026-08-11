@@ -22,6 +22,9 @@ import { createInteractionsService } from './modules/interactions/interactions.s
 import { createPostsRepository } from './modules/posts/posts.repository.js'
 import { registerPostsRoutes } from './modules/posts/posts.routes.js'
 import { createPostsService } from './modules/posts/posts.service.js'
+import { createProfilesRepository } from './modules/profiles/profiles.repository.js'
+import { registerProfilesRoutes } from './modules/profiles/profiles.routes.js'
+import { createProfilesService } from './modules/profiles/profiles.service.js'
 import { createSocialGraphRepository } from './modules/social-graph/social-graph.repository.js'
 import { registerSocialGraphRoutes } from './modules/social-graph/social-graph.routes.js'
 import { createSocialGraphService } from './modules/social-graph/social-graph.service.js'
@@ -107,6 +110,9 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
     app.redis,
   )
 
+  const profilesRepository = createProfilesRepository(app.db)
+  const profilesService = createProfilesService(profilesRepository)
+
   app.get('/health', async () => ({ status: 'ok' }))
 
   await app.register(
@@ -145,6 +151,13 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   await app.register(
     async (instance) => {
       await registerInteractionsRoutes(instance, { interactionsService, tokenService })
+    },
+    { prefix: '/v1' },
+  )
+
+  await app.register(
+    async (instance) => {
+      await registerProfilesRoutes(instance, { profilesService, tokenService })
     },
     { prefix: '/v1' },
   )
