@@ -58,6 +58,7 @@ jobs:
       # Runner ships Docker — Testcontainers spins up real Postgres, Redis and
       # Mailpit per suite; CODESTYLE.md §14 forbids mocking them.
       - run: pnpm --filter @x/api test:integration
+      - run: pnpm --filter @x/workers test:integration
 
   contracts:
     name: Contract drift check
@@ -124,7 +125,7 @@ jobs:
     needs: [quality, test, integration, contracts]
     strategy:
       matrix:
-        app: [api, web]
+        app: [api, web, workers]
     permissions:
       contents: read
       packages: write

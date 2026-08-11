@@ -1,0 +1,131 @@
+import { CELEBRITY_FOLLOWER_THRESHOLD, timelineKey } from '@x/utils'
+import type { Redis } from 'ioredis'
+import { beforeEach, describe, expect, it } from 'vitest'
+import { createFanoutProcessor } from './fanout.processor.js'
+import type { FanoutRepository } from './fanout.repository.js'
+
+type PipelineCommand = ['zadd' | 'zremrangebyrank' | 'expire', ...unknown[]]
+
+// Hand-rolled, recording only the pipelined commands the processor actually
+// issues — real Redis ZADD/ZREMRANGEBYRANK/EXPIRE semantics are exercised by
+// fanout.integration.test.ts against a real container.
+function createFakeRedis() {
+  const strings = new Map<string, string>()
+  const executed: PipelineCommand[] = []
+
+  const redis = {
+    async set(key: string, value: string, ...rest: unknown[]) {
+      if (rest.includes('NX') && strings.has(key)) return null
+      strings.set(key, value)
+      return 'OK'
+    },
+    pipeline() {
+      const batch: PipelineCommand[] = []
+      const api = {
+        zadd(...args: unknown[]) {
+          batch.push(['zadd', ...args])
+          return api
+        },
+        zremrangebyrank(...args: unknown[]) {
+          batch.push(['zremrangebyrank', ...args])
+          return api
+        },
+        expire(...args: unknown[]) {
+          batch.push(['expire', ...args])
+          return api
+        },
+        async exec() {
+          executed.push(...batch)
+          return []
+        },
+      }
+      return api
+    },
+  } as unknown as Redis
+
+  return { redis, executed }
+}
+
+function createFakeRepository(overrides: Partial<FanoutRepository> = {}): FanoutRepository {
+  return {
+    getFollowersCount: async () => 0,
+    listFollowerIdsBatch: async () => [],
+    ...overrides,
+  }
+}
+
+describe('createFanoutProcessor', () => {
+  let fakeRedis: ReturnType<typeof createFakeRedis>
+
+  beforeEach(() => {
+    fakeRedis = createFakeRedis()
+  })
+
+  it('pushes the post onto every follower timeline', async () => {
+    const followerIds = [10n, 11n, 12n]
+    const repository = createFakeRepository({
+      getFollowersCount: async () => 3,
+      listFollowerIdsBatch: async (_authorId, afterId) => (afterId === null ? followerIds : []),
+    })
+    const process = createFanoutProcessor({ repository, redis: fakeRedis.redis })
+
+    await process({ postId: '999', authorId: '1' })
+
+    const zaddCalls = fakeRedis.executed.filter(([op]) => op === 'zadd')
+    expect(zaddCalls).toHaveLength(3)
+    for (const followerId of followerIds) {
+      expect(zaddCalls).toContainEqual(['zadd', timelineKey(followerId), '999', '999'])
+    }
+  })
+
+  it('skips fan-out for celebrity accounts', async () => {
+    let called = false
+    const repository = createFakeRepository({
+      getFollowersCount: async () => CELEBRITY_FOLLOWER_THRESHOLD,
+      listFollowerIdsBatch: async () => {
+        called = true
+        return []
+      },
+    })
+    const process = createFanoutProcessor({ repository, redis: fakeRedis.redis })
+
+    await process({ postId: '999', authorId: '1' })
+
+    expect(called).toBe(false)
+    expect(fakeRedis.executed).toHaveLength(0)
+  })
+
+  it('is idempotent: a repeated job for the same post is a no-op', async () => {
+    let callCount = 0
+    const repository = createFakeRepository({
+      getFollowersCount: async () => {
+        callCount += 1
+        return 1
+      },
+      listFollowerIdsBatch: async (_authorId, afterId) => (afterId === null ? [10n] : []),
+    })
+    const process = createFanoutProcessor({ repository, redis: fakeRedis.redis })
+
+    await process({ postId: '999', authorId: '1' })
+    await process({ postId: '999', authorId: '1' })
+
+    expect(callCount).toBe(1)
+  })
+
+  it('follows the follower-id cursor across batches', async () => {
+    const seenCursors: Array<bigint | null> = []
+    const repository = createFakeRepository({
+      getFollowersCount: async () => 2,
+      listFollowerIdsBatch: async (_authorId, afterId, limit) => {
+        seenCursors.push(afterId)
+        if (afterId === null) return Array.from({ length: limit }, (_, i) => BigInt(i + 1))
+        return []
+      },
+    })
+    const process = createFanoutProcessor({ repository, redis: fakeRedis.redis })
+
+    await process({ postId: '999', authorId: '1' })
+
+    expect(seenCursors).toEqual([null, 1000n])
+  })
+})

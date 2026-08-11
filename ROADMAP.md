@@ -141,12 +141,12 @@
 
 > La pieza de mayor riesgo técnico de esta fase. Empezar por aquí.
 
-- [ ] Publicar evento `post.created` en **BullMQ** (Kafka se introduce en fase 3)
-- [ ] **Worker de fan-out**:
-  - [ ] Lote de 1000 seguidores por pipeline de Redis
-  - [ ] `ZADD timeline:{uid}` + `ZREMRANGEBYRANK` (retener 800) + `EXPIRE` 7 días
-  - [ ] Idempotencia por `event_id`
-- [ ] Umbral de **cuenta grande** (≥10 000 seguidores): marcar y excluir del fan-out
+- [x] Publicar evento `post.created` en **BullMQ** (Kafka se introduce en fase 3)
+- [x] **Worker de fan-out** (`apps/workers`):
+  - [x] Lote de 1000 seguidores por pipeline de Redis
+  - [x] `ZADD timeline:{uid}` + `ZREMRANGEBYRANK` (retener 800) + `EXPIRE` 7 días
+  - [x] Idempotencia — `SET NX` sobre `fanout:processed:{postId}` (el `postId` es el `event_id`: cada post publica como máximo un evento `post.created`)
+- [x] Umbral de **cuenta grande** (≥10 000 seguidores): marcar y excluir del fan-out
 - [ ] `GET /timeline/home`: merge de Redis + posts recientes de cuentas grandes seguidas
 - [ ] **Reconstrucción perezosa** del timeline frío desde PostgreSQL
 - [ ] **Hidratación en lote**: un solo `WHERE id = ANY($1)` + caché de objeto en Redis

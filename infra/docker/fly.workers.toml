@@ -1,0 +1,19 @@
+# Fly.io app config for @x/workers — the fan-out consumer. Same deploy path
+# as fly.api.toml; no [http_service] block because this process only
+# consumes the timeline-fanout BullMQ queue, it doesn't serve HTTP.
+#
+# Deployed by .github/workflows/deploy.yml on every push to main, once
+# `fly apps create x-workers-staging` has been run once by a human and
+# FLY_API_TOKEN is set as a repo secret.
+app = "x-workers-staging"
+primary_region = "iad"
+
+[build]
+  dockerfile = "apps/workers/Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

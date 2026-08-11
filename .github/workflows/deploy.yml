@@ -3,8 +3,8 @@ name: Deploy staging
 # Runs after CI is green on main — SPECS.md §16.2's canary policy (5% → 25% →
 # 100%) applies to production; staging just needs to be current. Requires
 # repo secrets FLY_API_TOKEN and STAGING_DATABASE_URL, set once a human has
-# created the Fly apps (`fly apps create x-api-staging`, `x-web-staging`) —
-# see infra/docker/fly.*.toml.
+# created the Fly apps (`fly apps create x-api-staging`, `x-web-staging`,
+# `x-workers-staging`) — see infra/docker/fly.*.toml.
 on:
   workflow_run:
     workflows: [CI]
@@ -43,7 +43,7 @@ jobs:
     environment: staging
     strategy:
       matrix:
-        app: [api, web]
+        app: [api, web, workers]
     steps:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@master
