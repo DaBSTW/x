@@ -1,0 +1,26 @@
+{
+  "name": "@x/sdk",
+  "private": true,
+  "version": "0.0.0",
+  "license": "AGPL-3.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --coverage",
+    "generate": "openapi-typescript openapi.json -o src/types.gen.ts"
+  },
+  "dependencies": {
+    "openapi-fetch": "^0.13.4"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^2.1.8",
+    "@x/config": "workspace:*",
+    "openapi-typescript": "^7.5.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

@@ -3,7 +3,15 @@
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
   "files": {
     "ignoreUnknown": true,
-    "ignore": ["**/dist/**", "**/.next/**", "**/.turbo/**", "**/coverage/**", "**/node_modules/**"]
+    "ignore": [
+      "**/dist/**",
+      "**/.next/**",
+      "**/.turbo/**",
+      "**/coverage/**",
+      "**/node_modules/**",
+      "packages/sdk/openapi.json",
+      "packages/sdk/src/types.gen.ts"
+    ]
   },
   "formatter": {
     "enabled": true,

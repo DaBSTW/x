@@ -37,48 +37,48 @@
 
 ### 0.1 Repositorio y tooling 🔴
 
-- [ ] Inicializar monorepo con **pnpm workspaces + Turborepo** (`turbo.json` con pipeline `build → test → lint`)
-- [ ] Crear estructura de carpetas de la sección 18 de SPECS (`apps/`, `packages/`, `infra/`, `docs/`)
-- [ ] Configurar **TypeScript** compartido en `packages/config` con `strict: true`, `noUncheckedIndexedAccess`
-- [ ] Configurar **ESLint + Biome** (formateo) con reglas compartidas; prohibir `any` implícito y `dangerouslySetInnerHTML`
-- [ ] Añadir **Husky + lint-staged**: typecheck y lint sobre el diff en pre-commit
-- [ ] Definir **CODEOWNERS** y plantilla de PR
-- [ ] Escribir el primer **ADR** (`docs/adr/0001-monolito-modular.md`) documentando la decisión de arranque
+- [x] Inicializar monorepo con **pnpm workspaces + Turborepo** (`turbo.json` con pipeline `build → test → lint`)
+- [x] Crear estructura de carpetas de la sección 18 de SPECS (`apps/`, `packages/`, `infra/`, `docs/`)
+- [x] Configurar **TypeScript** compartido en `packages/config` con `strict: true`, `noUncheckedIndexedAccess`
+- [x] Configurar **ESLint + Biome** (formateo) con reglas compartidas; prohibir `any` implícito y `dangerouslySetInnerHTML`
+- [x] Añadir **Husky + lint-staged**: typecheck y lint sobre el diff en pre-commit
+- [x] Definir **CODEOWNERS** y plantilla de PR
+- [x] Escribir el primer **ADR** (`docs/adr/0001-monolito-modular.md`) documentando la decisión de arranque
 
 ### 0.2 Entorno local 🔴
 
-- [ ] `docker-compose.yml` con PostgreSQL 17, Redis 7, MinIO (S3 local), Mailpit (emails)
-- [ ] ⚪ Añadir OpenSearch y Kafka al compose (no se usan hasta fase 2 — dejar comentados para no consumir RAM)
-- [ ] Script `pnpm setup`: instala dependencias, levanta servicios, aplica migraciones, siembra datos
-- [ ] `.env.example` documentado con **todas** las variables y sus valores por defecto de desarrollo
-- [ ] Validación de entorno con Zod al arrancar: si falta una variable, el proceso muere con un mensaje claro
+- [x] `docker-compose.yml` con PostgreSQL 17, Redis 7, MinIO (S3 local), Mailpit (emails)
+- [x] ⚪ Añadir OpenSearch y Kafka al compose (no se usan hasta fase 2 — dejar comentados para no consumir RAM)
+- [x] Script `pnpm setup`: instala dependencias, levanta servicios, aplica migraciones, siembra datos
+- [x] `.env.example` documentado con **todas** las variables y sus valores por defecto de desarrollo
+- [x] Validación de entorno con Zod al arrancar: si falta una variable, el proceso muere con un mensaje claro
 
 ### 0.3 Base de datos 🔴
 
-- [ ] Configurar **Drizzle ORM** + Drizzle Kit en `packages/db`
-- [ ] Implementar **generador de Snowflake IDs** en `packages/utils` (worker_id por variable de entorno)
-  - [ ] Test: 1 M de IDs sin colisión, monótonos crecientes, extracción correcta del timestamp
-  - [ ] Test: comportamiento ante reloj hacia atrás (esperar, no generar duplicados)
-- [ ] Migración inicial: `users`, `user_counters`, `follows`, `posts` (particionada), `post_counters`, `post_entities`
-- [ ] Configurar **pg_partman** o job propio para crear particiones mensuales con 3 meses de antelación
-- [ ] Seeds: 50 usuarios, 500 posts, grafo social realista para desarrollo
-- [ ] Documentar la regla de migraciones **expand-contract** en `docs/adr/0002-migraciones.md`
+- [x] Configurar **Drizzle ORM** + Drizzle Kit en `packages/db`
+- [x] Implementar **generador de Snowflake IDs** en `packages/utils` (worker_id por variable de entorno)
+  - [x] Test: 1 M de IDs sin colisión, monótonos crecientes, extracción correcta del timestamp
+  - [x] Test: comportamiento ante reloj hacia atrás (esperar, no generar duplicados)
+- [x] Migración inicial: `users`, `user_counters`, `follows`, `posts` (particionada), `post_counters`, `post_entities`
+- [x] Configurar **pg_partman** o job propio para crear particiones mensuales con 3 meses de antelación
+- [x] Seeds: 50 usuarios, 500 posts, grafo social realista para desarrollo
+- [x] Documentar la regla de migraciones **expand-contract** en `docs/adr/0002-migraciones.md`
 
 ### 0.4 Autenticación 🔴
 
-- [ ] `POST /auth/register` — validación Zod, Argon2id, comprobación HIBP por k-anonymity
-- [ ] `POST /auth/login` — access JWT ES256 (15 min) + refresh opaco en cookie httpOnly
-- [ ] `POST /auth/refresh` — **con rotación y detección de reuso** (revoca familia completa)
-- [ ] `POST /auth/logout` y `/auth/logout-all`
-- [ ] Verificación de email con token de un solo uso (TTL 24 h)
-- [ ] Middleware de autenticación en Fastify + decorador `request.user`
-- [ ] Rate limit de login: 10/15 min por IP + backoff exponencial por cuenta
-- [ ] Tests de integración de **todo el ciclo**: registro → verificación → login → refresh → reuso detectado → logout
+- [x] `POST /auth/register` — validación Zod, Argon2id, comprobación HIBP por k-anonymity
+- [x] `POST /auth/login` — access JWT ES256 (15 min) + refresh opaco en cookie httpOnly
+- [x] `POST /auth/refresh` — **con rotación y detección de reuso** (revoca familia completa)
+- [x] `POST /auth/logout` y `/auth/logout-all`
+- [x] Verificación de email con token de un solo uso (TTL 24 h)
+- [x] Middleware de autenticación en Fastify + decorador `request.user`
+- [x] Rate limit de login: 10/15 min por IP + backoff exponencial por cuenta
+- [x] Tests de integración de **todo el ciclo**: registro → verificación → login → refresh → reuso detectado → logout
 
 ### 0.5 Contratos compartidos 🔴
 
-- [ ] `packages/contracts`: esquemas Zod de todas las entidades (User, Post, Media…)
-- [ ] Generación automática de **OpenAPI 3.1** desde los esquemas Fastify
+- [x] `packages/contracts`: esquemas Zod de todas las entidades (User, Post, Media…)
+- [x] Generación automática de **OpenAPI 3.1** desde los esquemas Fastify
 - [ ] `packages/sdk`: cliente tipado generado desde OpenAPI, consumido por web y móvil
 - [ ] Test de contrato en CI: si el schema cambia de forma incompatible, el build falla
 

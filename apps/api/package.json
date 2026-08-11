@@ -11,7 +11,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --coverage",
-    "test:integration": "vitest run --coverage --config vitest.integration.config.ts"
+    "test:integration": "vitest run --coverage --config vitest.integration.config.ts",
+    "generate:openapi": "tsx scripts/generate-openapi.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",

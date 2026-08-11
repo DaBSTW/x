@@ -42,6 +42,43 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm test -- --coverage
 
+  integration:
+    name: Integration tests (Testcontainers)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Runner ships Docker — Testcontainers spins up real Postgres, Redis and
+      # Mailpit per suite; CODESTYLE.md §14 forbids mocking them.
+      - run: pnpm --filter @x/api test:integration
+
+  contracts:
+    name: Contract drift check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @x/api generate:openapi
+      - run: pnpm --filter @x/sdk generate
+      # If the committed openapi.json / types.gen.ts don't match what the API
+      # actually serves, packages/sdk was not regenerated before commit —
+      # ROADMAP.md 0.5 "si el schema cambia de forma incompatible, el build falla".
+      - run: git diff --exit-code -- packages/sdk/openapi.json packages/sdk/src/types.gen.ts
+
   security:
     name: Security scan
     runs-on: ubuntu-latest
@@ -68,7 +105,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [quality, test]
+    needs: [quality, test, integration, contracts]
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
