@@ -24,6 +24,7 @@ function makeUser(overrides: Partial<User> = {}): User {
     bannerUrl: null,
     birthDate: '1990-01-01',
     isProtected: false,
+    dmPrivacy: 0,
     isVerified: false,
     isSuspended: false,
     lang: 'es',

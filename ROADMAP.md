@@ -281,13 +281,13 @@ Efecto secundario corregido en el mismo checkpoint: crear una respuesta o una ci
 
 ### 2.5 Mensajes directos 🟡
 
-- [ ] Tablas `conversations`, `conversation_members`, `messages`
-- [ ] `POST /conversations` (1:1 y grupo), `GET /conversations`
-- [ ] `GET/POST /conversations/:id/messages` con paginación por cursor
-- [ ] Recibos de lectura (`last_read_id`) e indicador de escritura vía WS
-- [ ] Ajustes de privacidad: quién puede escribirme (todos / sólo seguidos)
-- [ ] Rate limit de mensajes: 500/24 h
-- [ ] UI de mensajería con lista de conversaciones y vista de chat
+- [x] Tablas `conversations`, `conversation_members`, `messages` — nuevo módulo `apps/api/src/modules/conversations`. ⚪ `media_id`/`shared_post_id` existen en el esquema (SPECS.md §4.2) pero los mensajes son sólo texto por ahora — adjuntar imagen o cita queda sin construir
+- [x] `POST /conversations` (1:1 y grupo), `GET /conversations` — un 1:1 reutiliza la conversación existente entre el mismo par en vez de duplicarla (`find1to1Conversation`, `count(*) = 2` sobre `conversation_members` filtrado a esos dos ids). Un no-miembro recibe el mismo 404 que una conversación inexistente en cualquier endpoint — igual que un post o una lista bloqueados no se distinguen de "no existe" (ROADMAP.md 2.6)
+- [x] `GET/POST /conversations/:id/messages` con paginación por cursor — mismo criterio que cualquier otra lista (id descendente, nunca OFFSET)
+- [x] Recibos de lectura (`last_read_id`) — `POST /conversations/:id/read`, `unreadCount` en cada conversación se calcula contra él. ⚪ Indicador de "escribiendo…" sin construir: depende de WS (2.2), que todavía no existe
+- [x] Ajustes de privacidad: quién puede escribirme (todos / sólo seguidos) — `users.dm_privacy`, mismo patrón 0/1 que `reply_policy`, expuesto en `PATCH /users/me`. Se comprueba sólo al crear un 1:1 nuevo, no en cada mensaje siguiente — una vez que la conversación existe, ya se están hablando
+- [x] Rate limit de mensajes: 500/24 h — reutiliza `enforceRateLimit`, la misma primitiva de `/auth/login`
+- [x] UI de mensajería con lista de conversaciones y vista de chat — `/messages` y `/messages/:id`, con sondeo cada 30 s / 5 s respectivamente en vez de WS (2.2 no existe todavía); marcar como leído es automático al abrir un chat, a propósito distinto del botón explícito de notificaciones (ROADMAP.md 1.7) porque abrir un chat ya implica leerlo en cualquier app de mensajería real. ⚪ Iniciar conversación es por nombre de usuario exacto (`GET /users/:username`), no hay buscador todavía (2.3)
 
 ### 2.6 Privacidad y seguridad del usuario 🟡
 

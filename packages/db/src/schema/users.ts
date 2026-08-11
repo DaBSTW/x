@@ -6,6 +6,7 @@ import {
   date,
   integer,
   pgTable,
+  smallint,
   text,
   timestamp,
   varchar,
@@ -30,6 +31,9 @@ export const users = pgTable(
     bannerUrl: text('banner_url'),
     birthDate: date('birth_date'),
     isProtected: boolean('is_protected').notNull().default(false),
+    // Who can start a 1:1 DM with this user — 0 everyone, 1 followed only
+    // (ROADMAP.md 2.5). Same 0/1 convention as posts.reply_policy.
+    dmPrivacy: smallint('dm_privacy').notNull().default(0),
     isVerified: boolean('is_verified').notNull().default(false),
     isSuspended: boolean('is_suspended').notNull().default(false),
     lang: varchar('lang', { length: 8 }).notNull().default('es'),

@@ -1,6 +1,7 @@
 import { drizzle } from 'drizzle-orm/postgres-js'
 import postgres from 'postgres'
 import * as authSchema from './schema/auth.js'
+import * as conversationsSchema from './schema/conversations.js'
 import * as interactionsSchema from './schema/interactions.js'
 import * as listsSchema from './schema/lists.js'
 import * as mediaSchema from './schema/media.js'
@@ -18,6 +19,7 @@ export const schema = {
   ...notificationsSchema,
   ...mediaSchema,
   ...listsSchema,
+  ...conversationsSchema,
 }
 
 export type Database = ReturnType<typeof createDatabase>

@@ -43,6 +43,13 @@
       "when": 1786486346913,
       "tag": "0005_fresh_lockheed",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786487973039,
+      "tag": "0006_lying_firelord",
+      "breakpoints": true
     }
   ]
 }

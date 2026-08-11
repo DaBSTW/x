@@ -15,6 +15,14 @@ const DEFAULT_MEDIA_URL_CONFIG: MediaUrlConfig = {
   publicUrlBase: 'http://localhost:9000',
 }
 
+// Matches conversations.service.ts's own DM_PRIVACY_CODES — kept as two
+// separate small maps rather than a shared import, same reasoning
+// posts.service.ts's REPLY_POLICY_CODES never got extracted either.
+const DM_PRIVACY_CODES: Record<NonNullable<UpdateUserInput['dmPrivacy']>, number> = {
+  everyone: 0,
+  following: 1,
+}
+
 export type ProfilesService = ReturnType<typeof createProfilesService>
 
 export function createProfilesService(
@@ -53,13 +61,16 @@ export function createProfilesService(
   }
 
   async function updateMe(userId: bigint, input: UpdateUserInput): Promise<UserProfile> {
-    const { avatarMediaId, bannerMediaId, ...rest } = input
+    const { avatarMediaId, bannerMediaId, dmPrivacy, ...rest } = input
     const patch: ProfilePatch = { ...rest }
     if (avatarMediaId !== undefined) {
       patch.avatarUrl = await resolveOwnedImageUrl(userId, BigInt(avatarMediaId))
     }
     if (bannerMediaId !== undefined) {
       patch.bannerUrl = await resolveOwnedImageUrl(userId, BigInt(bannerMediaId))
+    }
+    if (dmPrivacy !== undefined) {
+      patch.dmPrivacy = DM_PRIVACY_CODES[dmPrivacy]
     }
     await repository.updateProfile(userId, patch)
     return getById(userId)

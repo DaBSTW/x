@@ -1,5 +1,6 @@
 export * from './auth.js'
 export * from './common.js'
+export * from './conversation.js'
 export * from './list.js'
 export * from './media.js'
 export * from './notification.js'

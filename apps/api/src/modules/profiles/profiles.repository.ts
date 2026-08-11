@@ -28,6 +28,7 @@ export type ProfilePatch = {
   isProtected?: boolean | undefined
   avatarUrl?: string | undefined
   bannerUrl?: string | undefined
+  dmPrivacy?: number | undefined
 }
 
 export type OwnedMediaRow = {

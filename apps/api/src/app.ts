@@ -19,6 +19,9 @@ import { createNotificationsQueue } from './lib/notifications-queue.js'
 import { createAuthRepository } from './modules/auth/auth.repository.js'
 import { registerAuthRoutes } from './modules/auth/auth.routes.js'
 import { createAuthService } from './modules/auth/auth.service.js'
+import { createConversationsRepository } from './modules/conversations/conversations.repository.js'
+import { registerConversationsRoutes } from './modules/conversations/conversations.routes.js'
+import { createConversationsService } from './modules/conversations/conversations.service.js'
 import { createInteractionsRepository } from './modules/interactions/interactions.repository.js'
 import { registerInteractionsRoutes } from './modules/interactions/interactions.routes.js'
 import { createInteractionsService } from './modules/interactions/interactions.service.js'
@@ -181,6 +184,17 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   const listsRepository = createListsRepository(app.db)
   const listsService = createListsService(listsRepository, postsService, socialGraphRepository)
 
+  const conversationsRepository = createConversationsRepository(app.db)
+  const conversationsService = createConversationsService(
+    conversationsRepository,
+    app.redis,
+    {
+      isFollowing: (followerId, followeeId) =>
+        socialGraphRepository.findFollow(followerId, followeeId).then(Boolean),
+    },
+    socialGraphRepository,
+  )
+
   const profilesRepository = createProfilesRepository(app.db)
   const profilesService = createProfilesService(profilesRepository, mediaUrlConfig)
 
@@ -253,6 +267,13 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   await app.register(
     async (instance) => {
       await registerListsRoutes(instance, { listsService, tokenService })
+    },
+    { prefix: '/v1' },
+  )
+
+  await app.register(
+    async (instance) => {
+      await registerConversationsRoutes(instance, { conversationsService, tokenService })
     },
     { prefix: '/v1' },
   )

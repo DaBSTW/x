@@ -68,6 +68,9 @@ export const userProfileResponseSchema = z.object({ data: userProfileSchema })
 // the upload flow (1.5) — the server resolves it to a URL and writes that
 // into avatarUrl/bannerUrl, same as a post's mediaIds never storing a bare
 // id either. Rejects anything not owned, not ready, or not an image.
+export const dmPrivacySchema = z.enum(['everyone', 'following'])
+export type DmPrivacy = z.infer<typeof dmPrivacySchema>
+
 export const updateUserSchema = z.object({
   displayName: z.string().min(1).max(50).optional(),
   bio: z.string().max(160).optional(),
@@ -76,5 +79,7 @@ export const updateUserSchema = z.object({
   isProtected: z.boolean().optional(),
   avatarMediaId: snowflakeIdSchema.optional(),
   bannerMediaId: snowflakeIdSchema.optional(),
+  // Who can start a 1:1 DM with this user (ROADMAP.md 2.5).
+  dmPrivacy: dmPrivacySchema.optional(),
 })
 export type UpdateUserInput = z.infer<typeof updateUserSchema>

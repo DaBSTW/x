@@ -51,6 +51,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </Link>
           <Link href="/bookmarks">Guardados</Link>
           <Link href="/lists">Listas</Link>
+          <Link href="/messages">Mensajes</Link>
           {me && <Link href={`/${me.username}`}>Perfil</Link>}
         </nav>
         <div className="mt-auto">

@@ -136,6 +136,14 @@ describe('createProfilesService', () => {
       expect(profile.displayName).toBe('Ana')
     })
 
+    it('converts dmPrivacy to the stored 0/1 code (ROADMAP.md 2.5)', async () => {
+      const service = createProfilesService(repository)
+
+      await service.updateMe(userId, { dmPrivacy: 'following' })
+
+      expect(rowsById.get(userId)).toMatchObject({ dmPrivacy: 1 })
+    })
+
     it('resolves avatarMediaId to the owned image’s URL', async () => {
       const service = createProfilesService(repository)
       const mediaId = generateId()
