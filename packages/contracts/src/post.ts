@@ -83,3 +83,15 @@ export const profilePostsQuerySchema = paginationQuerySchema.extend({
   filter: profilePostsFilterSchema.default('posts'),
 })
 export type ProfilePostsQuery = z.infer<typeof profilePostsQuerySchema>
+
+// GET /posts/:id/thread (ROADMAP.md 2.1): the ancestor chain root-first, the
+// post itself, and its first page of direct replies (not cursor-paginated
+// here — GET /posts/:id/replies covers "load more" beyond it).
+export const postThreadResponseSchema = z.object({
+  data: z.object({
+    ancestors: z.array(postSchema),
+    post: postSchema,
+    replies: z.array(postSchema),
+    meta: z.object({ hasMoreReplies: z.boolean() }),
+  }),
+})

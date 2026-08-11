@@ -3,6 +3,7 @@ import type { Database } from '@x/db'
 import {
   type NewPost,
   type NewPostCounters,
+  type Post,
   likes,
   media,
   postCounters,
@@ -154,6 +155,51 @@ export function createPostsRepository(db: Database) {
         })
         .from(users)
         .where(inArray(users.id, ids))
+    },
+
+    /**
+     * Walks `in_reply_to_id` one hop at a time up to the root, closest
+     * ancestor last (caller reverses for root-first display). A loop of
+     * single-row lookups rather than a recursive CTE — a real thread is
+     * rarely more than a few dozen posts deep, and this keeps each hop
+     * trivially testable against a fake repository, unlike a recursive
+     * query a fake can't meaningfully stand in for. `seen` guards against
+     * ever looping forever if a chain were somehow corrupted into a cycle.
+     */
+    async findAncestors(postId: bigint): Promise<Post[]> {
+      const ancestors: Post[] = []
+      const [start] = await db
+        .select()
+        .from(posts)
+        .where(and(eq(posts.id, postId), isNull(posts.deletedAt)))
+        .limit(1)
+      let parentId = start?.inReplyToId ?? null
+      const seen = new Set<string>()
+
+      while (parentId !== null && !seen.has(parentId.toString())) {
+        seen.add(parentId.toString())
+        const [parent] = await db
+          .select()
+          .from(posts)
+          .where(and(eq(posts.id, parentId), isNull(posts.deletedAt)))
+          .limit(1)
+        if (!parent) break
+        ancestors.push(parent)
+        parentId = parent.inReplyToId
+      }
+      return ancestors
+    },
+
+    /** Direct replies only (one level) — cursor-paginated by Snowflake id like every other list here. Backs both GET /posts/:id/thread's first page and GET /posts/:id/replies' "load more". */
+    async findDirectReplies(postId: bigint, limit: number, cursor: bigint | null) {
+      const conditions = [eq(posts.inReplyToId, postId), isNull(posts.deletedAt)]
+      if (cursor !== null) conditions.push(lt(posts.id, cursor))
+      return db
+        .select()
+        .from(posts)
+        .where(and(...conditions))
+        .orderBy(desc(posts.id))
+        .limit(limit)
     },
 
     async findUserIdByUsername(usernameLower: string): Promise<bigint | null> {

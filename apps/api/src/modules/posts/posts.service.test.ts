@@ -1,8 +1,70 @@
 import type { Post, PostCounters } from '@x/db'
 import { generateId } from '@x/utils'
+import type { Redis } from 'ioredis'
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { AuthorRow, PostEntityRow, PostRepository } from './posts.repository.js'
 import { createPostsService } from './posts.service.js'
+
+// Hand-rolled — models only the hash operations post-counters-cache.ts
+// actually issues (HGETALL, HSETNX, HINCRBY), matching the fake-Redis
+// convention used across this codebase's other service tests (e.g.
+// interactions.service.test.ts, which this is copied from verbatim).
+function createFakeRedis(): Redis {
+  const hashes = new Map<string, Map<string, string>>()
+
+  function hgetallSync(key: string): Record<string, string> {
+    const hash = hashes.get(key)
+    return hash ? Object.fromEntries(hash) : {}
+  }
+
+  return {
+    async exists(key: string) {
+      return hashes.has(key) ? 1 : 0
+    },
+    async hgetall(key: string) {
+      return hgetallSync(key)
+    },
+    pipeline() {
+      const ops: Array<() => void> = []
+      const api = {
+        hsetnx(key: string, field: string, value: unknown) {
+          ops.push(() => {
+            const hash = hashes.get(key) ?? new Map<string, string>()
+            if (!hash.has(field)) hash.set(field, String(value))
+            hashes.set(key, hash)
+          })
+          return api
+        },
+        async exec() {
+          for (const op of ops) op()
+          return []
+        },
+      }
+      return api
+    },
+    multi() {
+      const ops: Array<() => void> = []
+      const api = {
+        hincrby(key: string, field: string, delta: number) {
+          ops.push(() => {
+            const hash = hashes.get(key) ?? new Map<string, string>()
+            hash.set(field, String(Number(hash.get(field) ?? 0) + delta))
+            hashes.set(key, hash)
+          })
+          return api
+        },
+        sadd() {
+          return api
+        },
+        async exec() {
+          for (const op of ops) op()
+          return []
+        },
+      }
+      return api
+    },
+  } as unknown as Redis
+}
 
 function makePost(overrides: Partial<Post> & Pick<Post, 'id' | 'authorId'>): Post {
   return {
@@ -55,6 +117,7 @@ function createFakeRepository() {
           inReplyToId: post.inReplyToId ?? null,
           conversationId: post.conversationId ?? null,
           quotedPostId: post.quotedPostId ?? null,
+          replyPolicy: post.replyPolicy ?? 0,
         }),
       )
       entitiesByPostId.set(post.id, entities)
@@ -128,6 +191,26 @@ function createFakeRepository() {
     async listLikedPostsByUser(userId, limit, cursor) {
       return [...postsById.values()]
         .filter((post) => !post.deletedAt && likedPostIds.has(`${userId}:${post.id}`))
+        .filter((post) => cursor === null || post.id < cursor)
+        .sort((a, b) => (b.id > a.id ? 1 : -1))
+        .slice(0, limit)
+    },
+    async findAncestors(postId) {
+      const ancestors: Post[] = []
+      let parentId = postsById.get(postId)?.inReplyToId ?? null
+      const seen = new Set<bigint>()
+      while (parentId !== null && !seen.has(parentId)) {
+        seen.add(parentId)
+        const parent = postsById.get(parentId)
+        if (!parent) break
+        ancestors.push(parent)
+        parentId = parent.inReplyToId
+      }
+      return ancestors
+    },
+    async findDirectReplies(postId, limit, cursor) {
+      return [...postsById.values()]
+        .filter((post) => post.inReplyToId === postId && !post.deletedAt)
         .filter((post) => cursor === null || post.id < cursor)
         .sort((a, b) => (b.id > a.id ? 1 : -1))
         .slice(0, limit)
@@ -208,6 +291,7 @@ describe('createPostsService', () => {
   let likedPostIds: Set<string>
   let author: AuthorRow
   let published: unknown[]
+  let redis: Redis
 
   beforeEach(() => {
     const fake = createFakeRepository()
@@ -216,6 +300,7 @@ describe('createPostsService', () => {
     likedPostIds = fake.likedPostIds
     author = addAuthor(authorsById)
     published = []
+    redis = createFakeRedis()
   })
 
   describe('create', () => {
@@ -383,6 +468,62 @@ describe('createPostsService', () => {
       expect(published).toMatchObject([{ userId: stranger.id.toString(), kind: 'quote' }])
     })
 
+    it("bumps the parent post's replies counter in Redis", async () => {
+      const service = createPostsService(repository, undefined, undefined, undefined, redis)
+      const root = await service.create(author.id, {
+        text: 'raíz',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      await service.create(author.id, {
+        text: 'una respuesta',
+        inReplyToId: BigInt(root.id),
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      expect(await redis.hgetall(`post:${root.id}:counters`)).toMatchObject({ replies: '1' })
+    })
+
+    it("bumps the quoted post's quotes counter in Redis", async () => {
+      const service = createPostsService(repository, undefined, undefined, undefined, redis)
+      const quoted = await service.create(author.id, {
+        text: 'post citable',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      await service.create(author.id, {
+        text: 'una cita',
+        quotedPostId: BigInt(quoted.id),
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      expect(await redis.hgetall(`post:${quoted.id}:counters`)).toMatchObject({ quotes: '1' })
+    })
+
+    it('does not touch Redis counters when no redis client was configured', async () => {
+      // The optional-dependency default every other test in this file relies
+      // on — must not throw just because nobody passed a redis client.
+      const service = createPostsService(repository)
+      const root = await service.create(author.id, {
+        text: 'raíz',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      await expect(
+        service.create(author.id, {
+          text: 'una respuesta',
+          inReplyToId: BigInt(root.id),
+          replyPolicy: 'everyone',
+          isSensitive: false,
+        }),
+      ).resolves.toBeDefined()
+    })
+
     it('notifies each mentioned user, but not for a self-mention', async () => {
       const service = createPostsService(repository, undefined, async (data) => {
         published.push(data)
@@ -425,6 +566,231 @@ describe('createPostsService', () => {
           isSensitive: false,
         }),
       ).resolves.toMatchObject({ text: 'hola mundo' })
+    })
+  })
+
+  describe('reply policy', () => {
+    function createFakeFollowLookup() {
+      const following = new Set<string>()
+      return {
+        followLookup: {
+          async isFollowing(followerId: bigint, followeeId: bigint) {
+            return following.has(`${followerId}:${followeeId}`)
+          },
+        },
+        follow(followerId: bigint, followeeId: bigint) {
+          following.add(`${followerId}:${followeeId}`)
+        },
+      }
+    }
+
+    it('allows a reply under the default "everyone" policy', async () => {
+      const service = createPostsService(repository)
+      const stranger = addAuthor(authorsById, { id: generateId(), username: 'eve' })
+      const root = await service.create(author.id, {
+        text: 'raíz',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      await expect(
+        service.create(stranger.id, {
+          text: 'una respuesta',
+          inReplyToId: BigInt(root.id),
+          replyPolicy: 'everyone',
+          isSensitive: false,
+        }),
+      ).resolves.toBeDefined()
+    })
+
+    it('always allows the parent author to reply to their own post, regardless of policy', async () => {
+      const service = createPostsService(repository)
+      const root = await service.create(author.id, {
+        text: 'raíz',
+        replyPolicy: 'mentioned',
+        isSensitive: false,
+      })
+
+      await expect(
+        service.create(author.id, {
+          text: 'me respondo a mí mismo',
+          inReplyToId: BigInt(root.id),
+          replyPolicy: 'everyone',
+          isSensitive: false,
+        }),
+      ).resolves.toBeDefined()
+    })
+
+    it('rejects a reply under "following" when the parent author does not follow the replier', async () => {
+      const { followLookup } = createFakeFollowLookup()
+      const service = createPostsService(
+        repository,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        followLookup,
+      )
+      const stranger = addAuthor(authorsById, { id: generateId(), username: 'eve' })
+      const root = await service.create(author.id, {
+        text: 'raíz',
+        replyPolicy: 'following',
+        isSensitive: false,
+      })
+
+      await expect(
+        service.create(stranger.id, {
+          text: 'una respuesta',
+          inReplyToId: BigInt(root.id),
+          replyPolicy: 'everyone',
+          isSensitive: false,
+        }),
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    })
+
+    it('allows a reply under "following" when the parent author follows the replier', async () => {
+      const { followLookup, follow } = createFakeFollowLookup()
+      const service = createPostsService(
+        repository,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        followLookup,
+      )
+      const friend = addAuthor(authorsById, { id: generateId(), username: 'bob' })
+      follow(author.id, friend.id)
+      const root = await service.create(author.id, {
+        text: 'raíz',
+        replyPolicy: 'following',
+        isSensitive: false,
+      })
+
+      await expect(
+        service.create(friend.id, {
+          text: 'una respuesta',
+          inReplyToId: BigInt(root.id),
+          replyPolicy: 'everyone',
+          isSensitive: false,
+        }),
+      ).resolves.toBeDefined()
+    })
+
+    it('rejects a reply under "mentioned" when the replier was not mentioned', async () => {
+      const service = createPostsService(repository)
+      const stranger = addAuthor(authorsById, { id: generateId(), username: 'eve' })
+      const root = await service.create(author.id, {
+        text: 'raíz, sin mencionar a nadie',
+        replyPolicy: 'mentioned',
+        isSensitive: false,
+      })
+
+      await expect(
+        service.create(stranger.id, {
+          text: 'una respuesta',
+          inReplyToId: BigInt(root.id),
+          replyPolicy: 'everyone',
+          isSensitive: false,
+        }),
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    })
+
+    it('allows a reply under "mentioned" when the replier was mentioned', async () => {
+      const service = createPostsService(repository)
+      const friend = addAuthor(authorsById, { id: generateId(), username: 'bob' })
+      const root = await service.create(author.id, {
+        text: 'raíz, mencionando a @bob',
+        replyPolicy: 'mentioned',
+        isSensitive: false,
+      })
+
+      await expect(
+        service.create(friend.id, {
+          text: 'una respuesta',
+          inReplyToId: BigInt(root.id),
+          replyPolicy: 'everyone',
+          isSensitive: false,
+        }),
+      ).resolves.toBeDefined()
+    })
+  })
+
+  describe('getThread', () => {
+    it('returns the ancestor chain root-first, the post itself, and its replies', async () => {
+      const service = createPostsService(repository)
+      const root = await service.create(author.id, {
+        text: 'raíz',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      const middle = await service.create(author.id, {
+        text: 'en medio',
+        inReplyToId: BigInt(root.id),
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      const leaf = await service.create(author.id, {
+        text: 'la hoja',
+        inReplyToId: BigInt(middle.id),
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      const reply = await service.create(author.id, {
+        text: 'una respuesta a la hoja',
+        inReplyToId: BigInt(leaf.id),
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      const thread = await service.getThread(BigInt(leaf.id))
+
+      expect(thread.ancestors.map((post) => post.id)).toEqual([root.id, middle.id])
+      expect(thread.post.id).toBe(leaf.id)
+      expect(thread.replies.map((post) => post.id)).toEqual([reply.id])
+      expect(thread.hasMoreReplies).toBe(false)
+    })
+
+    it('throws NotFoundError for a nonexistent post', async () => {
+      const service = createPostsService(repository)
+      await expect(service.getThread(999999999999999999n)).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      })
+    })
+  })
+
+  describe('listReplies', () => {
+    it('paginates direct replies by cursor, newest first', async () => {
+      const service = createPostsService(repository)
+      const root = await service.create(author.id, {
+        text: 'raíz',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      await service.create(author.id, {
+        text: 'respuesta 1',
+        inReplyToId: BigInt(root.id),
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      await service.create(author.id, {
+        text: 'respuesta 2',
+        inReplyToId: BigInt(root.id),
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      const page = await service.listReplies(BigInt(root.id), 1, null)
+
+      expect(page.items).toHaveLength(1)
+      expect(page.items[0]?.text).toBe('respuesta 2')
+      expect(page.hasMore).toBe(true)
+    })
+
+    it('throws NotFoundError for a nonexistent post', async () => {
+      const service = createPostsService(repository)
+      await expect(service.listReplies(999999999999999999n, 20, null)).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      })
     })
   })
 

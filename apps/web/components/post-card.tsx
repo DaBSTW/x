@@ -8,8 +8,8 @@ import { formatCompactNumber, formatRelativeTime } from '@/lib/format'
 import { useBookmark, useLike, useRepost } from '@/lib/use-post-mutations'
 import type { Post } from '@x/contracts'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { memo } from 'react'
-import { toast } from 'sonner'
 
 type PostCardProps = {
   post: Post
@@ -21,6 +21,7 @@ type PostCardProps = {
  * post's own (naturally variable) text height differs between posts.
  */
 function PostCardComponent({ post }: PostCardProps) {
+  const router = useRouter()
   const like = useLike()
   const repost = useRepost()
   const bookmark = useBookmark()
@@ -73,7 +74,7 @@ function PostCardComponent({ post }: PostCardProps) {
             icon="reply"
             active={false}
             count={post.counters.replies}
-            onClick={() => toast('Las respuestas llegan en una fase futura.')}
+            onClick={() => router.push(`/${post.author.username}/status/${post.id}`)}
           />
           <ActionButton
             label={viewer.reposted ? 'Deshacer repost' : 'Repostear'}

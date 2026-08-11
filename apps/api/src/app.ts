@@ -107,6 +107,11 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   // /media/:id resource) so both agree on how a storage key becomes a URL.
   const mediaUrlConfig = { bucket: env.S3_BUCKET, publicUrlBase: env.S3_ENDPOINT }
 
+  // Created ahead of postsService below so create() can enforce a reply_policy
+  // of 'following' — only postsRepository (unlike the full social-graph
+  // service) is needed for that single "does X follow Y" question.
+  const socialGraphRepository = createSocialGraphRepository(app.db)
+
   const postsRepository = createPostsRepository(app.db)
   const postsService = createPostsService(
     postsRepository,
@@ -115,6 +120,11 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
     },
     publishNotification,
     mediaUrlConfig,
+    app.redis,
+    {
+      isFollowing: (followerId, followeeId) =>
+        socialGraphRepository.findFollow(followerId, followeeId).then(Boolean),
+    },
   )
 
   const mediaStorage = createMediaStorage({
@@ -132,7 +142,6 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
     mediaUrlConfig,
   )
 
-  const socialGraphRepository = createSocialGraphRepository(app.db)
   const socialGraphService = createSocialGraphService(
     socialGraphRepository,
     app.redis,

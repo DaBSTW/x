@@ -12,11 +12,22 @@ import {
   parseEntities,
   pickPrimaryVariant,
 } from '@x/utils'
+import type { Redis } from 'ioredis'
+import { type CachedCounters, bumpCounter, zeroCounters } from '../../lib/post-counters-cache.js'
 import type { AuthorRow, PostEntityRow, PostMediaRow, PostRepository } from './posts.repository.js'
 import { ENTITY_KIND_CODES, ENTITY_KIND_NAMES } from './posts.types.js'
 
+/** Backs `reply_policy: 'following'` (ROADMAP.md 2.1) — narrow on purpose, so posts.service.ts doesn't need the rest of social-graph's surface just to ask one question. */
+export type FollowLookup = {
+  isFollowing(followerId: bigint, followeeId: bigint): Promise<boolean>
+}
+
 const MAX_MENTIONS = 10
 const MAX_HASHTAGS = 5
+// GET /posts/:id/thread's first page of replies — ROADMAP.md 2.1. "Load
+// more" beyond this goes through the standalone, cursor-paginated
+// GET /posts/:id/replies instead.
+const THREAD_REPLIES_PAGE_SIZE = 20
 
 export type CreatePostServiceInput = {
   text: string
@@ -60,7 +71,53 @@ export function createPostsService(
   onPostCreated?: OnPostCreated,
   publishNotification?: PublishNotification,
   mediaUrlConfig: MediaUrlConfig = DEFAULT_MEDIA_URL_CONFIG,
+  // Optional, same reasoning as onPostCreated/publishNotification: production
+  // (app.ts) always passes it, and the ~30 existing tests that never assert
+  // on reply/quote counters don't need updating for a dependency they'd
+  // never exercise either.
+  redis?: Redis,
+  // Also optional, same posture again: unset means reply_policy's 'following'
+  // branch fails open (allows the reply) rather than 500ing a post creation
+  // over a dependency the caller chose not to wire up.
+  followLookup?: FollowLookup,
 ) {
+  async function fetchBaseline(postId: bigint): Promise<CachedCounters> {
+    const counters = await repository.findPostCounters(postId)
+    if (!counters) return zeroCounters()
+    return {
+      likes: counters.likesCount,
+      reposts: counters.repostsCount,
+      replies: counters.repliesCount,
+      quotes: counters.quotesCount,
+      bookmarks: counters.bookmarkCount,
+    }
+  }
+
+  /** A reply/quote bumps the *parent's* (or quoted post's) counter — mirrors interactions.service.ts's like/repost bump, just triggered from post creation instead of a dedicated interaction route. */
+  async function bumpParentCounter(field: 'replies' | 'quotes', postId: bigint): Promise<void> {
+    if (!redis) return
+    await bumpCounter(redis, postId, field, 1, () => fetchBaseline(postId))
+  }
+
+  /** `reply_policy` enforcement (ROADMAP.md 2.1) — replying to your own post is always allowed regardless of the policy. */
+  async function isReplyAllowed(
+    parent: { id: bigint; authorId: bigint; replyPolicy: number },
+    authorId: bigint,
+  ): Promise<boolean> {
+    if (parent.authorId === authorId) return true
+    if (parent.replyPolicy === REPLY_POLICY_CODES.following) {
+      if (!followLookup) return true
+      return followLookup.isFollowing(parent.authorId, authorId)
+    }
+    if (parent.replyPolicy === REPLY_POLICY_CODES.mentioned) {
+      const entities = await repository.findPostEntities(parent.id)
+      return entities.some(
+        (entity) => entity.kind === ENTITY_KIND_CODES.mention && entity.refId === authorId,
+      )
+    }
+    return true
+  }
+
   // Same failure posture as onPostCreated: a queue outage must never fail
   // the write that triggered the notification.
   async function safePublish(data: NotificationJobData): Promise<void> {
@@ -103,6 +160,9 @@ export function createPostsService(
     if (input.inReplyToId) {
       const parent = await repository.findPostById(input.inReplyToId)
       if (!parent) throw new NotFoundError('post', input.inReplyToId.toString())
+      if (!(await isReplyAllowed(parent, authorId))) {
+        throw new ForbiddenError("this post's reply policy does not allow you to reply")
+      }
       conversationId = parent.conversationId ?? parent.id
       parentAuthorId = parent.authorId
       kind = 'reply'
@@ -156,6 +216,13 @@ export function createPostsService(
       repository.findMediaForPosts([id]),
     ])
     if (!author) throw new NotFoundError('user', authorId.toString())
+
+    if (input.inReplyToId) {
+      await bumpParentCounter('replies', input.inReplyToId)
+    }
+    if (input.quotedPostId) {
+      await bumpParentCounter('quotes', input.quotedPostId)
+    }
 
     // Fan-out is an optimization, not a correctness requirement: lazy
     // timeline reconstruction from Postgres is always a valid fallback
@@ -386,7 +453,56 @@ export function createPostsService(
     return items
   }
 
-  return { create, getById, remove, repost, unrepost, listByUsername, getManyByIds }
+  /** Direct replies only, cursor-paginated newest-first — the "load more" a thread's initial page (getThread) doesn't already cover. ⚪ ROADMAP.md 2.1 asks for "autor del hilo primero, luego engagement"; this ships the same simple, consistent Snowflake-id ordering as every other list in the app instead — a compound relevance sort needs a compound keyset cursor to paginate correctly, which is real, separable work, not folded in here under time pressure. */
+  async function listReplies(
+    postId: bigint,
+    limit: number,
+    cursor: bigint | null,
+  ): Promise<{ items: Post[]; hasMore: boolean }> {
+    if (!(await repository.findPostById(postId))) {
+      throw new NotFoundError('post', postId.toString())
+    }
+    const rows = await repository.findDirectReplies(postId, limit + 1, cursor)
+    const hasMore = rows.length > limit
+    const page = hasMore ? rows.slice(0, limit) : rows
+    const items = await getManyByIds(page.map((row) => row.id))
+    return { items, hasMore }
+  }
+
+  /** GET /posts/:id/thread (ROADMAP.md 2.1): the ancestor chain root-first, the post itself, and its first page of direct replies. */
+  async function getThread(postId: bigint): Promise<{
+    ancestors: Post[]
+    post: Post
+    replies: Post[]
+    hasMoreReplies: boolean
+  }> {
+    const post = await getById(postId)
+    const [ancestorRows, repliesPage] = await Promise.all([
+      repository.findAncestors(postId),
+      listReplies(postId, THREAD_REPLIES_PAGE_SIZE, null),
+    ])
+    // findAncestors returns closest-parent-first; reverse for root-first display.
+    const ancestors = await getManyByIds(ancestorRows.map((row) => row.id).reverse())
+
+    return {
+      ancestors,
+      post,
+      replies: repliesPage.items,
+      hasMoreReplies: repliesPage.hasMore,
+    }
+  }
+
+  return {
+    create,
+    getById,
+    remove,
+    repost,
+    unrepost,
+    listByUsername,
+    getManyByIds,
+    listReplies,
+    getThread,
+  }
 }
 
 type PostRowLike = {

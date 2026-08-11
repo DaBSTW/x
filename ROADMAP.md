@@ -235,14 +235,16 @@ este entorno (mismo hueco señalado en 1.3's nota de k6).
 
 ### 2.1 Conversaciones e hilos 🔴
 
-- [ ] `POST /posts` con `in_reply_to_id` — herencia de `conversation_id`
-- [ ] `GET /posts/:id/thread` — ancestros (recursivo hacia arriba) + descendientes
-- [ ] `GET /posts/:id/replies` ordenadas por relevancia (autor del hilo primero, luego engagement)
-- [ ] **Citas**: `quoted_post_id` + render embebido del post citado
-- [ ] `POST /posts/batch` — hilo completo en una transacción
-- [ ] `reply_policy`: todos / sólo seguidos / sólo mencionados — aplicado en el servidor
-- [ ] `<ThreadView>` con líneas de conexión visuales y carga progresiva
-- [ ] Test: borrar un post con 50 000 respuestas no deja huérfanos ni contadores inconsistentes
+- [x] `POST /posts` con `in_reply_to_id` — herencia de `conversation_id` (la resolución ya existía desde 1.1; este checkpoint la ejercita de verdad por primera vez, vía `reply_policy` y los contadores de abajo)
+- [x] `GET /posts/:id/thread` — ancestros + el post + su primera página de respuestas directas. `findAncestors` sube el hilo con un bucle guardado por un `Set` (no una CTE recursiva) y se detiene ante un ciclo en vez de colgarse
+- [x] `GET /posts/:id/replies` paginadas por cursor, para "cargar más" respuestas más allá de la primera página que ya trae `/thread`. ⚪ No van ordenadas por relevancia (autor del hilo primero, luego engagement) como pide este bullet, sino por `id` descendente igual que el resto de listas de la app — un orden compuesto necesita un cursor compuesto para paginar sin saltarse ni repetir filas, y eso queda pendiente como trabajo real, no oculto
+- [ ] **Citas**: `quoted_post_id` + render embebido del post citado — `quotedPostId` ya se acepta, valida y persiste desde 1.1 (y ahora también incrementa el contador `quotes` del post citado), pero ⚪ `postSchema` sigue sin un campo `quotedPost` embebido: es un schema recursivo (un post dentro de otro post) que toca cada fixture existente, y no entró en este checkpoint
+- [ ] `POST /posts/batch` — hilo completo en una transacción — ⚪ sin construir; publicar un hilo hoy son N llamadas a `POST /posts`
+- [x] `reply_policy`: todos / sólo seguidos / sólo mencionados — aplicado en el servidor (`isReplyAllowed` en `posts.service.ts`), responde 403 si no se cumple. "Sólo seguidos" recibe un `FollowLookup` inyectado — misma forma que `RepostDelegate`/`PostLookup` en `interactions.service.ts` — en vez de importar todo `social-graph.service.ts`; "sólo mencionados" reutiliza las entidades ya parseadas del post padre. El autor del post padre siempre puede responder, sin importar la política
+- [ ] `<ThreadView>` con líneas de conexión visuales y carga progresiva — ⚪ `/[username]/status/[id]` ya renderiza ancestros → post enfocado → respuestas en ese orden, pero sin líneas de conexión ni distinción visual del post enfocado (`<PostCard>` no tiene esa variante todavía), y sin botón de "cargar más" en cliente pese a que el backend ya pagina
+- [ ] Test: borrar un post con 50 000 respuestas no deja huérfanos ni contadores inconsistentes — ⚪ sin construir
+
+Efecto secundario corregido en el mismo checkpoint: crear una respuesta o una cita ahora incrementa el contador `replies`/`quotes` del post padre/citado vía el mismo `bumpCounter` (Redis, `HINCRBY`) que ya usan like/repost — antes esos dos contadores nunca se movían.
 
 ### 2.2 Tiempo real 🔴
 

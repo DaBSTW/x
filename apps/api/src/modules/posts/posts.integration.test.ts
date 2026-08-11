@@ -397,4 +397,155 @@ describe('posts routes', () => {
     const ids = response.json().data.map((post: { id: string }) => post.id)
     expect(ids).toContain(othersPostId)
   })
+
+  it('GET /posts/:id/thread returns the ancestor chain root-first, the post, and its replies', async () => {
+    const root = (
+      await app.inject({
+        method: 'POST',
+        url: '/v1/posts',
+        headers: authHeader(),
+        payload: { text: 'raíz del hilo, para /thread' },
+      })
+    ).json().data
+    const middle = (
+      await app.inject({
+        method: 'POST',
+        url: '/v1/posts',
+        headers: authHeader(),
+        payload: { text: 'en medio', inReplyToId: root.id },
+      })
+    ).json().data
+    const leaf = (
+      await app.inject({
+        method: 'POST',
+        url: '/v1/posts',
+        headers: authHeader(),
+        payload: { text: 'la hoja', inReplyToId: middle.id },
+      })
+    ).json().data
+    const reply = (
+      await app.inject({
+        method: 'POST',
+        url: '/v1/posts',
+        headers: authHeader(),
+        payload: { text: 'respuesta a la hoja', inReplyToId: leaf.id },
+      })
+    ).json().data
+
+    const response = await app.inject({ method: 'GET', url: `/v1/posts/${leaf.id}/thread` })
+
+    expect(response.statusCode).toBe(200)
+    const body = response.json().data
+    expect(body.ancestors.map((post: { id: string }) => post.id)).toEqual([root.id, middle.id])
+    expect(body.post.id).toBe(leaf.id)
+    expect(body.replies.map((post: { id: string }) => post.id)).toEqual([reply.id])
+    expect(body.meta.hasMoreReplies).toBe(false)
+  })
+
+  it('GET /posts/:id/replies paginates a post’s direct replies by cursor', async () => {
+    const root = (
+      await app.inject({
+        method: 'POST',
+        url: '/v1/posts',
+        headers: authHeader(),
+        payload: { text: 'raíz, para /replies' },
+      })
+    ).json().data
+    for (let i = 0; i < 3; i++) {
+      await app.inject({
+        method: 'POST',
+        url: '/v1/posts',
+        headers: authHeader(),
+        payload: { text: `respuesta ${i}`, inReplyToId: root.id },
+      })
+    }
+
+    const firstPage = await app.inject({
+      method: 'GET',
+      url: `/v1/posts/${root.id}/replies?limit=2`,
+    })
+    expect(firstPage.statusCode).toBe(200)
+    const firstBody = firstPage.json()
+    expect(firstBody.data).toHaveLength(2)
+    expect(firstBody.meta.hasMore).toBe(true)
+
+    const secondPage = await app.inject({
+      method: 'GET',
+      url: `/v1/posts/${root.id}/replies?limit=2&cursor=${encodeURIComponent(firstBody.meta.nextCursor)}`,
+    })
+    expect(secondPage.statusCode).toBe(200)
+    expect(secondPage.json().data).toHaveLength(1)
+  })
+
+  it('enforces reply_policy "following": a stranger is rejected, a followed account is allowed', async () => {
+    await app.inject({
+      method: 'POST',
+      url: '/v1/auth/register',
+      payload: {
+        username: 'policyowner',
+        email: 'policyowner@example.com',
+        password: 'a unique passphrase for policy 4k',
+        birthDate: '1990-01-01',
+      },
+    })
+    const ownerLogin = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: 'policyowner@example.com', password: 'a unique passphrase for policy 4k' },
+    })
+    const ownerToken = ownerLogin.json().data.accessToken
+
+    const stranger = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/register',
+      payload: {
+        username: 'policystranger',
+        email: 'policystranger@example.com',
+        password: 'a unique passphrase, stranger 5m',
+        birthDate: '1990-01-01',
+      },
+    })
+    const strangerLogin = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: {
+        email: 'policystranger@example.com',
+        password: 'a unique passphrase, stranger 5m',
+      },
+    })
+    const strangerToken = strangerLogin.json().data.accessToken
+    const strangerId = stranger.json().data.id
+
+    const root = (
+      await app.inject({
+        method: 'POST',
+        url: '/v1/posts',
+        headers: { authorization: `Bearer ${ownerToken}` },
+        payload: { text: 'solo respuestas de gente que sigo', replyPolicy: 'following' },
+      })
+    ).json().data
+
+    const rejected = await app.inject({
+      method: 'POST',
+      url: '/v1/posts',
+      headers: { authorization: `Bearer ${strangerToken}` },
+      payload: { text: 'intento de respuesta', inReplyToId: root.id },
+    })
+    expect(rejected.statusCode).toBe(403)
+
+    const follow = await app.inject({
+      method: 'POST',
+      url: `/v1/users/${strangerId}/follow`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+    })
+    expect(follow.statusCode).toBe(204)
+
+    const allowed = await app.inject({
+      method: 'POST',
+      url: '/v1/posts',
+      headers: { authorization: `Bearer ${strangerToken}` },
+      payload: { text: 'ahora sí puedo responder', inReplyToId: root.id },
+    })
+    expect(allowed.statusCode).toBe(201)
+  })
 })

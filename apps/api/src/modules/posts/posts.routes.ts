@@ -1,8 +1,10 @@
 import {
   createPostSchema,
   errorResponseSchema,
+  paginationQuerySchema,
   postListResponseSchema,
   postResponseSchema,
+  postThreadResponseSchema,
   profilePostsQuerySchema,
   snowflakeIdSchema,
 } from '@x/contracts'
@@ -37,6 +39,7 @@ export async function registerPostsRoutes(app: FastifyInstance, options: PostsRo
           201: postResponseSchema,
           400: errorResponseSchema,
           401: errorResponseSchema,
+          403: errorResponseSchema,
           404: errorResponseSchema,
         },
       },
@@ -82,6 +85,49 @@ export async function registerPostsRoutes(app: FastifyInstance, options: PostsRo
     async (request, reply) => {
       const post = await postsService.getById(BigInt(request.params.id))
       return reply.send({ data: post })
+    },
+  )
+
+  server.get(
+    '/posts/:id/thread',
+    {
+      schema: {
+        params: z.object({ id: snowflakeIdSchema }),
+        response: { 200: postThreadResponseSchema, 404: errorResponseSchema },
+      },
+    },
+    async (request, reply) => {
+      const thread = await postsService.getThread(BigInt(request.params.id))
+      return reply.send({
+        data: {
+          ancestors: thread.ancestors,
+          post: thread.post,
+          replies: thread.replies,
+          meta: { hasMoreReplies: thread.hasMoreReplies },
+        },
+      })
+    },
+  )
+
+  server.get(
+    '/posts/:id/replies',
+    {
+      schema: {
+        params: z.object({ id: snowflakeIdSchema }),
+        querystring: paginationQuerySchema,
+        response: { 200: postListResponseSchema, 404: errorResponseSchema },
+      },
+    },
+    async (request, reply) => {
+      const cursor = request.query.cursor ? decodeCursor(request.query.cursor) : null
+      const { items, hasMore } = await postsService.listReplies(
+        BigInt(request.params.id),
+        request.query.limit,
+        cursor,
+      )
+      const lastItem = items.at(-1)
+      const nextCursor = hasMore && lastItem ? encodeCursor(BigInt(lastItem.id)) : null
+      return reply.send({ data: items, meta: { nextCursor, prevCursor: null, hasMore } })
     },
   )
 

@@ -11,7 +11,19 @@ import { MAX_POST_GRAPHEMES, countCharacters } from '@x/utils/text'
 import { useRef, useState } from 'react'
 import { toast } from 'sonner'
 
-export function Composer() {
+type ComposerProps = {
+  /** Set to compose a reply instead of a top-level post (ROADMAP.md 2.1) — threaded straight through to POST /posts, whose reply_policy enforcement can reject it. */
+  inReplyToId?: string
+  placeholder?: string
+  /** Called after a successful post/reply, in addition to the built-in reset — e.g. the thread page uses it to router.refresh() so the new reply shows up in its server-rendered list. */
+  onPosted?: () => void
+}
+
+export function Composer({
+  inReplyToId,
+  placeholder = '¿Qué está pasando?',
+  onPosted,
+}: ComposerProps = {}) {
   const [text, setText] = useState('')
   const { data: me } = useCurrentUser()
   const createPost = useCreatePost()
@@ -37,6 +49,7 @@ export function Composer() {
       {
         text,
         ...(readyMediaIds.length > 0 && { mediaIds: readyMediaIds }),
+        ...(inReplyToId !== undefined && { inReplyToId }),
         replyPolicy: 'everyone',
         isSensitive: false,
       },
@@ -44,6 +57,7 @@ export function Composer() {
         onSuccess: () => {
           setText('')
           resetAttachments()
+          onPosted?.()
         },
         onError: (error) => {
           toast.error(error instanceof Error ? error.message : 'No se pudo publicar el post.')
@@ -62,7 +76,7 @@ export function Composer() {
         <textarea
           value={text}
           onChange={(event) => setText(event.target.value)}
-          placeholder="¿Qué está pasando?"
+          placeholder={placeholder}
           aria-label="Redactar un post"
           rows={3}
           className="w-full resize-none bg-transparent text-lg placeholder:text-muted-foreground focus-visible:outline-none"
