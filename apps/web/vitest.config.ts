@@ -15,10 +15,19 @@ export default defineConfig({
     exclude: ['**/node_modules/**', '**/.next/**', '**/e2e/**'],
     coverage: {
       provider: 'v8',
-      // Data-fetching hooks (use-session, use-auth-mutations, api-client) and
-      // components that only compose Radix primitives are exercised by
-      // Playwright e2e once real pages exist (ROADMAP.md 0.6/1.8), not here.
-      include: ['lib/cn.ts', 'lib/auth-store.ts', 'lib/theme-store.ts', 'components/ui/button.tsx'],
+      // Data-fetching hooks (use-session, use-auth-mutations, use-timeline, …)
+      // and components that mostly wire those hooks together (Composer,
+      // PostCard, Timeline) are exercised by Playwright e2e once it exists
+      // (ROADMAP.md 1.8's deferred e2e bullet), not here. Pure logic — no
+      // network, no hooks — is unit-tested and counted like any other file.
+      include: [
+        'lib/cn.ts',
+        'lib/auth-store.ts',
+        'lib/theme-store.ts',
+        'lib/format.ts',
+        'components/ui/button.tsx',
+        'components/rich-text.tsx',
+      ],
       thresholds: { lines: 80, statements: 80, branches: 80, functions: 80 },
     },
   },

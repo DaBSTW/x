@@ -10,6 +10,7 @@ export const postEntitySchema = z.object({
   start: z.number().int().nonnegative(),
   end: z.number().int().nonnegative(),
 })
+export type PostEntity = z.infer<typeof postEntitySchema>
 
 // Text is optional at the schema level — createPostSchema's refine enforces
 // "text or media" (ROADMAP.md 1.1); media isn't implemented until 1.5, so

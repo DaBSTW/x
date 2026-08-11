@@ -135,6 +135,7 @@
 - [x] `GET /users/:username/followers` y `/following` paginados
 - [x] Caché en Redis de la lista de seguidos (`SET`, TTL 1 h) para el timeline
 - [x] Validación: no auto-seguirse (bloqueo no aplicado aún — la tabla `blocks` es el bullet ⚪ siguiente, todavía sin construir)
+- [x] `GET /users/suggestions` (SPECS.md §5.4): cuentas más seguidas que el caller aún no sigue, excluyéndose a sí mismo — un solo `LEFT JOIN`, sin bullet propio en la versión original de este roadmap; se añadió al construir el estado vacío del timeline en 1.8
 - [ ] ⚪ `blocks` y `mutes` (tablas + endpoints; la aplicación en filtros va en fase 2)
 
 ### 1.3 Timeline cronológico 🔴
@@ -195,14 +196,16 @@
 
 ### 1.8 Frontend del MVP 🟡
 
-- [ ] `<Composer>`: texto, contador visual, adjuntar imágenes, preview, envío
-- [ ] `<PostCard>`: autor, texto con entidades enlazadas, media, acciones, timestamp relativo
-- [ ] `<RichText>`: renderizado por offsets de `entities` — **nunca** HTML crudo
-- [ ] `<Timeline>`: `useInfiniteQuery` + `useVirtualizer`, altura estable (sin CLS)
-- [ ] `<MediaGrid>`: layouts para 1, 2, 3 y 4 imágenes con `aspect-ratio`
-- [ ] **Actualizaciones optimistas** en like, repost y bookmark con rollback ante error
-- [ ] Skeletons de carga en timeline, perfil y notificaciones
-- [ ] Estados vacíos con acción sugerida (timeline sin seguidos → sugerencias)
+- [x] `<Composer>`: texto, contador visual (`@x/utils/text`'s `countCharacters`, el mismo módulo que valida en el servidor), envío. ⚪ Adjuntar imágenes/preview diferido junto con 1.5 (multimedia) — no hay backend de media todavía.
+- [x] `<PostCard>`: autor, texto con entidades enlazadas, acciones (like/repost/bookmark reales, responder como acción reconocida pero aún no funcional), timestamp relativo (`Intl.RelativeTimeFormat`, SPECS.md §7.6). ⚪ Media diferida junto con 1.5.
+- [x] `<RichText>`: renderizado por offsets de `entities` — **nunca** HTML crudo. Cubierto con tests de componente (`@testing-library/react`) contra `parseEntities` real, no offsets inventados a mano.
+- [x] `<Timeline>`: `useInfiniteQuery` + `useVirtualizer` (`useWindowVirtualizer`, ya que el shell no tiene contenedor de scroll de altura fija), `overscan: 5`, altura estable vía medición dinámica (`measureElement`), `role="feed"` + `aria-posinset`/`aria-setsize` (SPECS.md §7.5)
+- [ ] ⚪ `<MediaGrid>`: layouts para 1, 2, 3 y 4 imágenes con `aspect-ratio` — diferido por completo: depende de 1.5 (multimedia), que no existe aún; no hay datos de media que renderizar
+- [x] **Actualizaciones optimistas** en like, repost y bookmark con rollback ante error — snapshot de toda query `['timeline', …]` antes de mutar, restaurado en `onError` (SPECS.md §7.3)
+- [x] Skeleton de carga en `<Timeline>`. ⚪ Perfil y notificaciones diferidos — esas páginas todavía no existen (1.6/1.7 frontend sin empezar)
+- [x] Estados vacíos con acción sugerida: timeline sin seguidos → tarjetas de `GET /users/suggestions` (nuevo endpoint, ver 1.2) con botón "Seguir" funcional, no un mensaje muerto
+
+⚪ Cobertura de estos componentes: los hooks de datos (`use-timeline`, `use-post-mutations`, `use-create-post`, `use-follow`, `use-suggestions`, `use-current-user`) y los componentes que sobre todo los orquestan (`Composer`, `PostCard`, `Timeline`, `EmptyTimeline`) quedan fuera del umbral de cobertura unitaria de `apps/web` (`vitest.config.ts`'s `coverage.include`), tal como ya deferían `use-session`/`use-auth-mutations` desde 0.6 — el plan siempre fue Playwright e2e contra páginas reales (SPECS.md §14, README.md's `pnpm test:e2e`), que aún no está instalado en el repo. La lógica pura sin hooks (`<RichText>`, `lib/format.ts`) sí se añadió al umbral y tiene tests reales. Playwright e2e (`Registro, publicar, seguir, DM, notificaciones` per SPECS.md §14) sigue pendiente como su propia pieza de infraestructura.
 
 ### ✅ Criterio de aceptación de la fase 1
 
