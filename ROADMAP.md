@@ -118,16 +118,16 @@
 
 ### 1.1 Posts — núcleo 🔴
 
-- [ ] `POST /posts` con soporte de `Idempotency-Key` (dedupe en Redis, TTL 24 h)
-- [ ] **Parser de entidades** en `packages/utils`: menciones, hashtags, URLs, cashtags
-  - [ ] Offsets en **code points**, no bytes ni unidades UTF-16
-  - [ ] Test: emoji compuesto (ZWJ), texto RTL, caracteres CJK
-- [ ] **Contador de caracteres** con `Intl.Segmenter` (grafemas); URLs cuentan siempre 23
-  - [ ] La misma función se usa en cliente y servidor — un solo módulo compartido
-- [ ] `GET /posts/:id`, `DELETE /posts/:id` (soft delete)
-- [ ] `GET /users/:username/posts` con paginación por cursor
-- [ ] Resolución de `conversation_id` (raíz del hilo == su propio id)
-- [ ] Validaciones: máx. 10 menciones, máx. 5 hashtags, texto o media obligatorio
+- [x] `POST /posts` con soporte de `Idempotency-Key` (dedupe en Redis, TTL 24 h)
+- [x] **Parser de entidades** en `packages/utils`: menciones, hashtags, URLs, cashtags
+  - [x] Offsets en **code points**, no bytes ni unidades UTF-16
+  - [x] Test: emoji compuesto (ZWJ), texto RTL, caracteres CJK
+- [x] **Contador de caracteres** con `Intl.Segmenter` (grafemas); URLs cuentan siempre 23
+  - [x] La misma función se usa en cliente y servidor — un solo módulo compartido (`<Composer>` que la consuma llega en 1.8)
+- [x] `GET /posts/:id`, `DELETE /posts/:id` (soft delete)
+- [x] `GET /users/:username/posts` con paginación por cursor
+- [x] Resolución de `conversation_id` (raíz del hilo == su propio id)
+- [x] Validaciones: máx. 10 menciones, máx. 5 hashtags, texto o media obligatorio (media llega en 1.5; hoy el texto es obligatorio)
 
 ### 1.2 Grafo social 🔴
 

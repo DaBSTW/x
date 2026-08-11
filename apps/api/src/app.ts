@@ -15,6 +15,9 @@ import { createMailer } from './lib/mailer.js'
 import { createAuthRepository } from './modules/auth/auth.repository.js'
 import { registerAuthRoutes } from './modules/auth/auth.routes.js'
 import { createAuthService } from './modules/auth/auth.service.js'
+import { createPostsRepository } from './modules/posts/posts.repository.js'
+import { registerPostsRoutes } from './modules/posts/posts.routes.js'
+import { createPostsService } from './modules/posts/posts.service.js'
 import dbPlugin from './plugins/db.js'
 import errorHandlerPlugin from './plugins/error-handler.js'
 import redisPlugin from './plugins/redis.js'
@@ -70,6 +73,9 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
     refreshTokenTtlDays: env.REFRESH_TOKEN_TTL_DAYS,
   })
 
+  const postsRepository = createPostsRepository(app.db)
+  const postsService = createPostsService(postsRepository)
+
   app.get('/health', async () => ({ status: 'ok' }))
 
   await app.register(
@@ -82,6 +88,13 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
       })
     },
     { prefix: '/v1/auth' },
+  )
+
+  await app.register(
+    async (instance) => {
+      await registerPostsRoutes(instance, { postsService, tokenService })
+    },
+    { prefix: '/v1' },
   )
 
   return app

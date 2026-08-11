@@ -7,6 +7,7 @@ export { isPasswordPwned } from './hibp.js'
 export { parseEntities } from './text/entities.js'
 export type { EntityKind, ParsedEntity } from './text/entities.js'
 export { MAX_POST_GRAPHEMES, countCharacters } from './text/character-count.js'
+export { decodeCursor, encodeCursor } from './pagination.js'
 export {
   AppError,
   BlockedByUserError,

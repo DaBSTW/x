@@ -17,6 +17,12 @@
     "typecheck": {
       "dependsOn": ["^build"]
     },
+    "@x/web#typecheck": {
+      // Next.js generates .next/types/**/*.ts (route param typing) only
+      // during its own build/dev — tsconfig.json includes that glob, so
+      // typecheck fails on a clean checkout without this.
+      "dependsOn": ["^build", "build"]
+    },
     "dev": {
       "cache": false,
       "persistent": true
