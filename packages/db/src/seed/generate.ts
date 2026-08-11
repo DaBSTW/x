@@ -56,7 +56,7 @@ export async function generateSeedData(userCount = 50, postCount = 500): Promise
     })
   }
 
-  const follows = generateFollowGraph(userIds, ids)
+  const follows = generateFollowGraph(userIds)
   const { posts, postCounters } = generatePosts(userIds, postCount, ids)
   const userCounters = computeUserCounters(userIds, follows, posts)
 
@@ -66,10 +66,7 @@ export async function generateSeedData(userCount = 50, postCount = 500): Promise
 // Weighted so a handful of accounts end up with disproportionately more
 // followers than the rest — a flat uniform graph doesn't exercise the
 // celebrity fan-out threshold or timeline merge logic at all (SPECS.md §6.1).
-function generateFollowGraph(
-  userIds: bigint[],
-  ids: ReturnType<typeof createSnowflakeGenerator>,
-): NewFollow[] {
+function generateFollowGraph(userIds: bigint[]): NewFollow[] {
   const influencerCount = Math.max(1, Math.round(userIds.length * 0.1))
   const influencers = new Set(userIds.slice(0, influencerCount))
   const weightedPool = userIds.flatMap(

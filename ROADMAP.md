@@ -95,13 +95,13 @@
 
 ### 0.7 CI/CD e infraestructura 🟡
 
-- [ ] GitHub Actions: `quality` (lint + typecheck), `test`, `build`, `security`
-- [ ] **Testcontainers** para los tests de integración (Postgres + Redis reales, no mocks)
-- [ ] Escaneo de seguridad: `npm audit`, Semgrep, gitleaks, Trivy sobre la imagen
-- [ ] Dockerfile multi-stage por app (build → runtime distroless, non-root)
-- [ ] Terraform base: VPC, RDS, ElastiCache, S3, registro de contenedores
-- [ ] Despliegue automático a **staging** desde `main`
-- [ ] Job de migraciones previo al despliegue, con verificación de compatibilidad hacia atrás
+- [x] GitHub Actions: `quality` (lint + typecheck), `test`, `build`, `security`
+- [x] **Testcontainers** para los tests de integración (Postgres + Redis reales, no mocks)
+- [x] Escaneo de seguridad: `npm audit`, Semgrep, gitleaks, Trivy sobre la imagen
+- [x] Dockerfile multi-stage por app (build → runtime non-root; `node:22-slim`, no literalmente distroless — `apps/api` necesita el loader de `tsx` en runtime, ver docs/adr/0003-despliegue.md)
+- [x] Terraform base: VPC, RDS, ElastiCache, S3, registro de contenedores (validado, no aplicado — sin cuenta AWS todavía)
+- [x] Despliegue automático a **staging** desde `main` (Fly.io — ver docs/adr/0003-despliegue.md; requiere secretos `FLY_API_TOKEN`/`STAGING_DATABASE_URL` configurados por un humano)
+- [x] Job de migraciones previo al despliegue, con verificación de compatibilidad hacia atrás
 
 ### ✅ Criterio de aceptación de la fase 0
 

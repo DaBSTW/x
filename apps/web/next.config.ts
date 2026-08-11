@@ -2,6 +2,9 @@ import type { NextConfig } from 'next'
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  // Self-contained server + only the node_modules it actually needs —
+  // Dockerfile copies just .next/standalone into the runtime image.
+  output: 'standalone',
   transpilePackages: ['@x/sdk', '@x/contracts', '@x/config'],
   webpack: (config) => {
     // Workspace packages import their own siblings with NodeNext-style

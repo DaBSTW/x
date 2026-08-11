@@ -1,0 +1,52 @@
+name: Deploy staging
+
+# Runs after CI is green on main — SPECS.md §16.2's canary policy (5% → 25% →
+# 100%) applies to production; staging just needs to be current. Requires
+# repo secrets FLY_API_TOKEN and STAGING_DATABASE_URL, set once a human has
+# created the Fly apps (`fly apps create x-api-staging`, `x-web-staging`) —
+# see infra/docker/fly.*.toml.
+on:
+  workflow_run:
+    workflows: [CI]
+    branches: [main]
+    types: [completed]
+
+jobs:
+  migrate:
+    name: Apply migrations (backward-compatible only)
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "10.33.0"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Every migration in packages/db/migrations must already be
+      # expand-contract (docs/adr/0002-migraciones.md) — this job doesn't
+      # verify that itself, review does. What it guarantees is ordering:
+      # schema changes land before the code that depends on them.
+      - name: Apply migrations
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+        run: pnpm --filter @x/db db:migrate
+
+  deploy:
+    name: Deploy (${{ matrix.app }})
+    needs: migrate
+    runs-on: ubuntu-latest
+    environment: staging
+    strategy:
+      matrix:
+        app: [api, web]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy --config infra/docker/fly.${{ matrix.app }}.toml --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
