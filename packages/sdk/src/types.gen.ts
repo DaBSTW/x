@@ -1916,6 +1916,8 @@ export interface paths {
                         /** Format: uri */
                         websiteUrl?: string;
                         isProtected?: boolean;
+                        avatarMediaId?: string;
+                        bannerMediaId?: string;
                     };
                 };
             };

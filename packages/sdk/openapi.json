@@ -4295,6 +4295,14 @@
                   },
                   "isProtected": {
                     "type": "boolean"
+                  },
+                  "avatarMediaId": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "bannerMediaId": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
                   }
                 },
                 "additionalProperties": false

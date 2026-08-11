@@ -64,11 +64,17 @@ export type UserProfile = z.infer<typeof userProfileSchema>
 
 export const userProfileResponseSchema = z.object({ data: userProfileSchema })
 
+// avatarMediaId/bannerMediaId (ROADMAP.md 1.6) reference a media row from
+// the upload flow (1.5) — the server resolves it to a URL and writes that
+// into avatarUrl/bannerUrl, same as a post's mediaIds never storing a bare
+// id either. Rejects anything not owned, not ready, or not an image.
 export const updateUserSchema = z.object({
   displayName: z.string().min(1).max(50).optional(),
   bio: z.string().max(160).optional(),
   location: z.string().max(30).optional(),
   websiteUrl: z.string().url().optional(),
   isProtected: z.boolean().optional(),
+  avatarMediaId: snowflakeIdSchema.optional(),
+  bannerMediaId: snowflakeIdSchema.optional(),
 })
 export type UpdateUserInput = z.infer<typeof updateUserSchema>

@@ -156,7 +156,7 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   })
 
   const profilesRepository = createProfilesRepository(app.db)
-  const profilesService = createProfilesService(profilesRepository)
+  const profilesService = createProfilesService(profilesRepository, mediaUrlConfig)
 
   const notificationsRepository = createNotificationsRepository(app.db)
   const notificationsService = createNotificationsService(notificationsRepository, app.redis)

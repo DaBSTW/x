@@ -1,7 +1,8 @@
 import { fileURLToPath } from 'node:url'
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql'
 import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis'
-import { createDatabase, migrationsFolderUrl } from '@x/db'
+import { createDatabase, media, migrationsFolderUrl } from '@x/db'
+import { MEDIA_STATUS, generateId } from '@x/utils'
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
 import type { FastifyInstance } from 'fastify'
 import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers'
@@ -15,6 +16,7 @@ describe('profiles routes', () => {
   let mailpitContainer: StartedTestContainer
   let app: FastifyInstance
   let aliceToken: string
+  let aliceId: bigint
 
   beforeAll(async () => {
     ;[postgresContainer, redisContainer, mailpitContainer] = await Promise.all([
@@ -51,7 +53,7 @@ describe('profiles routes', () => {
     }
     app = await buildApp(env)
 
-    await app.inject({
+    const register = await app.inject({
       method: 'POST',
       url: '/v1/auth/register',
       payload: {
@@ -61,6 +63,7 @@ describe('profiles routes', () => {
         birthDate: '1990-01-01',
       },
     })
+    aliceId = BigInt(register.json().data.id)
     const login = await app.inject({
       method: 'POST',
       url: '/v1/auth/login',
@@ -152,5 +155,64 @@ describe('profiles routes', () => {
       payload: { bio: 'x' },
     })
     expect(response.statusCode).toBe(401)
+  })
+
+  it('resolves avatarMediaId to a real URL and persists it', async () => {
+    const mediaId = generateId()
+    await app.db.insert(media).values({
+      id: mediaId,
+      ownerId: aliceId,
+      storageKey: `media/${mediaId}/original.webp`,
+      mimeType: 'image/webp',
+      sizeBytes: 100n,
+      variants: [{ width: 400, height: 400, format: 'webp', key: `media/${mediaId}/400.webp` }],
+      status: MEDIA_STATUS.READY,
+    })
+
+    const response = await app.inject({
+      method: 'PATCH',
+      url: '/v1/users/me',
+      headers: { authorization: `Bearer ${aliceToken}` },
+      payload: { avatarMediaId: mediaId.toString() },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json().data.avatarUrl).toContain('400.webp')
+
+    const fetched = await app.inject({ method: 'GET', url: '/v1/users/alice' })
+    expect(fetched.json().data.avatarUrl).toContain('400.webp')
+  })
+
+  it('rejects a bannerMediaId that belongs to someone else', async () => {
+    const otherRegister = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/register',
+      payload: {
+        username: 'notalice',
+        email: 'notalice@example.com',
+        password: 'a unique passphrase, not alice 3z',
+        birthDate: '1990-01-01',
+      },
+    })
+    const otherId = BigInt(otherRegister.json().data.id)
+
+    const mediaId = generateId()
+    await app.db.insert(media).values({
+      id: mediaId,
+      ownerId: otherId,
+      storageKey: `media/${mediaId}/original.webp`,
+      mimeType: 'image/webp',
+      sizeBytes: 100n,
+      status: MEDIA_STATUS.READY,
+    })
+
+    const response = await app.inject({
+      method: 'PATCH',
+      url: '/v1/users/me',
+      headers: { authorization: `Bearer ${aliceToken}` },
+      payload: { bannerMediaId: mediaId.toString() },
+    })
+
+    expect(response.statusCode).toBe(400)
   })
 })

@@ -1,6 +1,12 @@
+import type { UpdateUserInput } from '@x/contracts'
 import { generateId } from '@x/utils'
 import { beforeEach, describe, expect, it } from 'vitest'
-import type { ProfilePatch, ProfileRow, ProfilesRepository } from './profiles.repository.js'
+import type {
+  OwnedMediaRow,
+  ProfilePatch,
+  ProfileRow,
+  ProfilesRepository,
+} from './profiles.repository.js'
 import { createProfilesService } from './profiles.service.js'
 
 function makeRow(overrides: Partial<ProfileRow> & Pick<ProfileRow, 'id'>): ProfileRow {
@@ -24,6 +30,9 @@ function makeRow(overrides: Partial<ProfileRow> & Pick<ProfileRow, 'id'>): Profi
 
 function createFakeRepository() {
   const rowsById = new Map<bigint, ProfileRow>()
+  // Keyed by `${ownerId}:${mediaId}` — enough to fake "owned, ready, image"
+  // without modeling the whole media table.
+  const ownedMediaByKey = new Map<string, OwnedMediaRow>()
 
   const repository: ProfilesRepository = {
     async findProfileByUsername(usernameLower) {
@@ -48,20 +57,25 @@ function createFakeRepository() {
       }
       rowsById.set(id, next)
     },
+    async findReadyImageMedia(mediaId, ownerId) {
+      return ownedMediaByKey.get(`${ownerId}:${mediaId}`) ?? null
+    },
   }
 
-  return { repository, rowsById }
+  return { repository, rowsById, ownedMediaByKey }
 }
 
 describe('createProfilesService', () => {
   let repository: ProfilesRepository
   let rowsById: Map<bigint, ProfileRow>
+  let ownedMediaByKey: Map<string, OwnedMediaRow>
   let userId: bigint
 
   beforeEach(() => {
     const fake = createFakeRepository()
     repository = fake.repository
     rowsById = fake.rowsById
+    ownedMediaByKey = fake.ownedMediaByKey
     userId = generateId()
     rowsById.set(
       userId,
@@ -103,7 +117,7 @@ describe('createProfilesService', () => {
   describe('updateMe', () => {
     it('applies a partial patch and returns the updated profile', async () => {
       const service = createProfilesService(repository)
-      const patch: ProfilePatch = { bio: 'nueva bio', location: 'Madrid' }
+      const patch: UpdateUserInput = { bio: 'nueva bio', location: 'Madrid' }
 
       const profile = await service.updateMe(userId, patch)
 
@@ -120,6 +134,48 @@ describe('createProfilesService', () => {
 
       expect(rowsById.get(userId)).toEqual(before)
       expect(profile.displayName).toBe('Ana')
+    })
+
+    it('resolves avatarMediaId to the owned image’s URL', async () => {
+      const service = createProfilesService(repository)
+      const mediaId = generateId()
+      ownedMediaByKey.set(`${userId}:${mediaId}`, {
+        id: mediaId,
+        storageKey: `media/${mediaId}/original.webp`,
+        variants: [{ width: 400, height: 400, format: 'webp', key: `media/${mediaId}/400.webp` }],
+      })
+
+      const profile = await service.updateMe(userId, { avatarMediaId: mediaId.toString() })
+
+      expect(profile.avatarUrl).toContain('400.webp')
+    })
+
+    it('falls back to the original storage key when the image has no variants yet', async () => {
+      const service = createProfilesService(repository)
+      const mediaId = generateId()
+      ownedMediaByKey.set(`${userId}:${mediaId}`, {
+        id: mediaId,
+        storageKey: `media/${mediaId}/original.webp`,
+        variants: [],
+      })
+
+      const profile = await service.updateMe(userId, { bannerMediaId: mediaId.toString() })
+
+      expect(profile.bannerUrl).toContain('original.webp')
+    })
+
+    it('rejects a bannerMediaId that does not belong to the caller', async () => {
+      const service = createProfilesService(repository)
+      const foreignMediaId = generateId()
+      ownedMediaByKey.set(`${generateId()}:${foreignMediaId}`, {
+        id: foreignMediaId,
+        storageKey: `media/${foreignMediaId}/original.webp`,
+        variants: [],
+      })
+
+      await expect(
+        service.updateMe(userId, { bannerMediaId: foreignMediaId.toString() }),
+      ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
     })
   })
 })
