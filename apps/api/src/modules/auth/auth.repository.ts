@@ -1,14 +1,16 @@
 import type { Database } from '@x/db'
 import {
   type NewEmailVerificationToken,
+  type NewPasswordResetToken,
   type NewRefreshToken,
   type NewUser,
   emailVerificationTokens,
+  passwordResetTokens,
   refreshTokens,
   userCounters,
   users,
 } from '@x/db'
-import { and, desc, eq, gt, isNull } from 'drizzle-orm'
+import { and, desc, eq, gt, isNull, ne } from 'drizzle-orm'
 
 export type AuthRepository = ReturnType<typeof createAuthRepository>
 
@@ -82,6 +84,41 @@ export function createAuthRepository(db: Database) {
       })
     },
 
+    async insertPasswordResetToken(row: NewPasswordResetToken): Promise<void> {
+      await db.insert(passwordResetTokens).values(row)
+    },
+
+    async findPasswordResetToken(tokenHash: string) {
+      const [row] = await db
+        .select()
+        .from(passwordResetTokens)
+        .where(eq(passwordResetTokens.tokenHash, tokenHash))
+        .limit(1)
+      return row ?? null
+    },
+
+    /** Resetting a password also revokes every session (SPECS.md §13.2): a request that got this far had a valid token, but any live session could belong to whoever locked the account owner out in the first place. */
+    async resetPasswordWithToken(
+      userId: bigint,
+      tokenHash: string,
+      passwordHash: string,
+    ): Promise<void> {
+      await db.transaction(async (tx) => {
+        await tx
+          .update(users)
+          .set({ passwordHash, updatedAt: new Date() })
+          .where(eq(users.id, userId))
+        await tx
+          .update(passwordResetTokens)
+          .set({ usedAt: new Date() })
+          .where(eq(passwordResetTokens.tokenHash, tokenHash))
+        await tx
+          .update(refreshTokens)
+          .set({ revokedAt: new Date() })
+          .where(and(eq(refreshTokens.userId, userId), isNull(refreshTokens.revokedAt)))
+      })
+    },
+
     async insertRefreshToken(row: NewRefreshToken): Promise<void> {
       await db.insert(refreshTokens).values(row)
     },
@@ -119,6 +156,20 @@ export function createAuthRepository(db: Database) {
         .update(refreshTokens)
         .set({ revokedAt: new Date() })
         .where(and(eq(refreshTokens.userId, userId), isNull(refreshTokens.revokedAt)))
+    },
+
+    /** Same as revokeAllSessionsForUser, but leaves one family alone — changePassword's "log out every other device, not this one" (unlike resetPassword's forgot-my-password flow, which has no session worth preserving). */
+    async revokeAllSessionsForUserExcept(userId: bigint, exceptSessionId: bigint): Promise<void> {
+      await db
+        .update(refreshTokens)
+        .set({ revokedAt: new Date() })
+        .where(
+          and(
+            eq(refreshTokens.userId, userId),
+            isNull(refreshTokens.revokedAt),
+            ne(refreshTokens.sessionId, exceptSessionId),
+          ),
+        )
     },
 
     async revokeToken(tokenHash: string): Promise<void> {

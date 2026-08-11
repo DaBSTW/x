@@ -72,8 +72,10 @@
 - [x] `POST /auth/logout` y `/auth/logout-all`
 - [x] Verificación de email con token de un solo uso (TTL 24 h)
 - [x] Middleware de autenticación en Fastify + decorador `request.user`
-- [x] Rate limit de login: 10/15 min por IP + backoff exponencial por cuenta
+- [x] Rate limit de login: 10/15 min por IP + backoff exponencial por cuenta (límite configurable por env, `LOGIN_RATE_LIMIT_MAX`/`FORGOT_PASSWORD_RATE_LIMIT_MAX` — el default de producción no cambia, pero `apps/web/e2e/global-setup.ts` lo sube para que una suite de e2e entera no comparta el mismo cupo de un único cliente real)
 - [x] Tests de integración de **todo el ciclo**: registro → verificación → login → refresh → reuso detectado → logout
+- [x] `POST /auth/password/forgot` + `/password/reset` — recuperación de contraseña vía enlace de un solo uso (TTL 1 h, hash SHA-256 en `password_reset_tokens`), enumeración de cuentas indistinguible (SPECS.md §11.3), revoca todas las sesiones existentes al completarse. `POST /auth/password/change` (autenticada) es la variante simétrica: mantiene viva la sesión que la pidió y cierra el resto. SPECS.md §1.2 lista "recuperación de contraseña" junto al resto de esta sección como parte del MVP de "Cuentas" — quedó fuera pese a que 0.4 ya estaba marcada completa; cerrado en este checkpoint junto con los emails de seguridad de 2.9. ⚪ 2FA, la otra pieza de esa misma fila de SPECS.md, sigue sin construir (2.6)
+- [x] Frontend: `/forgot-password`, `/reset-password?token=`, y un cambio de contraseña en `/settings` — los tres consumen los endpoints de arriba vía `use-auth-mutations.ts`, mismo patrón que login/signup
 
 ### 0.5 Contratos compartidos 🔴
 
@@ -320,7 +322,7 @@ Efecto secundario corregido en el mismo checkpoint: crear una respuesta o una ci
 - [ ] FCM (Android) y APNs (iOS) — preparado aunque la app móvil llegue en fase 4
 - [ ] Emails transaccionales con React Email + Resend/SES
 - [ ] Preferencias granulares por tipo × canal
-- [ ] Emails de seguridad **no desactivables** (nuevo dispositivo, cambio de contraseña)
+- [x] Emails de seguridad **no desactivables** (nuevo dispositivo, cambio de contraseña) — `mailer.ts`'s `sendSecurityAlertEmail(to, kind, meta)`, llamado directamente desde `auth.service.ts` (`login`, `resetPassword`, `changePassword`), nunca a través de la tabla/worker de `notifications`: no hay preferencia que consultar porque este camino no pasa por ese sistema en absoluto, así que "no desactivable" se cumple por construcción y no por una comprobación que alguien podría olvidar. ⚪ Sigue siendo texto/HTML armado a mano con nodemailer, no la plantilla React Email + Resend/SES del bullet de arriba — ese sigue pendiente
 
 ### 2.10 Accesibilidad e i18n 🟡
 

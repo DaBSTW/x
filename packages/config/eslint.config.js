@@ -13,6 +13,11 @@ export default tseslint.config(
       '**/node_modules/**',
       '**/*.gen.ts',
       '**/next-env.d.ts',
+      // Playwright's own report/trace-viewer output (gitignored, but a
+      // local `pnpm test:e2e` before `pnpm lint` leaves it on disk) —
+      // vendored assets under here, not our code.
+      '**/playwright-report/**',
+      '**/test-results/**',
     ],
   },
   ...tseslint.configs.recommended,

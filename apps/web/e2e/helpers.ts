@@ -36,3 +36,44 @@ export async function signUpAndLogIn(page: Page, prefix: string): Promise<string
   await logIn(page, username)
   return username
 }
+
+type MailpitMessagesResponse = {
+  messages: Array<{ ID: string; To: Array<{ Address: string }>; Subject: string }>
+}
+type MailpitMessageResponse = { HTML: string; Text: string }
+
+/**
+ * Extracts a `token=` link parameter from the first real email (Mailpit,
+ * global-setup.ts) matching both a subject substring and recipient — the
+ * same disambiguation apps/api's auth.integration.test.ts relies on, since
+ * one inbox can hold more than one email (verification, security alerts,
+ * a reset link) by the time a test reads it.
+ */
+export async function waitForEmailToken(
+  subjectContains: string,
+  toAddress: string,
+): Promise<string> {
+  const mailpitApiUrl = process.env.MAILPIT_API_URL
+  if (!mailpitApiUrl) throw new Error('MAILPIT_API_URL is not set — is global-setup.ts running?')
+
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const listResponse = await fetch(`${mailpitApiUrl}/api/v1/messages`)
+    const list = (await listResponse.json()) as MailpitMessagesResponse
+    const message = list.messages.find(
+      (candidate) =>
+        candidate.Subject.includes(subjectContains) &&
+        candidate.To.some((recipient) => recipient.Address === toAddress),
+    )
+
+    if (message) {
+      const detailResponse = await fetch(`${mailpitApiUrl}/api/v1/message/${message.ID}`)
+      const detail = (await detailResponse.json()) as MailpitMessageResponse
+      const match = /token=([^"&\s]+)/.exec(detail.HTML || detail.Text)
+      if (match?.[1]) return decodeURIComponent(match[1])
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+
+  throw new Error(`timed out waiting for an email with subject containing "${subjectContains}"`)
+}

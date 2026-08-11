@@ -50,6 +50,9 @@ export type CreateAuthServiceOptions = {
 }
 
 const EMAIL_VERIFICATION_TTL_HOURS = 24
+// Shorter than email verification — a live reset link is more sensitive
+// than a pending signup, so it stays valid for less time.
+const PASSWORD_RESET_TTL_HOURS = 1
 // A precomputed hash spends the same Argon2id time as a real lookup would,
 // so a login for a nonexistent account isn't distinguishable by timing —
 // SPECS.md §11.3 "enumeración de cuentas".
@@ -146,6 +149,67 @@ export function createAuthService(options: CreateAuthServiceOptions) {
     await repository.markEmailVerified(record.userId, tokenHash)
   }
 
+  /** SPECS.md §11.3 enumeration resistance: same outcome whether or not the email is registered — only a real account actually gets an email. */
+  async function forgotPassword(email: string): Promise<void> {
+    const user = await repository.findUserByEmail(email)
+    if (!user) return
+
+    const rawToken = generateOpaqueToken()
+    await repository.insertPasswordResetToken({
+      tokenHash: sha256Hex(rawToken),
+      userId: user.id,
+      expiresAt: new Date(Date.now() + PASSWORD_RESET_TTL_HOURS * 60 * 60 * 1000),
+    })
+    await mailer.sendPasswordResetEmail(email, rawToken)
+  }
+
+  async function resetPassword(
+    rawToken: string,
+    newPassword: string,
+    meta: RequestMeta,
+  ): Promise<void> {
+    const tokenHash = sha256Hex(rawToken)
+    const record = await repository.findPasswordResetToken(tokenHash)
+    if (!record || record.usedAt || record.expiresAt < new Date()) {
+      throw new UnprocessableError('reset token is invalid or expired')
+    }
+    const user = await repository.findUserById(record.userId)
+    if (!user) {
+      throw new UnprocessableError('reset token is invalid or expired')
+    }
+
+    await assertPasswordNotPwned(newPassword)
+    const passwordHash = await hashPassword(newPassword)
+    // Revokes every session too (auth.repository.ts) — a forgot-password
+    // flow has no session worth preserving, unlike changePassword below.
+    await repository.resetPasswordWithToken(record.userId, tokenHash, passwordHash)
+    await mailer.sendSecurityAlertEmail(user.email, 'password_changed', meta)
+  }
+
+  async function changePassword(
+    userId: bigint,
+    currentSessionId: bigint,
+    input: { currentPassword: string; newPassword: string },
+    meta: RequestMeta,
+  ): Promise<void> {
+    const user = await repository.findUserById(userId)
+    if (!user?.passwordHash) {
+      throw new UnauthenticatedError('current password is incorrect')
+    }
+    const isCurrentValid = await verifyPassword(user.passwordHash, input.currentPassword)
+    if (!isCurrentValid) {
+      throw new UnauthenticatedError('current password is incorrect')
+    }
+
+    await assertPasswordNotPwned(input.newPassword)
+    const passwordHash = await hashPassword(input.newPassword)
+    await repository.updatePasswordHash(userId, passwordHash)
+    // Unlike resetPassword, the session that just proved it knows the
+    // current password is worth keeping alive — only the others get logged out.
+    await repository.revokeAllSessionsForUserExcept(userId, currentSessionId)
+    await mailer.sendSecurityAlertEmail(user.email, 'password_changed', meta)
+  }
+
   async function login(input: LoginInput, meta: RequestMeta): Promise<TokenPair> {
     const user = await repository.findUserByEmail(input.email)
 
@@ -163,7 +227,12 @@ export function createAuthService(options: CreateAuthServiceOptions) {
       await repository.updatePasswordHash(user.id, await hashPassword(input.password))
     }
 
-    return issueTokenPair(user.id, meta)
+    const tokens = await issueTokenPair(user.id, meta)
+    // SPECS.md §13.2: a security email, not a notification — never gated by
+    // a preference, since there's no per-type/channel check to gate against
+    // here in the first place (no self-follow of that pattern to break).
+    await mailer.sendSecurityAlertEmail(user.email, 'new_login', meta)
+    return tokens
   }
 
   async function issueTokenPair(userId: bigint, meta: RequestMeta): Promise<TokenPair> {
@@ -248,5 +317,16 @@ export function createAuthService(options: CreateAuthServiceOptions) {
     }))
   }
 
-  return { register, verifyEmail, login, refresh, logout, logoutAll, listSessions }
+  return {
+    register,
+    verifyEmail,
+    forgotPassword,
+    resetPassword,
+    changePassword,
+    login,
+    refresh,
+    logout,
+    logoutAll,
+    listSessions,
+  }
 }

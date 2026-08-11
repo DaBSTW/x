@@ -53,6 +53,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           <Link href="/lists">Listas</Link>
           <Link href="/messages">Mensajes</Link>
           {me && <Link href={`/${me.username}`}>Perfil</Link>}
+          <Link href="/settings">Configuración</Link>
         </nav>
         <div className="mt-auto">
           <ThemeToggle />

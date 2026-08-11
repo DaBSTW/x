@@ -1,9 +1,12 @@
 import {
+  changePasswordRequestSchema,
   errorResponseSchema,
+  forgotPasswordRequestSchema,
   listSessionsResponseSchema,
   loginRequestSchema,
   registerRequestSchema,
   registerResponseSchema,
+  resetPasswordRequestSchema,
   tokenPairResponseSchema,
   verifyEmailRequestSchema,
 } from '@x/contracts'
@@ -17,17 +20,30 @@ import type { TokenService } from '../../plugins/tokens.js'
 import type { AuthService } from './auth.service.js'
 
 const REFRESH_COOKIE_NAME = 'refresh_token'
-const LOGIN_RATE_LIMIT = { limit: 10, windowMs: 15 * 60 * 1000 }
+const LOGIN_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000
+// Stricter than login's — this one sends an email per hit, so it's also an
+// abuse vector for spamming a stranger's inbox, not just a bruteforce target.
+const FORGOT_PASSWORD_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000
 
 export type AuthRoutesOptions = {
   authService: AuthService
   tokenService: TokenService
   refreshTokenTtlDays: number
   nodeEnv: string
+  /** SPECS.md §11.3's 10/15min, but env.ts:LOGIN_RATE_LIMIT_MAX so a test environment can raise it. */
+  loginRateLimitMax: number
+  forgotPasswordRateLimitMax: number
 }
 
 export async function registerAuthRoutes(app: FastifyInstance, options: AuthRoutesOptions) {
-  const { authService, tokenService, refreshTokenTtlDays, nodeEnv } = options
+  const {
+    authService,
+    tokenService,
+    refreshTokenTtlDays,
+    nodeEnv,
+    loginRateLimitMax,
+    forgotPasswordRateLimitMax,
+  } = options
   const requireAuth = createRequireAuth(tokenService)
   const server = app.withTypeProvider<ZodTypeProvider>()
 
@@ -77,6 +93,75 @@ export async function registerAuthRoutes(app: FastifyInstance, options: AuthRout
   )
 
   server.post(
+    '/password/forgot',
+    {
+      schema: {
+        body: forgotPasswordRequestSchema,
+        // Always 200, even for an unregistered email — SPECS.md §11.3.
+        response: {
+          200: z.object({ data: z.object({ sent: z.literal(true) }) }),
+          429: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      await enforceRateLimit(
+        app.redis,
+        `password-forgot:ip:${request.ip}`,
+        forgotPasswordRateLimitMax,
+        FORGOT_PASSWORD_RATE_LIMIT_WINDOW_MS,
+      )
+      await authService.forgotPassword(request.body.email)
+      return reply.send({ data: { sent: true } })
+    },
+  )
+
+  server.post(
+    '/password/reset',
+    {
+      schema: {
+        body: resetPasswordRequestSchema,
+        response: {
+          200: z.object({ data: z.object({ reset: z.literal(true) }) }),
+          400: errorResponseSchema,
+          422: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const meta = { ipAddress: request.ip, userAgent: request.headers['user-agent'] ?? null }
+      await authService.resetPassword(request.body.token, request.body.password, meta)
+      return reply.send({ data: { reset: true } })
+    },
+  )
+
+  server.post(
+    '/password/change',
+    {
+      schema: {
+        body: changePasswordRequestSchema,
+        response: {
+          200: z.object({ data: z.object({ changed: z.literal(true) }) }),
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+      preHandler: [requireAuth],
+    },
+    async (request, reply) => {
+      const user = getAuthenticatedUser(request)
+      const meta = { ipAddress: request.ip, userAgent: request.headers['user-agent'] ?? null }
+      await authService.changePassword(
+        user.id,
+        user.sessionId,
+        { currentPassword: request.body.currentPassword, newPassword: request.body.newPassword },
+        meta,
+      )
+      return reply.send({ data: { changed: true } })
+    },
+  )
+
+  server.post(
     '/login',
     {
       schema: {
@@ -92,8 +177,8 @@ export async function registerAuthRoutes(app: FastifyInstance, options: AuthRout
       await enforceRateLimit(
         app.redis,
         `login:ip:${request.ip}`,
-        LOGIN_RATE_LIMIT.limit,
-        LOGIN_RATE_LIMIT.windowMs,
+        loginRateLimitMax,
+        LOGIN_RATE_LIMIT_WINDOW_MS,
       )
 
       const meta = { ipAddress: request.ip, userAgent: request.headers['user-agent'] ?? null }

@@ -75,6 +75,10 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   const migrationDb = createDatabase(postgres.getConnectionUri())
   await migrate(migrationDb, { migrationsFolder: fileURLToPath(migrationsFolderUrl()) })
 
+  // Read by e2e/helpers.ts's waitForEmailToken — worker processes inherit
+  // process.env as it stands once globalSetup returns.
+  process.env.MAILPIT_API_URL = `http://${mailpit.getHost()}:${mailpit.getMappedPort(8025)}`
+
   const s3Client = createS3Client({
     endpoint: minio.getConnectionUrl(),
     region: 'us-east-1',
@@ -98,6 +102,12 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     S3_ACCESS_KEY_ID: minio.getUsername(),
     S3_SECRET_ACCESS_KEY: minio.getPassword(),
     S3_FORCE_PATH_STYLE: 'true',
+    // Every spec file logs in against this one shared backend/IP
+    // (`workers: 1` above) — SPECS.md §11.3's production ceiling (10/15min)
+    // is sized for one real client, not an entire e2e suite's worth of
+    // sequential specs, so raise it well past anything the suite can rack up.
+    LOGIN_RATE_LIMIT_MAX: '1000',
+    FORGOT_PASSWORD_RATE_LIMIT_MAX: '1000',
   }
 
   const apiProcess = spawnService(

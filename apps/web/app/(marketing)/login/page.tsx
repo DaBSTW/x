@@ -51,6 +51,9 @@ export default function LoginPage() {
           />
           {errors.password && <p className="text-sm text-destructive">{errors.password.message}</p>}
         </div>
+        <Link href="/forgot-password" className="text-sm text-primary underline">
+          ¿Olvidaste tu contraseña?
+        </Link>
         <Button type="submit" disabled={login.isPending}>
           {login.isPending ? 'Entrando…' : 'Entrar'}
         </Button>

@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { loginRequestSchema, registerRequestSchema, verifyEmailRequestSchema } from './auth.js'
+import {
+  changePasswordRequestSchema,
+  forgotPasswordRequestSchema,
+  loginRequestSchema,
+  registerRequestSchema,
+  resetPasswordRequestSchema,
+  verifyEmailRequestSchema,
+} from './auth.js'
 
 describe('registerRequestSchema', () => {
   it('accepts a valid registration payload', () => {
@@ -49,5 +56,36 @@ describe('loginRequestSchema', () => {
 describe('verifyEmailRequestSchema', () => {
   it('rejects an empty token', () => {
     expect(verifyEmailRequestSchema.safeParse({ token: '' }).success).toBe(false)
+  })
+})
+
+describe('forgotPasswordRequestSchema', () => {
+  it('rejects an invalid email', () => {
+    expect(forgotPasswordRequestSchema.safeParse({ email: 'not-an-email' }).success).toBe(false)
+  })
+})
+
+describe('resetPasswordRequestSchema', () => {
+  it('rejects a password under the 10-character floor', () => {
+    const result = resetPasswordRequestSchema.safeParse({ token: 't', password: 'short' })
+    expect(result.success).toBe(false)
+  })
+
+  it('accepts a token and a strong-enough password', () => {
+    const result = resetPasswordRequestSchema.safeParse({
+      token: 't',
+      password: 'correct horse battery staple',
+    })
+    expect(result.success).toBe(true)
+  })
+})
+
+describe('changePasswordRequestSchema', () => {
+  it('rejects an empty currentPassword', () => {
+    const result = changePasswordRequestSchema.safeParse({
+      currentPassword: '',
+      newPassword: 'correct horse battery staple',
+    })
+    expect(result.success).toBe(false)
   })
 })

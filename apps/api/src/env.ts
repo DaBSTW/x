@@ -22,6 +22,16 @@ const envSchema = z
     SMTP_PORT: z.coerce.number().int().positive().default(1025),
     MAIL_FROM: z.string().email().default('no-reply@x.example.com'),
 
+    // Optional (app.ts falls back to SPECS.md §11.3's 10/5) rather than
+    // .default()'d — a plain .default() would make every hand-built `Env`
+    // object across the *.integration.test.ts files add these two fields
+    // for no benefit to them. e2e/global-setup.ts raises both: every spec
+    // file's logins there share one backend and IP, so the production-sane
+    // ceiling is easy to hit by suite size alone, not by anything a single
+    // test does wrong.
+    LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().positive().optional(),
+    FORGOT_PASSWORD_RATE_LIMIT_MAX: z.coerce.number().int().positive().optional(),
+
     // Object storage (S3/MinIO) — ROADMAP.md 1.5. Defaults match docker-compose.yml's minio service.
     S3_ENDPOINT: z.string().url().default('http://localhost:9000'),
     S3_REGION: z.string().default('us-east-1'),

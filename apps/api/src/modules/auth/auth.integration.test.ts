@@ -235,6 +235,165 @@ describe('auth end-to-end cycle', () => {
     })
     expect(refreshAfterLogoutAll.statusCode).toBe(401)
   })
+
+  it('resets a password via the emailed link and revokes every existing session', async () => {
+    await app.inject({
+      method: 'POST',
+      url: '/v1/auth/register',
+      payload: {
+        username: 'pw_reset',
+        email: 'pw_reset@example.com',
+        password: 'vX7qk-unique-test-passphrase-42',
+        birthDate: '1990-01-01',
+      },
+    })
+    const verificationToken = await waitForVerificationToken(mailpitApiUrl, 'pw_reset@example.com')
+    await app.inject({
+      method: 'POST',
+      url: '/v1/auth/verify-email',
+      payload: { token: verificationToken },
+    })
+
+    const loginResponse = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: 'pw_reset@example.com', password: 'vX7qk-unique-test-passphrase-42' },
+    })
+    const preResetRefreshCookie = getCookie(loginResponse, 'refresh_token')
+
+    const forgotResponse = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/password/forgot',
+      payload: { email: 'pw_reset@example.com' },
+    })
+    expect(forgotResponse.statusCode).toBe(200)
+    expect(forgotResponse.json().data).toEqual({ sent: true })
+
+    const resetToken = await waitForEmailToken(
+      mailpitApiUrl,
+      'Restablece tu contraseña',
+      'pw_reset@example.com',
+    )
+    const resetResponse = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/password/reset',
+      payload: { token: resetToken, password: 'newPass-vX7qk-99-changed' },
+    })
+    expect(resetResponse.statusCode).toBe(200)
+    expect(resetResponse.json().data).toEqual({ reset: true })
+
+    // The session that predates the reset is gone — reset revokes everything.
+    const refreshAfterReset = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/refresh',
+      cookies: { refresh_token: preResetRefreshCookie ?? '' },
+    })
+    expect(refreshAfterReset.statusCode).toBe(401)
+
+    // The new password now works.
+    const loginWithNewPassword = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: 'pw_reset@example.com', password: 'newPass-vX7qk-99-changed' },
+    })
+    expect(loginWithNewPassword.statusCode).toBe(200)
+
+    expect(await waitForEmail(mailpitApiUrl, 'cambió la contraseña', 'pw_reset@example.com')).toBe(
+      true,
+    )
+  })
+
+  it('forgot-password responds identically whether or not the email is registered', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/password/forgot',
+      payload: { email: 'nobody-registered@example.com' },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(response.json().data).toEqual({ sent: true })
+
+    // Nothing was actually queued for an account that doesn't exist.
+    const listResponse = await fetch(`${mailpitApiUrl}/api/v1/messages`)
+    const list = (await listResponse.json()) as MailpitMessagesResponse
+    const sentToStranger = list.messages.some((message) =>
+      message.To.some((recipient) => recipient.Address === 'nobody-registered@example.com'),
+    )
+    expect(sentToStranger).toBe(false)
+  })
+
+  it('rejects a password reset with an invalid or expired token', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/password/reset',
+      payload: { token: 'not-a-real-token', password: 'someOther-vX7qk-passphrase' },
+    })
+    expect(response.statusCode).toBe(422)
+  })
+
+  it('changes a password for the current session while revoking every other session', async () => {
+    await app.inject({
+      method: 'POST',
+      url: '/v1/auth/register',
+      payload: {
+        username: 'change_pw',
+        email: 'change_pw@example.com',
+        password: 'vX7qk-unique-test-passphrase-42',
+        birthDate: '1990-01-01',
+      },
+    })
+    const verificationToken = await waitForVerificationToken(mailpitApiUrl, 'change_pw@example.com')
+    await app.inject({
+      method: 'POST',
+      url: '/v1/auth/verify-email',
+      payload: { token: verificationToken },
+    })
+
+    const loginA = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: 'change_pw@example.com', password: 'vX7qk-unique-test-passphrase-42' },
+    })
+    const loginB = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: 'change_pw@example.com', password: 'vX7qk-unique-test-passphrase-42' },
+    })
+    const accessTokenA = loginA.json().data.accessToken
+    const refreshCookieA = getCookie(loginA, 'refresh_token')
+    const refreshCookieB = getCookie(loginB, 'refresh_token')
+
+    const changeResponse = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/password/change',
+      headers: { authorization: `Bearer ${accessTokenA}` },
+      payload: {
+        currentPassword: 'vX7qk-unique-test-passphrase-42',
+        newPassword: 'newPass-vX7qk-88-changed',
+      },
+    })
+    expect(changeResponse.statusCode).toBe(200)
+    expect(changeResponse.json().data).toEqual({ changed: true })
+
+    // Session A — the one that proved it knew the current password — survives.
+    const refreshA = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/refresh',
+      cookies: { refresh_token: refreshCookieA ?? '' },
+    })
+    expect(refreshA.statusCode).toBe(200)
+
+    // Every other session is revoked.
+    const refreshB = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/refresh',
+      cookies: { refresh_token: refreshCookieB ?? '' },
+    })
+    expect(refreshB.statusCode).toBe(401)
+
+    expect(await waitForEmail(mailpitApiUrl, 'cambió la contraseña', 'change_pw@example.com')).toBe(
+      true,
+    )
+  })
 })
 
 function getCookie(
@@ -244,21 +403,32 @@ function getCookie(
   return response.cookies.find((cookie) => cookie.name === name)?.value
 }
 
-type MailpitMessagesResponse = { messages: Array<{ ID: string; To: Array<{ Address: string }> }> }
+type MailpitMessagesResponse = {
+  messages: Array<{ ID: string; To: Array<{ Address: string }>; Subject: string }>
+}
 type MailpitMessageResponse = { HTML: string; Text: string }
 
 async function waitForVerificationToken(
   mailpitApiUrl: string,
   toAddress?: string,
 ): Promise<string> {
+  return waitForEmailToken(mailpitApiUrl, 'Verifica tu cuenta', toAddress)
+}
+
+/** Security alerts and reset emails all land in the same inbox — filtering by subject (not just recipient) picks the right one regardless of send order. */
+async function waitForEmailToken(
+  mailpitApiUrl: string,
+  subjectContains: string,
+  toAddress?: string,
+): Promise<string> {
   for (let attempt = 0; attempt < 20; attempt++) {
     const listResponse = await fetch(`${mailpitApiUrl}/api/v1/messages`)
     const list = (await listResponse.json()) as MailpitMessagesResponse
-    const message = toAddress
-      ? list.messages.find((candidate) =>
-          candidate.To.some((recipient) => recipient.Address === toAddress),
-        )
-      : list.messages[0]
+    const message = list.messages.find(
+      (candidate) =>
+        candidate.Subject.includes(subjectContains) &&
+        (!toAddress || candidate.To.some((recipient) => recipient.Address === toAddress)),
+    )
 
     if (message) {
       const detailResponse = await fetch(`${mailpitApiUrl}/api/v1/message/${message.ID}`)
@@ -272,5 +442,24 @@ async function waitForVerificationToken(
     await new Promise((resolve) => setTimeout(resolve, 250))
   }
 
-  throw new Error('timed out waiting for verification email')
+  throw new Error(`timed out waiting for an email with subject containing "${subjectContains}"`)
+}
+
+async function waitForEmail(
+  mailpitApiUrl: string,
+  subjectContains: string,
+  toAddress: string,
+): Promise<boolean> {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const listResponse = await fetch(`${mailpitApiUrl}/api/v1/messages`)
+    const list = (await listResponse.json()) as MailpitMessagesResponse
+    const found = list.messages.some(
+      (candidate) =>
+        candidate.Subject.includes(subjectContains) &&
+        candidate.To.some((recipient) => recipient.Address === toAddress),
+    )
+    if (found) return true
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+  return false
 }

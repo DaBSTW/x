@@ -210,6 +210,8 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
         tokenService,
         refreshTokenTtlDays: env.REFRESH_TOKEN_TTL_DAYS,
         nodeEnv: env.NODE_ENV,
+        loginRateLimitMax: env.LOGIN_RATE_LIMIT_MAX ?? 10,
+        forgotPasswordRateLimitMax: env.FORGOT_PASSWORD_RATE_LIMIT_MAX ?? 5,
       })
     },
     { prefix: '/v1/auth' },

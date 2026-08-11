@@ -43,3 +43,19 @@ export const emailVerificationTokens = pgTable('email_verification_tokens', {
 
 export type EmailVerificationToken = typeof emailVerificationTokens.$inferSelect
 export type NewEmailVerificationToken = typeof emailVerificationTokens.$inferInsert
+
+// Same one-time-use shape as emailVerificationTokens — SPECS.md §5.4's
+// POST /auth/password/forgot + /reset (ROADMAP.md 0.4, closing a gap SPECS
+// lists under MVP that never actually got built alongside the rest of it).
+export const passwordResetTokens = pgTable('password_reset_tokens', {
+  tokenHash: text('token_hash').primaryKey(),
+  userId: bigint('user_id', { mode: 'bigint' })
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  usedAt: timestamp('used_at', { withTimezone: true }),
+})
+
+export type PasswordResetToken = typeof passwordResetTokens.$inferSelect
+export type NewPasswordResetToken = typeof passwordResetTokens.$inferInsert

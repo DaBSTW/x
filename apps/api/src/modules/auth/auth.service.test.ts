@@ -1,7 +1,7 @@
 import type { User } from '@x/db'
 import { hashPassword } from '@x/utils'
 import { describe, expect, it } from 'vitest'
-import type { Mailer } from '../../lib/mailer.js'
+import type { Mailer, SecurityAlertKind } from '../../lib/mailer.js'
 import type { AccessTokenClaims, TokenService } from '../../plugins/tokens.js'
 import type { AuthRepository } from './auth.repository.js'
 import { type CreateAuthServiceOptions, createAuthService } from './auth.service.js'
@@ -59,6 +59,10 @@ function createFakeRepository() {
     string,
     { tokenHash: string; userId: bigint; createdAt: Date; expiresAt: Date; usedAt: Date | null }
   >()
+  const resetTokens = new Map<
+    string,
+    { tokenHash: string; userId: bigint; createdAt: Date; expiresAt: Date; usedAt: Date | null }
+  >()
 
   const repository: AuthRepository = {
     async findUserByEmail(email) {
@@ -90,6 +94,23 @@ function createFakeRepository() {
       if (user) user.emailVerified = true
       const token = verificationTokens.get(tokenHash)
       if (token) token.usedAt = new Date()
+    },
+    async insertPasswordResetToken(row) {
+      resetTokens.set(row.tokenHash, { ...row, createdAt: new Date(), usedAt: null })
+    },
+    async findPasswordResetToken(tokenHash) {
+      return resetTokens.get(tokenHash) ?? null
+    },
+    async resetPasswordWithToken(userId, tokenHash, passwordHash) {
+      const user = usersById.get(userId)
+      if (user) user.passwordHash = passwordHash
+      const token = resetTokens.get(tokenHash)
+      if (token) token.usedAt = new Date()
+      for (const refreshToken of refreshTokensByHash.values()) {
+        if (refreshToken.userId === userId && !refreshToken.revokedAt) {
+          refreshToken.revokedAt = new Date()
+        }
+      }
     },
     async insertRefreshToken(row) {
       refreshTokensByHash.set(row.tokenHash, {
@@ -126,6 +147,13 @@ function createFakeRepository() {
         if (token.userId === userId && !token.revokedAt) token.revokedAt = new Date()
       }
     },
+    async revokeAllSessionsForUserExcept(userId, exceptSessionId) {
+      for (const token of refreshTokensByHash.values()) {
+        if (token.userId === userId && token.sessionId !== exceptSessionId && !token.revokedAt) {
+          token.revokedAt = new Date()
+        }
+      }
+    },
     async revokeToken(tokenHash) {
       const token = refreshTokensByHash.get(tokenHash)
       if (token) token.revokedAt = new Date()
@@ -158,17 +186,33 @@ function createFakeTokenService(): TokenService {
   }
 }
 
-type FakeMailer = Mailer & { sentTo: string[]; sentTokens: string[] }
+type FakeMailer = Mailer & {
+  sentTo: string[]
+  sentTokens: string[]
+  resetTokensSent: string[]
+  securityAlerts: Array<{ to: string; kind: SecurityAlertKind }>
+}
 
 function createFakeMailer(): FakeMailer {
   const sentTo: string[] = []
   const sentTokens: string[] = []
+  const resetTokensSent: string[] = []
+  const securityAlerts: Array<{ to: string; kind: SecurityAlertKind }> = []
   return {
     sentTo,
     sentTokens,
+    resetTokensSent,
+    securityAlerts,
     async sendVerificationEmail(to, token) {
       sentTo.push(to)
       sentTokens.push(token)
+    },
+    async sendPasswordResetEmail(to, token) {
+      sentTo.push(to)
+      resetTokensSent.push(token)
+    },
+    async sendSecurityAlertEmail(to, kind) {
+      securityAlerts.push({ to, kind })
     },
   }
 }
@@ -301,6 +345,22 @@ describe('createAuthService', () => {
       expect(tokens.refreshToken).toBeTruthy()
       expect(tokens.expiresInSeconds).toBe(15 * 60)
     })
+
+    it('sends a non-optional "new login" security alert (SPECS.md §13.2)', async () => {
+      const { service, repository, mailer } = createService()
+      await repository.insertUserWithCounters(
+        makeUser({
+          email: 'ana@example.com',
+          passwordHash: await hashPassword('the real password'),
+        }),
+      )
+
+      await service.login({ email: 'ana@example.com', password: 'the real password' }, META)
+
+      expect((mailer as FakeMailer).securityAlerts).toEqual([
+        { to: 'ana@example.com', kind: 'new_login' },
+      ])
+    })
   })
 
   describe('refresh', () => {
@@ -384,6 +444,161 @@ describe('createAuthService', () => {
       const { service } = createService()
       await expect(service.verifyEmail('not-a-real-token')).rejects.toMatchObject({
         code: 'UNPROCESSABLE',
+      })
+    })
+  })
+
+  describe('forgotPassword', () => {
+    it('emails a reset link for a registered account', async () => {
+      const { service, repository, mailer } = createService()
+      await repository.insertUserWithCounters(makeUser({ email: 'ana@example.com' }))
+
+      await service.forgotPassword('ana@example.com')
+
+      expect((mailer as FakeMailer).sentTo).toEqual(['ana@example.com'])
+    })
+
+    it('resolves silently for an unknown email, without sending anything (SPECS.md §11.3)', async () => {
+      const { service, mailer } = createService()
+
+      await expect(service.forgotPassword('ghost@example.com')).resolves.toBeUndefined()
+
+      expect((mailer as FakeMailer).sentTo).toEqual([])
+    })
+  })
+
+  describe('resetPassword', () => {
+    it('sets the new password, usable on the next login', async () => {
+      const { service, repository, mailer } = createService()
+      await repository.insertUserWithCounters(
+        makeUser({ email: 'ana@example.com', passwordHash: await hashPassword('old password') }),
+      )
+      await service.forgotPassword('ana@example.com')
+      const rawToken = (mailer as FakeMailer).resetTokensSent.at(-1)
+      if (!rawToken) throw new Error('no reset token was sent')
+
+      await service.resetPassword(rawToken, 'a brand new password', META)
+
+      await expect(
+        service.login({ email: 'ana@example.com', password: 'a brand new password' }, META),
+      ).resolves.toBeDefined()
+    })
+
+    it('revokes every existing session', async () => {
+      const { service, repository, mailer } = createService()
+      await repository.insertUserWithCounters(
+        makeUser({ email: 'ana@example.com', passwordHash: await hashPassword('old password') }),
+      )
+      const { accessToken: _accessToken, refreshToken } = await service.login(
+        { email: 'ana@example.com', password: 'old password' },
+        META,
+      )
+      await service.forgotPassword('ana@example.com')
+      const rawToken = (mailer as FakeMailer).resetTokensSent.at(-1)
+      if (!rawToken) throw new Error('no reset token was sent')
+
+      await service.resetPassword(rawToken, 'a brand new password', META)
+
+      await expect(service.refresh(refreshToken, META)).rejects.toMatchObject({
+        code: 'UNAUTHENTICATED',
+      })
+    })
+
+    it('sends a "password changed" security alert', async () => {
+      const { service, repository, mailer } = createService()
+      await repository.insertUserWithCounters(makeUser({ email: 'ana@example.com' }))
+      await service.forgotPassword('ana@example.com')
+      const rawToken = (mailer as FakeMailer).resetTokensSent.at(-1)
+      if (!rawToken) throw new Error('no reset token was sent')
+
+      await service.resetPassword(rawToken, 'a brand new password', META)
+
+      expect((mailer as FakeMailer).securityAlerts).toContainEqual({
+        to: 'ana@example.com',
+        kind: 'password_changed',
+      })
+    })
+
+    it('rejects an unknown or already-used token', async () => {
+      const { service } = createService()
+      await expect(
+        service.resetPassword('not-a-real-token', 'a brand new password', META),
+      ).rejects.toMatchObject({ code: 'UNPROCESSABLE' })
+    })
+  })
+
+  describe('changePassword', () => {
+    it('updates the password when the current one is correct', async () => {
+      const { service, repository } = createService()
+      await repository.insertUserWithCounters(
+        makeUser({
+          id: 1n,
+          email: 'ana@example.com',
+          passwordHash: await hashPassword('old password'),
+        }),
+      )
+
+      await service.changePassword(
+        1n,
+        999n,
+        { currentPassword: 'old password', newPassword: 'a brand new password' },
+        META,
+      )
+
+      await expect(
+        service.login({ email: 'ana@example.com', password: 'a brand new password' }, META),
+      ).resolves.toBeDefined()
+    })
+
+    it('rejects an incorrect current password', async () => {
+      const { service, repository } = createService()
+      await repository.insertUserWithCounters(
+        makeUser({
+          id: 1n,
+          email: 'ana@example.com',
+          passwordHash: await hashPassword('old password'),
+        }),
+      )
+
+      await expect(
+        service.changePassword(
+          1n,
+          999n,
+          { currentPassword: 'wrong password', newPassword: 'a brand new password' },
+          META,
+        ),
+      ).rejects.toMatchObject({ code: 'UNAUTHENTICATED' })
+    })
+
+    it('logs out every other session but keeps the current one', async () => {
+      const { service, repository, tokenService } = createService()
+      await repository.insertUserWithCounters(
+        makeUser({
+          id: 1n,
+          email: 'ana@example.com',
+          passwordHash: await hashPassword('old password'),
+        }),
+      )
+      const currentSession = await service.login(
+        { email: 'ana@example.com', password: 'old password' },
+        META,
+      )
+      const otherSession = await service.login(
+        { email: 'ana@example.com', password: 'old password' },
+        META,
+      )
+      const { sid } = await tokenService.verifyAccessToken(currentSession.accessToken)
+
+      await service.changePassword(
+        1n,
+        BigInt(sid),
+        { currentPassword: 'old password', newPassword: 'a brand new password' },
+        META,
+      )
+
+      await expect(service.refresh(currentSession.refreshToken, META)).resolves.toBeDefined()
+      await expect(service.refresh(otherSession.refreshToken, META)).rejects.toMatchObject({
+        code: 'UNAUTHENTICATED',
       })
     })
   })

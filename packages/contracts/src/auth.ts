@@ -42,6 +42,25 @@ export const verifyEmailRequestSchema = z.object({
 })
 export type VerifyEmailRequest = z.infer<typeof verifyEmailRequestSchema>
 
+// SPECS.md §5.4 / §13.2: forgot/reset never reveals whether the email is
+// registered — the response is the same generic shape either way.
+export const forgotPasswordRequestSchema = z.object({
+  email: z.string().email(),
+})
+export type ForgotPasswordRequest = z.infer<typeof forgotPasswordRequestSchema>
+
+export const resetPasswordRequestSchema = z.object({
+  token: z.string().min(1),
+  password: passwordSchema,
+})
+export type ResetPasswordRequest = z.infer<typeof resetPasswordRequestSchema>
+
+export const changePasswordRequestSchema = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: passwordSchema,
+})
+export type ChangePasswordRequest = z.infer<typeof changePasswordRequestSchema>
+
 export const sessionSchema = z.object({
   id: snowflakeIdSchema,
   userAgent: z.string().nullable(),
