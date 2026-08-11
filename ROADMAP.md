@@ -292,11 +292,11 @@ Efecto secundario corregido en el mismo checkpoint: crear una respuesta o una ci
 ### 2.6 Privacidad y seguridad del usuario 🟡
 
 - [ ] **Cuentas protegidas**: `follow_requests` + aceptar/rechazar + posts ocultos a no seguidores
-- [ ] Aplicación real de **bloqueos** en todas las lecturas (timeline, búsqueda, perfil, notificaciones, hilos)
-- [ ] **Silencios** y `muted_keywords` aplicados en timelines y notificaciones
+- [x] Aplicación real de **bloqueos** en todas las lecturas que existen hoy — un `viewerId` opcional recorre `posts.service.ts` (`getById`, `listByUsername`, `getManyByIds`, `getThread`, `listReplies`) contra el primitivo simétrico `findBlockedAuthorIds`: el post o hilo bloqueado 404 igual que uno borrado, el perfil bloqueado devuelve una página vacía en vez de 404 (la ficha del perfil sigue existiendo). Las cuatro rutas GET afectadas eran públicas y siguen siéndolo — nuevo `optionalAuth` (`middleware/require-auth.ts`) rellena `request.user` si hay token válido sin exigirlo. El timeline descarta los mismos ids en `getManyByIds` (cubre el caso de un fan-out anterior al bloqueo). `POST /users/:id/follow` responde 403 en cualquier dirección; `GET /users/suggestions` los excluye. ⚪ Búsqueda queda fuera porque todavía no existe (2.3) — se aplicará ahí cuando se construya
+- [x] **Silencios** aplicados en el timeline (fuera del feed pasivo únicamente — visitar el perfil de la persona silenciada o un hilo suyo la sigue mostrando, mismo comportamiento que X real) y en notificaciones (el worker nunca inserta la fila si el destinatario silenció al actor, junto al mismo chequeo para bloqueos). ⚪ `muted_keywords` no entró: es un dato y una lógica de coincidencia distintos — texto libre contra el contenido del post — no una extensión de la tabla `mutes`
 - [ ] **2FA TOTP**: setup con QR, verificación, códigos de recuperación de un solo uso
 - [ ] `GET /auth/sessions` + revocación individual de sesiones
-- [ ] Test crítico: bloqueo mutuo — ninguno de los dos ve al otro en **ningún** contexto
+- [x] Test crítico: bloqueo mutuo — probado en ambas direcciones donde el bloqueo se decide (`follow`, en `social-graph.service.test.ts`) y contra Postgres real de punta a punta para una dirección (perfil, post suelto y su hilo se ocultan; un tercero anónimo sigue viendo el post) en `posts.integration.test.ts`; el resto de superficies comparte el mismo primitivo simétrico en vez de reimplementar la comprobación por su cuenta
 
 ### 2.7 Vídeo y GIF 🟡
 

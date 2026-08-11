@@ -285,6 +285,27 @@ function addAuthor(
   return author
 }
 
+// Mirrors createFakeFollowLookup just above this file's reply-policy tests
+// — a symmetric pair set is enough to fake BlockLookup's one method.
+function createFakeBlockLookup() {
+  const blocked = new Set<string>()
+  return {
+    blockLookup: {
+      async findBlockedAuthorIds(viewerId: bigint, authorIds: bigint[]) {
+        return new Set(authorIds.filter((id) => blocked.has(pairKey(viewerId, id))))
+      },
+    },
+    block(userA: bigint, userB: bigint) {
+      blocked.add(pairKey(userA, userB))
+      blocked.add(pairKey(userB, userA))
+    },
+  }
+}
+
+function pairKey(a: bigint, b: bigint): string {
+  return [a, b].sort((x, y) => (x > y ? 1 : x < y ? -1 : 0)).join(':')
+}
+
 describe('createPostsService', () => {
   let repository: PostRepository
   let authorsById: Map<bigint, AuthorRow>
@@ -810,6 +831,217 @@ describe('createPostsService', () => {
     it('throws NotFoundError for a nonexistent post', async () => {
       const service = createPostsService(repository)
       await expect(service.getById(999999999999999999n)).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      })
+    })
+  })
+
+  // ROADMAP.md 2.6 — every read below takes the same createPostsService(...)
+  // 7-arg shape as the reply-policy describe above, just with blockLookup
+  // (arg 7) instead of followLookup (arg 6) populated.
+  describe('block visibility', () => {
+    it('getById 404s a post whose author blocked the viewer', async () => {
+      const { blockLookup, block } = createFakeBlockLookup()
+      const service = createPostsService(
+        repository,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        blockLookup,
+      )
+      const stranger = addAuthor(authorsById, { id: generateId(), username: 'eve' })
+      block(stranger.id, author.id)
+      const post = await service.create(stranger.id, {
+        text: 'hola',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      await expect(service.getById(BigInt(post.id), author.id)).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      })
+    })
+
+    it('getById still resolves for a viewer with no block relationship', async () => {
+      const { blockLookup } = createFakeBlockLookup()
+      const service = createPostsService(
+        repository,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        blockLookup,
+      )
+      const post = await service.create(author.id, {
+        text: 'hola',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      await expect(service.getById(BigInt(post.id), generateId())).resolves.toMatchObject({
+        id: post.id,
+      })
+    })
+
+    it('listByUsername returns an empty page for a blocked profile owner', async () => {
+      const { blockLookup, block } = createFakeBlockLookup()
+      const service = createPostsService(
+        repository,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        blockLookup,
+      )
+      const viewer = generateId()
+      block(viewer, author.id)
+      await service.create(author.id, { text: 'hola', replyPolicy: 'everyone', isSensitive: false })
+
+      const page = await service.listByUsername(
+        author.username.toLowerCase(),
+        20,
+        null,
+        'posts',
+        viewer,
+      )
+
+      expect(page).toEqual({ items: [], hasMore: false })
+    })
+
+    it('listByUsername filters an individually blocked author out of the "likes" tab', async () => {
+      const { blockLookup, block } = createFakeBlockLookup()
+      const service = createPostsService(
+        repository,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        blockLookup,
+      )
+      const bob = addAuthor(authorsById, { id: generateId(), username: 'bob' })
+      const viewer = generateId()
+      block(viewer, bob.id)
+      const likedPost = await service.create(bob.id, {
+        text: 'post de bob',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      likedPostIds.add(`${author.id}:${likedPost.id}`)
+
+      const page = await service.listByUsername(
+        author.username.toLowerCase(),
+        20,
+        null,
+        'likes',
+        viewer,
+      )
+
+      expect(page.items).toEqual([])
+    })
+
+    it('getManyByIds silently drops a post authored by someone blocked-with the viewer', async () => {
+      const { blockLookup, block } = createFakeBlockLookup()
+      const service = createPostsService(
+        repository,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        blockLookup,
+      )
+      const viewer = generateId()
+      block(viewer, author.id)
+      const post = await service.create(author.id, {
+        text: 'hola',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      expect(await service.getManyByIds([BigInt(post.id)], viewer)).toEqual([])
+    })
+
+    it("getThread 404s when the focused post's author blocked the viewer", async () => {
+      const { blockLookup, block } = createFakeBlockLookup()
+      const service = createPostsService(
+        repository,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        blockLookup,
+      )
+      const viewer = generateId()
+      block(viewer, author.id)
+      const post = await service.create(author.id, {
+        text: 'hola',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      await expect(service.getThread(BigInt(post.id), viewer)).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      })
+    })
+
+    it('getThread drops a reply from a third party blocked-with the viewer, without hiding the thread', async () => {
+      const { blockLookup, block } = createFakeBlockLookup()
+      const service = createPostsService(
+        repository,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        blockLookup,
+      )
+      const viewer = generateId()
+      const blockedThirdParty = addAuthor(authorsById, { id: generateId(), username: 'eve' })
+      block(viewer, blockedThirdParty.id)
+      const root = await service.create(author.id, {
+        text: 'raíz',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      await service.create(blockedThirdParty.id, {
+        text: 'respuesta indeseada',
+        inReplyToId: BigInt(root.id),
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      const thread = await service.getThread(BigInt(root.id), viewer)
+
+      expect(thread.post.id).toBe(root.id)
+      expect(thread.replies).toEqual([])
+    })
+
+    it('listReplies 404s when the thread root author blocked the viewer', async () => {
+      const { blockLookup, block } = createFakeBlockLookup()
+      const service = createPostsService(
+        repository,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        blockLookup,
+      )
+      const viewer = generateId()
+      block(viewer, author.id)
+      const root = await service.create(author.id, {
+        text: 'raíz',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      await expect(service.listReplies(BigInt(root.id), 20, null, viewer)).rejects.toMatchObject({
         code: 'NOT_FOUND',
       })
     })

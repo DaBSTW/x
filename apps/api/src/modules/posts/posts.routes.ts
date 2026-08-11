@@ -13,7 +13,11 @@ import type { FastifyInstance } from 'fastify'
 import type { ZodTypeProvider } from 'fastify-type-provider-zod'
 import { z } from 'zod'
 import { withIdempotency } from '../../lib/idempotency.js'
-import { createRequireAuth, getAuthenticatedUser } from '../../middleware/require-auth.js'
+import {
+  createOptionalAuth,
+  createRequireAuth,
+  getAuthenticatedUser,
+} from '../../middleware/require-auth.js'
 import type { TokenService } from '../../plugins/tokens.js'
 import type { PostsService } from './posts.service.js'
 
@@ -27,6 +31,7 @@ export type PostsRoutesOptions = {
 export async function registerPostsRoutes(app: FastifyInstance, options: PostsRoutesOptions) {
   const { postsService, tokenService } = options
   const requireAuth = createRequireAuth(tokenService)
+  const optionalAuth = createOptionalAuth(tokenService)
   const server = app.withTypeProvider<ZodTypeProvider>()
 
   server.post(
@@ -81,9 +86,13 @@ export async function registerPostsRoutes(app: FastifyInstance, options: PostsRo
         params: z.object({ id: snowflakeIdSchema }),
         response: { 200: postResponseSchema, 404: errorResponseSchema },
       },
+      // Public route, personalized when signed in — a caller blocked by (or
+      // blocking) this post's author gets the same 404 as a deleted post
+      // (ROADMAP.md 2.6).
+      preHandler: [optionalAuth],
     },
     async (request, reply) => {
-      const post = await postsService.getById(BigInt(request.params.id))
+      const post = await postsService.getById(BigInt(request.params.id), request.user?.id)
       return reply.send({ data: post })
     },
   )
@@ -95,9 +104,10 @@ export async function registerPostsRoutes(app: FastifyInstance, options: PostsRo
         params: z.object({ id: snowflakeIdSchema }),
         response: { 200: postThreadResponseSchema, 404: errorResponseSchema },
       },
+      preHandler: [optionalAuth],
     },
     async (request, reply) => {
-      const thread = await postsService.getThread(BigInt(request.params.id))
+      const thread = await postsService.getThread(BigInt(request.params.id), request.user?.id)
       return reply.send({
         data: {
           ancestors: thread.ancestors,
@@ -117,6 +127,7 @@ export async function registerPostsRoutes(app: FastifyInstance, options: PostsRo
         querystring: paginationQuerySchema,
         response: { 200: postListResponseSchema, 404: errorResponseSchema },
       },
+      preHandler: [optionalAuth],
     },
     async (request, reply) => {
       const cursor = request.query.cursor ? decodeCursor(request.query.cursor) : null
@@ -124,6 +135,7 @@ export async function registerPostsRoutes(app: FastifyInstance, options: PostsRo
         BigInt(request.params.id),
         request.query.limit,
         cursor,
+        request.user?.id,
       )
       const lastItem = items.at(-1)
       const nextCursor = hasMore && lastItem ? encodeCursor(BigInt(lastItem.id)) : null
@@ -160,6 +172,7 @@ export async function registerPostsRoutes(app: FastifyInstance, options: PostsRo
         querystring: profilePostsQuerySchema,
         response: { 200: postListResponseSchema, 404: errorResponseSchema },
       },
+      preHandler: [optionalAuth],
     },
     async (request, reply) => {
       const cursor = request.query.cursor ? decodeCursor(request.query.cursor) : null
@@ -168,6 +181,7 @@ export async function registerPostsRoutes(app: FastifyInstance, options: PostsRo
         request.query.limit,
         cursor,
         request.query.filter,
+        request.user?.id,
       )
       const lastItem = items.at(-1)
       const nextCursor = hasMore && lastItem ? encodeCursor(BigInt(lastItem.id)) : null

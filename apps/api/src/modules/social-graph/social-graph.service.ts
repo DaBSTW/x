@@ -1,4 +1,10 @@
-import { ConflictError, NotFoundError, type NotificationJobData, ValidationError } from '@x/utils'
+import {
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  type NotificationJobData,
+  ValidationError,
+} from '@x/utils'
 import type { Redis } from 'ioredis'
 import { addToFollowingCache, removeFromFollowingCache } from '../../lib/following-cache.js'
 import type { SocialGraphRepository } from './social-graph.repository.js'
@@ -26,6 +32,13 @@ export function createSocialGraphService(
     }
     if (!(await repository.userExists(followeeId))) {
       throw new NotFoundError('user', followeeId.toString())
+    }
+    // SPECS.md §4.3: a block is exclusive with following, in both
+    // directions — checked before the already-following lookup so a block
+    // added after an old follow (impossible today since insertBlock drops
+    // it, but cheap to keep true regardless) always wins.
+    if ((await repository.findBlockedAuthorIds(followerId, [followeeId])).size > 0) {
+      throw new ForbiddenError('cannot follow a user you have blocked or who has blocked you')
     }
     if (await repository.findFollow(followerId, followeeId)) {
       throw new ConflictError('already following this user')

@@ -44,3 +44,26 @@ export function getAuthenticatedUser(request: FastifyRequest): AuthenticatedUser
   }
   return request.user
 }
+
+/**
+ * For routes that stay public but personalize when a caller happens to be
+ * signed in — e.g. filtering a blocked author out of a post that anyone can
+ * otherwise fetch (ROADMAP.md 2.6). Unlike `requireAuth`, a missing or
+ * invalid token is not an error: the request just proceeds anonymous
+ * (`request.user` stays unset), it never fails the route.
+ */
+export function createOptionalAuth(tokenService: TokenService) {
+  return async function optionalAuth(request: FastifyRequest): Promise<void> {
+    const header = request.headers.authorization
+    const token = header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : undefined
+    if (!token) return
+
+    try {
+      const claims = await tokenService.verifyAccessToken(token)
+      request.user = { id: BigInt(claims.sub), sessionId: BigInt(claims.sid) }
+    } catch {
+      // Expired/malformed token on an otherwise-public route: degrade to
+      // anonymous rather than failing a request that didn't require auth.
+    }
+  }
+}

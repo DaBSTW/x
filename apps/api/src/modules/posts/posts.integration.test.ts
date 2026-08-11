@@ -548,4 +548,84 @@ describe('posts routes', () => {
     })
     expect(allowed.statusCode).toBe(201)
   })
+
+  it("hides a blocked author's posts from the blocked viewer, everywhere, while staying visible to everyone else (ROADMAP.md 2.6)", async () => {
+    await app.inject({
+      method: 'POST',
+      url: '/v1/auth/register',
+      payload: {
+        username: 'blockedauthor',
+        email: 'blockedauthor@example.com',
+        password: 'a unique passphrase, author 8p',
+        birthDate: '1990-01-01',
+      },
+    })
+    const authorLogin = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: 'blockedauthor@example.com', password: 'a unique passphrase, author 8p' },
+    })
+    const authorToken = authorLogin.json().data.accessToken
+
+    const viewerRegister = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/register',
+      payload: {
+        username: 'blockedviewer',
+        email: 'blockedviewer@example.com',
+        password: 'a unique passphrase, viewer 8p',
+        birthDate: '1990-01-01',
+      },
+    })
+    const viewerId = viewerRegister.json().data.id
+    const viewerLogin = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: 'blockedviewer@example.com', password: 'a unique passphrase, viewer 8p' },
+    })
+    const viewerToken = viewerLogin.json().data.accessToken
+
+    const post = (
+      await app.inject({
+        method: 'POST',
+        url: '/v1/posts',
+        headers: { authorization: `Bearer ${authorToken}` },
+        payload: { text: 'un post que no deberías ver' },
+      })
+    ).json().data
+
+    const blockResponse = await app.inject({
+      method: 'POST',
+      url: `/v1/users/${viewerId}/block`,
+      headers: { authorization: `Bearer ${authorToken}` },
+    })
+    expect(blockResponse.statusCode).toBe(204)
+
+    const getByIdAsBlocked = await app.inject({
+      method: 'GET',
+      url: `/v1/posts/${post.id}`,
+      headers: { authorization: `Bearer ${viewerToken}` },
+    })
+    expect(getByIdAsBlocked.statusCode).toBe(404)
+
+    const threadAsBlocked = await app.inject({
+      method: 'GET',
+      url: `/v1/posts/${post.id}/thread`,
+      headers: { authorization: `Bearer ${viewerToken}` },
+    })
+    expect(threadAsBlocked.statusCode).toBe(404)
+
+    const profileAsBlocked = await app.inject({
+      method: 'GET',
+      url: '/v1/users/blockedauthor/posts',
+      headers: { authorization: `Bearer ${viewerToken}` },
+    })
+    expect(profileAsBlocked.statusCode).toBe(200)
+    expect(profileAsBlocked.json().data).toEqual([])
+
+    // No block relationship with this request at all — anonymous and third
+    // parties keep seeing the post normally.
+    const getByIdAnonymous = await app.inject({ method: 'GET', url: `/v1/posts/${post.id}` })
+    expect(getByIdAnonymous.statusCode).toBe(200)
+  })
 })

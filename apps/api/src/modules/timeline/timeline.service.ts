@@ -18,12 +18,24 @@ export type ViewerStateLookup = {
   findRepostedPostIds: (userId: bigint, postIds: bigint[]) => Promise<Set<bigint>>
 }
 
+/**
+ * Backs mute filtering (ROADMAP.md 2.6) — deliberately only consulted here,
+ * not threaded into PostHydrator like the block check above. Muting hides a
+ * post from this passive, ambient feed only; visiting the muted account's
+ * profile or a thread they posted in still shows their posts, same as real
+ * X's own mute semantics.
+ */
+export type MuteLookup = {
+  findMutedAuthorIds(viewerId: bigint, authorIds: bigint[]): Promise<Set<bigint>>
+}
+
 export type TimelineService = ReturnType<typeof createTimelineService>
 
 export function createTimelineService(
   timelineRepository: TimelineRepository,
   postHydrator: PostHydrator,
   viewerState?: ViewerStateLookup,
+  muteLookup?: MuteLookup,
 ) {
   async function getHome(
     userId: bigint,
@@ -41,7 +53,11 @@ export function createTimelineService(
     const merged = mergeDescendingUnique(precomputedIds, celebrityIds)
     const hasMore = merged.length > limit
     const pageIds = merged.slice(0, limit)
-    const items = await postHydrator.getManyByIds(pageIds)
+    // A block can outlive the fan-out entries it should have invalidated
+    // (an old post fanned out before the block existed) — getManyByIds
+    // drops those the same way it drops a deleted post (ROADMAP.md 2.6).
+    const hydrated = await postHydrator.getManyByIds(pageIds, userId)
+    const items = muteLookup ? await dropMuted(muteLookup, userId, hydrated) : hydrated
 
     if (!viewerState) return { items, hasMore }
 
@@ -80,6 +96,13 @@ async function resolvePrecomputedIds(
   const rebuilt = await repository.reconstructFromPostgres(userId)
   const page = cursor === null ? rebuilt : rebuilt.filter((id) => id < cursor)
   return page.slice(0, limit)
+}
+
+async function dropMuted(muteLookup: MuteLookup, viewerId: bigint, items: Post[]): Promise<Post[]> {
+  const authorIds = [...new Set(items.map((post) => BigInt(post.author.id)))]
+  const muted = await muteLookup.findMutedAuthorIds(viewerId, authorIds)
+  if (muted.size === 0) return items
+  return items.filter((post) => !muted.has(BigInt(post.author.id)))
 }
 
 /** SPECS.md §6.1's `merge_by_id`: two id lists, each already newest-first, combined and deduplicated the same way. */

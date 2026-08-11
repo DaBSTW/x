@@ -34,6 +34,7 @@ export async function registerSocialGraphRoutes(
         response: {
           204: z.null(),
           401: errorResponseSchema,
+          403: errorResponseSchema,
           404: errorResponseSchema,
           409: errorResponseSchema,
         },
@@ -63,8 +64,9 @@ export async function registerSocialGraphRoutes(
     },
   )
 
-  // Tables + endpoints only (ROADMAP.md 1.2) — nothing reads these yet to
-  // filter feeds, replies, or search; that application lands in phase 2.
+  // Table + endpoints landed in ROADMAP.md 1.2; posts.service.ts,
+  // timeline.service.ts and apps/workers' notifications worker are the
+  // readers that actually enforce them now (ROADMAP.md 2.6).
   server.post(
     '/users/:id/block',
     {

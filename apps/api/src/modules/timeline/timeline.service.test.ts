@@ -3,12 +3,18 @@ import { describe, expect, it, vi } from 'vitest'
 import type { TimelineRepository } from './timeline.repository.js'
 import { type PostHydrator, createTimelineService } from './timeline.service.js'
 
-function makePost(id: bigint): Post {
+function makePost(id: bigint, authorId = 1n): Post {
   return {
     id: id.toString(),
     text: `post ${id}`,
     createdAt: new Date().toISOString(),
-    author: { id: '1', username: 'ana', displayName: 'Ana', avatarUrl: null, isVerified: false },
+    author: {
+      id: authorId.toString(),
+      username: 'ana',
+      displayName: 'Ana',
+      avatarUrl: null,
+      isVerified: false,
+    },
     entities: [],
     media: [],
     conversationId: id.toString(),
@@ -17,10 +23,11 @@ function makePost(id: bigint): Post {
   }
 }
 
-function createFakeHydrator(): PostHydrator {
+/** `authorIdByPostId` defaults every post to author `1n` — only the mute-filtering tests below need more than one author. */
+function createFakeHydrator(authorIdByPostId: Map<bigint, bigint> = new Map()): PostHydrator {
   return {
     async getManyByIds(ids) {
-      return ids.map(makePost)
+      return ids.map((id) => makePost(id, authorIdByPostId.get(id) ?? 1n))
     },
   }
 }
@@ -140,5 +147,42 @@ describe('createTimelineService', () => {
     const { items } = await service.getHome(1n, 20, null)
 
     expect(items[0]?.viewer).toBeUndefined()
+  })
+
+  describe('mute filtering (ROADMAP.md 2.6)', () => {
+    it('drops a post from a muted author out of the passive feed', async () => {
+      const repository = createFakeRepository({ readPrecomputed: async () => [30n, 20n, 10n] })
+      const authorIdByPostId = new Map([[20n, 2n]])
+      const service = createTimelineService(
+        repository,
+        createFakeHydrator(authorIdByPostId),
+        undefined,
+        { findMutedAuthorIds: async () => new Set([2n]) },
+      )
+
+      const { items } = await service.getHome(1n, 20, null)
+
+      expect(items.map((post) => post.id)).toEqual(['30', '10'])
+    })
+
+    it('leaves every post when nothing is muted', async () => {
+      const repository = createFakeRepository({ readPrecomputed: async () => [30n, 20n] })
+      const service = createTimelineService(repository, createFakeHydrator(), undefined, {
+        findMutedAuthorIds: async () => new Set(),
+      })
+
+      const { items } = await service.getHome(1n, 20, null)
+
+      expect(items.map((post) => post.id)).toEqual(['30', '20'])
+    })
+
+    it('skips filtering entirely without a lookup', async () => {
+      const repository = createFakeRepository({ readPrecomputed: async () => [30n] })
+      const service = createTimelineService(repository, createFakeHydrator())
+
+      const { items } = await service.getHome(1n, 20, null)
+
+      expect(items.map((post) => post.id)).toEqual(['30'])
+    })
   })
 })

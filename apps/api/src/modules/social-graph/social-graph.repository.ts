@@ -1,6 +1,6 @@
 import type { Database } from '@x/db'
 import { blocks, follows, mutes, userCounters, users } from '@x/db'
-import { and, desc, eq, isNull, lt, ne, or, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm'
 
 export type SocialGraphRepository = ReturnType<typeof createSocialGraphRepository>
 
@@ -59,6 +59,27 @@ export function createSocialGraphRepository(db: Database) {
     },
 
     /**
+     * Which of `authorIds` have a block with `viewerId`, in either direction
+     * — ROADMAP.md 2.6. One batch query backs every read-path filter
+     * (timeline, thread, profile posts) instead of an N+1 per post.
+     */
+    async findBlockedAuthorIds(viewerId: bigint, authorIds: bigint[]): Promise<Set<bigint>> {
+      if (authorIds.length === 0) return new Set()
+      const rows = await db
+        .select({ blockerId: blocks.blockerId, blockedId: blocks.blockedId })
+        .from(blocks)
+        .where(
+          or(
+            and(eq(blocks.blockerId, viewerId), inArray(blocks.blockedId, authorIds)),
+            and(eq(blocks.blockedId, viewerId), inArray(blocks.blockerId, authorIds)),
+          ),
+        )
+      return new Set(
+        rows.map((row) => (row.blockerId === viewerId ? row.blockedId : row.blockerId)),
+      )
+    },
+
+    /**
      * A block is exclusive with following, in both directions — insert +
      * dropping any mutual follow (and its counters) happen together so a
      * block can never coexist with a stale follow row.
@@ -111,6 +132,20 @@ export function createSocialGraphRepository(db: Database) {
 
     async deleteMute(muterId: bigint, mutedId: bigint): Promise<void> {
       await db.delete(mutes).where(and(eq(mutes.muterId, muterId), eq(mutes.mutedId, mutedId)))
+    },
+
+    /**
+     * Which of `authorIds` the viewer has muted — ROADMAP.md 2.6. Unlike
+     * `findBlockedAuthorIds`, unidirectional: muting is silent and one-way,
+     * so only the viewer's own mutes can ever hide anything.
+     */
+    async findMutedAuthorIds(viewerId: bigint, authorIds: bigint[]): Promise<Set<bigint>> {
+      if (authorIds.length === 0) return new Set()
+      const rows = await db
+        .select({ mutedId: mutes.mutedId })
+        .from(mutes)
+        .where(and(eq(mutes.muterId, viewerId), inArray(mutes.mutedId, authorIds)))
+      return new Set(rows.map((row) => row.mutedId))
     },
 
     async findUserIdByUsername(usernameLower: string): Promise<bigint | null> {
@@ -170,9 +205,10 @@ export function createSocialGraphRepository(db: Database) {
 
     /**
      * "Who to follow": most-followed accounts the viewer doesn't already
-     * follow. The left join keeps this a single query instead of an N+1 —
-     * a NULL `follows.followerId` after the join means no matching follow
-     * row exists for (viewer, candidate).
+     * follow, and has no block relationship with in either direction
+     * (ROADMAP.md 2.6 — suggesting someone unreachable would be a dead end).
+     * Both left joins keep this a single query instead of an N+1 — a NULL
+     * `followerId`/`blockerId` after the join means no matching row exists.
      */
     async findSuggestions(userId: bigint, limit: number) {
       return db
@@ -186,7 +222,14 @@ export function createSocialGraphRepository(db: Database) {
         .from(users)
         .innerJoin(userCounters, eq(userCounters.userId, users.id))
         .leftJoin(follows, and(eq(follows.followerId, userId), eq(follows.followeeId, users.id)))
-        .where(and(ne(users.id, userId), isNull(follows.followerId)))
+        .leftJoin(
+          blocks,
+          or(
+            and(eq(blocks.blockerId, userId), eq(blocks.blockedId, users.id)),
+            and(eq(blocks.blockerId, users.id), eq(blocks.blockedId, userId)),
+          ),
+        )
+        .where(and(ne(users.id, userId), isNull(follows.followerId), isNull(blocks.blockerId)))
         .orderBy(desc(userCounters.followersCount))
         .limit(limit)
     },

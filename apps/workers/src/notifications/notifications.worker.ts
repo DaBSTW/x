@@ -26,7 +26,8 @@ export function createNotificationsWorker(
   const worker = new Worker<NotificationJobData>(
     NOTIFICATIONS_QUEUE_NAME,
     async (job) => {
-      await options.repository.insertFromJob(job.data)
+      const id = await options.repository.insertFromJob(job.data)
+      if (id === null) return // blocked or muted (ROADMAP.md 2.6) — nothing was inserted, nothing to count
 
       // Only bump an already-warm counter. A cold one is left alone —
       // apps/api's getUnreadCount() recomputes it from Postgres on next

@@ -264,6 +264,35 @@ describe('social graph routes', () => {
     )
   })
 
+  it('rejects following a user with an active block, in either direction', async () => {
+    const erin = await registerAndLogin('blockerin', 'blockerin@example.com')
+    const frank = await registerAndLogin('blockfrank', 'blockfrank@example.com')
+    const frankProfile = await app.inject({ method: 'GET', url: '/v1/users/blockfrank' })
+    const frankId = frankProfile.json().data.id as string
+    const erinProfile = await app.inject({ method: 'GET', url: '/v1/users/blockerin' })
+    const erinId = erinProfile.json().data.id as string
+
+    await app.inject({
+      method: 'POST',
+      url: `/v1/users/${frankId}/block`,
+      headers: { authorization: `Bearer ${erin.accessToken}` },
+    })
+
+    const blockerFollowingBlocked = await app.inject({
+      method: 'POST',
+      url: `/v1/users/${frankId}/follow`,
+      headers: { authorization: `Bearer ${erin.accessToken}` },
+    })
+    expect(blockerFollowingBlocked.statusCode).toBe(403)
+
+    const blockedFollowingBlocker = await app.inject({
+      method: 'POST',
+      url: `/v1/users/${erinId}/follow`,
+      headers: { authorization: `Bearer ${frank.accessToken}` },
+    })
+    expect(blockedFollowingBlocker.statusCode).toBe(403)
+  })
+
   it('mutes and unmutes a user without touching an existing follow', async () => {
     const muter = await registerAndLogin('muterone', 'muterone@example.com')
     const targetProfile = await app.inject({ method: 'GET', url: '/v1/users/bob' })

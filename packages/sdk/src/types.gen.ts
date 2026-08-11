@@ -1283,6 +1283,25 @@ export interface paths {
                     };
                 };
                 /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /** @enum {string} */
+                                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "BLOCKED_BY_USER" | "NOT_FOUND" | "CONFLICT" | "UNPROCESSABLE" | "RATE_LIMIT_EXCEEDED" | "INTERNAL_ERROR" | "SERVICE_UNAVAILABLE";
+                                message: string;
+                                details?: {
+                                    [key: string]: unknown;
+                                };
+                                requestId: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
                 404: {
                     headers: {
                         [name: string]: unknown;

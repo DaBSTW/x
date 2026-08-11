@@ -125,6 +125,9 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
       isFollowing: (followerId, followeeId) =>
         socialGraphRepository.findFollow(followerId, followeeId).then(Boolean),
     },
+    // Structurally identical to BlockLookup already — no adapter needed,
+    // unlike isFollowing above.
+    socialGraphRepository,
   )
 
   const mediaStorage = createMediaStorage({
@@ -158,11 +161,17 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   )
 
   const timelineRepository = createTimelineRepository(app.db, app.redis)
-  const timelineService = createTimelineService(timelineRepository, postsService, {
-    findLikedPostIds: interactionsRepository.findLikedPostIds,
-    findBookmarkedPostIds: interactionsRepository.findBookmarkedPostIds,
-    findRepostedPostIds: postsRepository.findRepostedPostIds,
-  })
+  const timelineService = createTimelineService(
+    timelineRepository,
+    postsService,
+    {
+      findLikedPostIds: interactionsRepository.findLikedPostIds,
+      findBookmarkedPostIds: interactionsRepository.findBookmarkedPostIds,
+      findRepostedPostIds: postsRepository.findRepostedPostIds,
+    },
+    // Structurally identical to MuteLookup already, same as blockLookup above.
+    socialGraphRepository,
+  )
 
   const profilesRepository = createProfilesRepository(app.db)
   const profilesService = createProfilesService(profilesRepository, mediaUrlConfig)

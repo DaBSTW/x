@@ -193,4 +193,34 @@ describe('timeline routes', () => {
     expect(response.statusCode).toBe(200)
     expect(response.json().data.map((p: { id: string }) => p.id)).toContain(post.id)
   })
+
+  it('hides posts from a muted author, without touching the follow itself (ROADMAP.md 2.6)', async () => {
+    const alice = await registerAndLogin('mutealice')
+    const bob = await registerAndLogin('mutebob')
+    await follow(alice.accessToken, bob.userId)
+    const post = await createPost(bob.accessToken, 'hola desde bob (silenciado)')
+
+    const muteResponse = await app.inject({
+      method: 'POST',
+      url: `/v1/users/${bob.userId}/mute`,
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+    })
+    expect(muteResponse.statusCode).toBe(204)
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/timeline/home',
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json().data.map((p: { id: string }) => p.id)).not.toContain(post.id)
+
+    // Muting is silent and one-way — it never touches the follow graph.
+    const following = await app.inject({
+      method: 'GET',
+      url: '/v1/users/mutealice/following',
+    })
+    expect(following.json().data.map((u: { username: string }) => u.username)).toContain('mutebob')
+  })
 })

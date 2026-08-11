@@ -22,6 +22,11 @@ export type FollowLookup = {
   isFollowing(followerId: bigint, followeeId: bigint): Promise<boolean>
 }
 
+/** Backs the block-visibility guard on every read below (ROADMAP.md 2.6) — same narrowing reasoning as FollowLookup. `SocialGraphRepository.findBlockedAuthorIds` already matches this shape, so app.ts passes it straight through with no adapter. */
+export type BlockLookup = {
+  findBlockedAuthorIds(viewerId: bigint, authorIds: bigint[]): Promise<Set<bigint>>
+}
+
 const MAX_MENTIONS = 10
 const MAX_HASHTAGS = 5
 // GET /posts/:id/thread's first page of replies — ROADMAP.md 2.1. "Load
@@ -80,7 +85,21 @@ export function createPostsService(
   // branch fails open (allows the reply) rather than 500ing a post creation
   // over a dependency the caller chose not to wire up.
   followLookup?: FollowLookup,
+  // Also optional, same posture again: unset means every read below skips
+  // block filtering entirely rather than failing — every one of the ~40
+  // existing calls in this file's own tests never sets up a block, so
+  // "no blockLookup" and "no blocks exist" are observationally identical
+  // for them.
+  blockLookup?: BlockLookup,
 ) {
+  /** `undefined` when there's no viewer (anonymous) or nothing wired up — both mean "don't filter". */
+  async function findBlockedAuthorIds(
+    viewerId: bigint | undefined,
+    authorIds: bigint[],
+  ): Promise<Set<bigint>> {
+    if (!viewerId || !blockLookup || authorIds.length === 0) return new Set()
+    return blockLookup.findBlockedAuthorIds(viewerId, authorIds)
+  }
   async function fetchBaseline(postId: bigint): Promise<CachedCounters> {
     const counters = await repository.findPostCounters(postId)
     if (!counters) return zeroCounters()
@@ -281,9 +300,19 @@ export function createPostsService(
     )
   }
 
-  async function getById(id: bigint): Promise<Post> {
+  /**
+   * `viewerId` is optional — this backs a public route (SPECS.md §4.3: "ver
+   * posts de" is a service-level rule, not a DB one). A block in either
+   * direction 404s exactly like a missing post, never a distinct "blocked"
+   * error: leaking *why* a post is unreachable would tell a blocked viewer
+   * that a block exists (ROADMAP.md 2.6).
+   */
+  async function getById(id: bigint, viewerId?: bigint): Promise<Post> {
     const post = await repository.findPostById(id)
     if (!post) throw new NotFoundError('post', id.toString())
+    if ((await findBlockedAuthorIds(viewerId, [post.authorId])).size > 0) {
+      throw new NotFoundError('post', id.toString())
+    }
 
     const [author, counters, entities, mediaRows] = await Promise.all([
       repository.findAuthorById(post.authorId),
@@ -372,16 +401,34 @@ export function createPostsService(
     limit: number,
     cursor: bigint | null,
     filter: ProfilePostsFilter = 'posts',
+    viewerId?: bigint,
   ): Promise<{ items: Post[]; hasMore: boolean }> {
     const authorId = await repository.findUserIdByUsername(usernameLower)
     if (!authorId) throw new NotFoundError('user', usernameLower)
+
+    // A block with the profile owner hides every tab, not just their own
+    // posts — the "likes" tab still surfaces *other* authors below, each
+    // checked on their own (ROADMAP.md 2.6). Empty page, not NotFoundError:
+    // the profile itself (bio, header) still renders, it just has no posts.
+    if ((await findBlockedAuthorIds(viewerId, [authorId])).size > 0) {
+      return { items: [], hasMore: false }
+    }
 
     const rows =
       filter === 'likes'
         ? await repository.listLikedPostsByUser(authorId, limit + 1, cursor)
         : await repository.listPostsByAuthor(authorId, limit + 1, cursor, filter)
     const hasMore = rows.length > limit
-    const page = hasMore ? rows.slice(0, limit) : rows
+    const fullPage = hasMore ? rows.slice(0, limit) : rows
+
+    const blockedLikedAuthorIds =
+      filter === 'likes'
+        ? await findBlockedAuthorIds(viewerId, [...new Set(fullPage.map((row) => row.authorId))])
+        : new Set<bigint>()
+    const page =
+      blockedLikedAuthorIds.size > 0
+        ? fullPage.filter((row) => !blockedLikedAuthorIds.has(row.authorId))
+        : fullPage
 
     const postIds = page.map((row) => row.id)
     const [authors, countersRows, entityRows, mediaRows] = await Promise.all([
@@ -414,11 +461,12 @@ export function createPostsService(
   /**
    * Batch hydration for timeline reads (SPECS.md §6.1): one round trip per
    * table regardless of page size. `ids` order is preserved in the result;
-   * ids that are missing or soft-deleted are silently dropped rather than
-   * failing the whole page — a stale timeline reference is expected, not an
-   * error.
+   * ids that are missing, soft-deleted, or (given `viewerId`) authored by
+   * someone blocked-with the viewer are silently dropped rather than
+   * failing the whole page — same "a stale reference is expected, not an
+   * error" posture ROADMAP.md 2.6 extends to blocks.
    */
-  async function getManyByIds(ids: bigint[]): Promise<Post[]> {
+  async function getManyByIds(ids: bigint[], viewerId?: bigint): Promise<Post[]> {
     if (ids.length === 0) return []
 
     const [rows, countersRows, entityRows, mediaRows] = await Promise.all([
@@ -427,7 +475,11 @@ export function createPostsService(
       repository.findEntitiesForPosts(ids),
       repository.findMediaForPosts(ids),
     ])
-    const authors = await repository.findAuthorsByIds([...new Set(rows.map((row) => row.authorId))])
+    const authorIds = [...new Set(rows.map((row) => row.authorId))]
+    const [authors, blockedAuthorIds] = await Promise.all([
+      repository.findAuthorsByIds(authorIds),
+      findBlockedAuthorIds(viewerId, authorIds),
+    ])
     const rowsById = new Map(rows.map((row) => [row.id, row]))
     const authorsById = new Map(authors.map((author) => [author.id, author]))
     const countersByPostId = new Map(countersRows.map((row) => [row.postId, row]))
@@ -438,7 +490,7 @@ export function createPostsService(
     for (const id of ids) {
       const row = rowsById.get(id)
       const author = row && authorsById.get(row.authorId)
-      if (!row || !author) continue
+      if (!row || !author || blockedAuthorIds.has(row.authorId)) continue
       items.push(
         toPostDto(
           row,
@@ -458,31 +510,50 @@ export function createPostsService(
     postId: bigint,
     limit: number,
     cursor: bigint | null,
+    viewerId?: bigint,
   ): Promise<{ items: Post[]; hasMore: boolean }> {
-    if (!(await repository.findPostById(postId))) {
+    const parent = await repository.findPostById(postId)
+    if (!parent) throw new NotFoundError('post', postId.toString())
+    // A block with the *thread root's* author hides the whole reply list —
+    // ROADMAP.md 2.6, mirrors getById's "404, not a distinct error" posture.
+    // Replies from an unrelated blocked third party are filtered instead,
+    // individually, by the getManyByIds call below.
+    if ((await findBlockedAuthorIds(viewerId, [parent.authorId])).size > 0) {
       throw new NotFoundError('post', postId.toString())
     }
     const rows = await repository.findDirectReplies(postId, limit + 1, cursor)
     const hasMore = rows.length > limit
     const page = hasMore ? rows.slice(0, limit) : rows
-    const items = await getManyByIds(page.map((row) => row.id))
+    const items = await getManyByIds(
+      page.map((row) => row.id),
+      viewerId,
+    )
     return { items, hasMore }
   }
 
-  /** GET /posts/:id/thread (ROADMAP.md 2.1): the ancestor chain root-first, the post itself, and its first page of direct replies. */
-  async function getThread(postId: bigint): Promise<{
+  /**
+   * GET /posts/:id/thread (ROADMAP.md 2.1): the ancestor chain root-first,
+   * the post itself, and its first page of direct replies. `viewerId`
+   * (ROADMAP.md 2.6): a block with the focused post's author 404s the whole
+   * thread via `getById`; a block with an ancestor's or a reply's author
+   * just drops that one post, same as a deleted one would.
+   */
+  async function getThread(
+    postId: bigint,
+    viewerId?: bigint,
+  ): Promise<{
     ancestors: Post[]
     post: Post
     replies: Post[]
     hasMoreReplies: boolean
   }> {
-    const post = await getById(postId)
+    const post = await getById(postId, viewerId)
     const [ancestorRows, repliesPage] = await Promise.all([
       repository.findAncestors(postId),
-      listReplies(postId, THREAD_REPLIES_PAGE_SIZE, null),
+      listReplies(postId, THREAD_REPLIES_PAGE_SIZE, null, viewerId),
     ])
     // findAncestors returns closest-parent-first; reverse for root-first display.
-    const ancestors = await getManyByIds(ancestorRows.map((row) => row.id).reverse())
+    const ancestors = await getManyByIds(ancestorRows.map((row) => row.id).reverse(), viewerId)
 
     return {
       ancestors,

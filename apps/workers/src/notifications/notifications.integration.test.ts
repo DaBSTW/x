@@ -3,8 +3,10 @@ import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testconta
 import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis'
 import {
   type Database,
+  blocks,
   createDatabase,
   migrationsFolderUrl,
+  mutes,
   notifications,
   userCounters,
   users,
@@ -130,6 +132,76 @@ describe('notifications worker', () => {
     expect(await redis.exists(unreadCountKey(recipient))).toBe(0)
     const rows = await db.select().from(notifications).where(eq(notifications.userId, recipient))
     expect(rows).toHaveLength(1)
+
+    await queue.close()
+    await handle.close()
+  }, 30_000)
+
+  it('suppresses a notification across an active block, in either direction, without touching the counter', async () => {
+    const recipient = await insertUser('rcpt')
+    const actor = await insertUser('actr')
+    await db.insert(blocks).values({ blockerId: actor, blockedId: recipient })
+    await redis.set(unreadCountKey(recipient), 0)
+
+    const handle = createNotificationsWorker({
+      repository: createNotificationsRepository(db),
+      redisUrl,
+      concurrency: 1,
+    })
+    const queue = new Queue<NotificationJobData>(NOTIFICATIONS_QUEUE_NAME, {
+      connection: new Redis(redisUrl, { maxRetriesPerRequest: null }),
+    })
+
+    const completed = new Promise<void>((resolve, reject) => {
+      handle.worker.on('completed', () => resolve())
+      handle.worker.on('failed', (_job, error) => reject(error))
+    })
+    await queue.add('notify', {
+      userId: recipient.toString(),
+      kind: 'follow',
+      actorId: actor.toString(),
+      postId: null,
+      groupKey: 'follow',
+    })
+    await completed
+
+    const rows = await db.select().from(notifications).where(eq(notifications.userId, recipient))
+    expect(rows).toHaveLength(0)
+    expect(await redis.get(unreadCountKey(recipient))).toBe('0')
+
+    await queue.close()
+    await handle.close()
+  }, 30_000)
+
+  it('suppresses a notification the recipient muted the actor for', async () => {
+    const recipient = await insertUser('rcpt')
+    const actor = await insertUser('actr')
+    await db.insert(mutes).values({ muterId: recipient, mutedId: actor })
+
+    const handle = createNotificationsWorker({
+      repository: createNotificationsRepository(db),
+      redisUrl,
+      concurrency: 1,
+    })
+    const queue = new Queue<NotificationJobData>(NOTIFICATIONS_QUEUE_NAME, {
+      connection: new Redis(redisUrl, { maxRetriesPerRequest: null }),
+    })
+
+    const completed = new Promise<void>((resolve, reject) => {
+      handle.worker.on('completed', () => resolve())
+      handle.worker.on('failed', (_job, error) => reject(error))
+    })
+    await queue.add('notify', {
+      userId: recipient.toString(),
+      kind: 'like',
+      actorId: actor.toString(),
+      postId: '1',
+      groupKey: 'like:1',
+    })
+    await completed
+
+    const rows = await db.select().from(notifications).where(eq(notifications.userId, recipient))
+    expect(rows).toHaveLength(0)
 
     await queue.close()
     await handle.close()

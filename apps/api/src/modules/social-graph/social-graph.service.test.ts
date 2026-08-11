@@ -92,6 +92,21 @@ function createFakeRepository() {
     async findMute(muterId, mutedId) {
       return mutesList.find((m) => m.muterId === muterId && m.mutedId === mutedId) ?? null
     },
+    async findBlockedAuthorIds(viewerId, authorIds) {
+      const ids = new Set(authorIds)
+      const result = new Set<bigint>()
+      for (const b of blocksList) {
+        if (b.blockerId === viewerId && ids.has(b.blockedId)) result.add(b.blockedId)
+        if (b.blockedId === viewerId && ids.has(b.blockerId)) result.add(b.blockerId)
+      }
+      return result
+    },
+    async findMutedAuthorIds(viewerId, authorIds) {
+      const ids = new Set(authorIds)
+      return new Set(
+        mutesList.filter((m) => m.muterId === viewerId && ids.has(m.mutedId)).map((m) => m.mutedId),
+      )
+    },
     async insertMute(muterId, mutedId) {
       mutesList.push({ muterId, mutedId, createdAt: new Date() })
     },
@@ -134,9 +149,17 @@ function createFakeRepository() {
       const alreadyFollowed = new Set(
         followsList.filter((f) => f.followerId === userId).map((f) => f.followeeId),
       )
+      const blockedEitherWay = new Set(
+        blocksList
+          .filter((b) => b.blockerId === userId || b.blockedId === userId)
+          .map((b) => (b.blockerId === userId ? b.blockedId : b.blockerId)),
+      )
       const followerCountOf = (id: bigint) => followsList.filter((f) => f.followeeId === id).length
       return [...users.values()]
-        .filter((user) => user.id !== userId && !alreadyFollowed.has(user.id))
+        .filter(
+          (user) =>
+            user.id !== userId && !alreadyFollowed.has(user.id) && !blockedEitherWay.has(user.id),
+        )
         .sort((a, b) => followerCountOf(b.id) - followerCountOf(a.id))
         .slice(0, limit)
     },
@@ -207,6 +230,24 @@ describe('createSocialGraphService', () => {
       await service.follow(alice.id, bob.id)
 
       await expect(service.follow(alice.id, bob.id)).rejects.toMatchObject({ code: 'CONFLICT' })
+    })
+
+    it('rejects following a user you have blocked', async () => {
+      const service = createSocialGraphService(repository, redis)
+      const alice = addUser({ username: 'alice' })
+      const bob = addUser({ username: 'bob' })
+      await service.block(alice.id, bob.id)
+
+      await expect(service.follow(alice.id, bob.id)).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    })
+
+    it('rejects following a user who has blocked you', async () => {
+      const service = createSocialGraphService(repository, redis)
+      const alice = addUser({ username: 'alice' })
+      const bob = addUser({ username: 'bob' })
+      await service.block(bob.id, alice.id)
+
+      await expect(service.follow(alice.id, bob.id)).rejects.toMatchObject({ code: 'FORBIDDEN' })
     })
 
     it('publishes a follow notification to the followee', async () => {
@@ -393,6 +434,20 @@ describe('createSocialGraphService', () => {
       const suggestions = await service.getSuggestions(alice.id, 2)
 
       expect(suggestions.map((item) => item.username)).toEqual(['popular', 'quiet'])
+    })
+
+    it('excludes anyone with a block relationship in either direction', async () => {
+      const service = createSocialGraphService(repository, redis)
+      const alice = addUser({ username: 'alice' })
+      const blockedByAlice = addUser({ username: 'blocked-by-alice' })
+      const blocksAlice = addUser({ username: 'blocks-alice' })
+      addUser({ username: 'carol' })
+      await service.block(alice.id, blockedByAlice.id)
+      await service.block(blocksAlice.id, alice.id)
+
+      const suggestions = await service.getSuggestions(alice.id, 20)
+
+      expect(suggestions.map((item) => item.username)).toEqual(['carol'])
     })
   })
 })
