@@ -161,6 +161,27 @@ describe('createSocialGraphService', () => {
 
       await expect(service.follow(alice.id, bob.id)).rejects.toMatchObject({ code: 'CONFLICT' })
     })
+
+    it('publishes a follow notification to the followee', async () => {
+      const published: unknown[] = []
+      const service = createSocialGraphService(repository, redis, async (data) => {
+        published.push(data)
+      })
+      const alice = addUser({ username: 'alice' })
+      const bob = addUser({ username: 'bob' })
+
+      await service.follow(alice.id, bob.id)
+
+      expect(published).toEqual([
+        {
+          userId: bob.id.toString(),
+          kind: 'follow',
+          actorId: alice.id.toString(),
+          postId: null,
+          groupKey: 'follow',
+        },
+      ])
+    })
   })
 
   describe('unfollow', () => {

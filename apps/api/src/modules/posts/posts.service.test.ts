@@ -165,12 +165,14 @@ describe('createPostsService', () => {
   let repository: PostRepository
   let authorsById: Map<bigint, AuthorRow>
   let author: AuthorRow
+  let published: unknown[]
 
   beforeEach(() => {
     const fake = createFakeRepository()
     repository = fake.repository
     authorsById = fake.authorsById
     author = addAuthor(authorsById)
+    published = []
   })
 
   describe('create', () => {
@@ -271,6 +273,73 @@ describe('createPostsService', () => {
           isSensitive: false,
         }),
       ).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    })
+
+    it('notifies the parent author of a reply, but not on a self-reply', async () => {
+      const service = createPostsService(repository, undefined, async (data) => {
+        published.push(data)
+      })
+      const stranger = addAuthor(authorsById, { id: generateId(), username: 'eve' })
+      const root = await service.create(stranger.id, {
+        text: 'raíz',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      published.length = 0 // drop the (none, since root has no parent) noise
+
+      await service.create(author.id, {
+        text: 'una respuesta',
+        inReplyToId: BigInt(root.id),
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      expect(published).toMatchObject([{ userId: stranger.id.toString(), kind: 'reply' }])
+
+      published.length = 0
+      await service.create(stranger.id, {
+        text: 'me respondo a mí mismo',
+        inReplyToId: BigInt(root.id),
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      expect(published).toEqual([])
+    })
+
+    it('notifies the quoted author of a quote', async () => {
+      const service = createPostsService(repository, undefined, async (data) => {
+        published.push(data)
+      })
+      const stranger = addAuthor(authorsById, { id: generateId(), username: 'eve' })
+      const quoted = await service.create(stranger.id, {
+        text: 'post citable',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      published.length = 0
+
+      await service.create(author.id, {
+        text: 'una cita',
+        quotedPostId: BigInt(quoted.id),
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      expect(published).toMatchObject([{ userId: stranger.id.toString(), kind: 'quote' }])
+    })
+
+    it('notifies each mentioned user, but not for a self-mention', async () => {
+      const service = createPostsService(repository, undefined, async (data) => {
+        published.push(data)
+      })
+      addAuthor(authorsById, { id: generateId(), username: 'bob' })
+
+      await service.create(author.id, {
+        text: `hola @bob @${author.username}`,
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      expect(published).toMatchObject([{ kind: 'mention' }])
     })
 
     it('invokes onPostCreated with the new post and author ids', async () => {
@@ -407,6 +476,27 @@ describe('createPostsService', () => {
       const repost = await service.repost(author.id, BigInt(original.id))
 
       expect(calls).toEqual([BigInt(repost.id)])
+    })
+
+    it('notifies the original author, but not on a self-repost', async () => {
+      const service = createPostsService(repository, undefined, async (data) => {
+        published.push(data)
+      })
+      const original = await service.create(author.id, {
+        text: 'post original',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      const reposter = addAuthor(authorsById, { id: generateId(), username: 'bob' })
+      published.length = 0
+
+      await service.repost(reposter.id, BigInt(original.id))
+      expect(published).toMatchObject([{ userId: author.id.toString(), kind: 'repost' }])
+
+      published.length = 0
+      await service.unrepost(reposter.id, BigInt(original.id))
+      await service.repost(author.id, BigInt(original.id))
+      expect(published).toEqual([])
     })
   })
 

@@ -7,6 +7,11 @@ const envSchema = z.object({
   // How many followers a single fan-out job hydrates and pipelines per
   // Redis round trip — SPECS.md §6.1.
   FANOUT_WORKER_CONCURRENCY: z.coerce.number().int().positive().default(4),
+  NOTIFICATIONS_WORKER_CONCURRENCY: z.coerce.number().int().positive().default(4),
+  // Snowflake ID worker bits — this process generates notification ids, so
+  // it needs its own value in a multi-instance deployment, same as apps/api
+  // (see .env.example). @x/utils' generateId() reads this directly.
+  WORKER_ID: z.coerce.number().int().min(0).max(1023).default(0),
 })
 
 export type Env = z.infer<typeof envSchema>

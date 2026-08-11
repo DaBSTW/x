@@ -34,4 +34,13 @@ describe('parseEnv', () => {
       EnvValidationError,
     )
   })
+
+  it('coerces WORKER_ID from a string environment value', () => {
+    const env = parseEnv({ ...validEnv, WORKER_ID: '7' })
+    expect(env.WORKER_ID).toBe(7)
+  })
+
+  it('rejects a WORKER_ID outside the valid Snowflake range', () => {
+    expect(() => parseEnv({ ...validEnv, WORKER_ID: '1024' })).toThrow(EnvValidationError)
+  })
 })

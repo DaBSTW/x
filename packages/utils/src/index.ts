@@ -27,6 +27,12 @@ export {
   timelineKey,
 } from './timeline-constants.js'
 export {
+  NOTIFICATION_KINDS,
+  NOTIFICATIONS_QUEUE_NAME,
+  unreadCountKey,
+} from './notifications.js'
+export type { NotificationJobData, NotificationKind } from './notifications.js'
+export {
   AppError,
   BlockedByUserError,
   ConflictError,

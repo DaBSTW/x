@@ -1,5 +1,5 @@
 import type { Post } from '@x/contracts'
-import { ConflictError, NotFoundError } from '@x/utils'
+import { ConflictError, NotFoundError, type NotificationJobData } from '@x/utils'
 import type { Redis } from 'ioredis'
 import { type CachedCounters, bumpCounter, zeroCounters } from '../../lib/post-counters-cache.js'
 import type { PostRepository } from '../posts/posts.repository.js'
@@ -10,15 +10,27 @@ export type InteractionsService = ReturnType<typeof createInteractionsService>
 
 /** Interactions only ever reads a post's existence and counters, never writes posts directly. */
 type PostLookup = Pick<PostRepository, 'findPostById' | 'findPostCounters'>
-/** Post creation/deletion for reposts stays owned by posts.service.ts (fan-out lives there). */
+/** Post creation/deletion for reposts stays owned by posts.service.ts (fan-out and its own repost-notification live there). */
 type RepostDelegate = Pick<PostsService, 'repost' | 'unrepost'>
+/** Called for a like — bookmarks are private and never notify (not in NOTIFICATION_KINDS). */
+export type PublishNotification = (data: NotificationJobData) => Promise<void>
 
 export function createInteractionsService(
   repository: InteractionsRepository,
   postsRepository: PostLookup,
   postsService: RepostDelegate,
   redis: Redis,
+  publishNotification?: PublishNotification,
 ) {
+  async function safePublish(data: NotificationJobData): Promise<void> {
+    if (!publishNotification) return
+    try {
+      await publishNotification(data)
+    } catch {
+      // Swallowed intentionally — see posts.service.ts's onPostCreated for why.
+    }
+  }
+
   async function fetchBaseline(postId: bigint): Promise<CachedCounters> {
     const counters = await postsRepository.findPostCounters(postId)
     if (!counters) return zeroCounters()
@@ -31,19 +43,29 @@ export function createInteractionsService(
     }
   }
 
-  async function assertPostExists(postId: bigint): Promise<void> {
-    if (!(await postsRepository.findPostById(postId))) {
-      throw new NotFoundError('post', postId.toString())
-    }
+  async function findPostOrThrow(postId: bigint) {
+    const post = await postsRepository.findPostById(postId)
+    if (!post) throw new NotFoundError('post', postId.toString())
+    return post
   }
 
   async function like(userId: bigint, postId: bigint): Promise<void> {
-    await assertPostExists(postId)
+    const post = await findPostOrThrow(postId)
     if (await repository.findLike(userId, postId)) {
       throw new ConflictError('already liked this post')
     }
     await repository.insertLike(userId, postId)
     await bumpCounter(redis, postId, 'likes', 1, () => fetchBaseline(postId))
+
+    if (post.authorId !== userId) {
+      await safePublish({
+        userId: post.authorId.toString(),
+        kind: 'like',
+        actorId: userId.toString(),
+        postId: postId.toString(),
+        groupKey: `like:${postId}`,
+      })
+    }
   }
 
   async function unlike(userId: bigint, postId: bigint): Promise<void> {
@@ -53,7 +75,9 @@ export function createInteractionsService(
   }
 
   async function bookmark(userId: bigint, postId: bigint): Promise<void> {
-    await assertPostExists(postId)
+    if (!(await postsRepository.findPostById(postId))) {
+      throw new NotFoundError('post', postId.toString())
+    }
     if (await repository.findBookmark(userId, postId)) {
       throw new ConflictError('already bookmarked this post')
     }

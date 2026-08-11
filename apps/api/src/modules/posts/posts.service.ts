@@ -4,6 +4,7 @@ import {
   ForbiddenError,
   MAX_POST_GRAPHEMES,
   NotFoundError,
+  type NotificationJobData,
   ValidationError,
   countCharacters,
   generateId,
@@ -34,7 +35,25 @@ export type PostsService = ReturnType<typeof createPostsService>
 /** Called after a post is durably persisted, to trigger timeline fan-out — SPECS.md §6.1. */
 export type OnPostCreated = (postId: bigint, authorId: bigint) => Promise<void>
 
-export function createPostsService(repository: PostRepository, onPostCreated?: OnPostCreated) {
+/** Called for each notification-worthy event a post produces (reply, quote, mention) — ROADMAP.md 1.7. */
+export type PublishNotification = (data: NotificationJobData) => Promise<void>
+
+export function createPostsService(
+  repository: PostRepository,
+  onPostCreated?: OnPostCreated,
+  publishNotification?: PublishNotification,
+) {
+  // Same failure posture as onPostCreated: a queue outage must never fail
+  // the write that triggered the notification.
+  async function safePublish(data: NotificationJobData): Promise<void> {
+    if (!publishNotification) return
+    try {
+      await publishNotification(data)
+    } catch {
+      // Swallowed intentionally.
+    }
+  }
+
   async function create(authorId: bigint, input: CreatePostServiceInput): Promise<Post> {
     const graphemeCount = countCharacters(input.text)
     if (graphemeCount === 0) {
@@ -59,15 +78,19 @@ export function createPostsService(repository: PostRepository, onPostCreated?: O
 
     let kind: 'original' | 'reply' | 'quote' = 'original'
     let conversationId: bigint | null = null
+    let parentAuthorId: bigint | null = null
+    let quotedAuthorId: bigint | null = null
 
     if (input.inReplyToId) {
       const parent = await repository.findPostById(input.inReplyToId)
       if (!parent) throw new NotFoundError('post', input.inReplyToId.toString())
       conversationId = parent.conversationId ?? parent.id
+      parentAuthorId = parent.authorId
       kind = 'reply'
     } else if (input.quotedPostId) {
       const quoted = await repository.findPostById(input.quotedPostId)
       if (!quoted) throw new NotFoundError('post', input.quotedPostId.toString())
+      quotedAuthorId = quoted.authorId
       kind = 'quote'
     }
 
@@ -118,6 +141,36 @@ export function createPostsService(repository: PostRepository, onPostCreated?: O
       } catch {
         // Swallowed intentionally — see comment above.
       }
+    }
+
+    // Nobody gets notified of their own reply/quote/self-mention.
+    if (parentAuthorId !== null && parentAuthorId !== authorId) {
+      await safePublish({
+        userId: parentAuthorId.toString(),
+        kind: 'reply',
+        actorId: authorId.toString(),
+        postId: id.toString(),
+        groupKey: null,
+      })
+    }
+    if (quotedAuthorId !== null && quotedAuthorId !== authorId) {
+      await safePublish({
+        userId: quotedAuthorId.toString(),
+        kind: 'quote',
+        actorId: authorId.toString(),
+        postId: id.toString(),
+        groupKey: null,
+      })
+    }
+    for (const mentionedId of new Set(mentionIds.values())) {
+      if (mentionedId === authorId) continue
+      await safePublish({
+        userId: mentionedId.toString(),
+        kind: 'mention',
+        actorId: authorId.toString(),
+        postId: id.toString(),
+        groupKey: null,
+      })
     }
 
     return toPostDto(
@@ -183,6 +236,16 @@ export function createPostsService(repository: PostRepository, onPostCreated?: O
       } catch {
         // Swallowed intentionally — see the comment in create().
       }
+    }
+
+    if (original.authorId !== authorId) {
+      await safePublish({
+        userId: original.authorId.toString(),
+        kind: 'repost',
+        actorId: authorId.toString(),
+        postId: id.toString(),
+        groupKey: `repost:${originalPostId}`,
+      })
     }
 
     return toPostDto(

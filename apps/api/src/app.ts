@@ -13,12 +13,16 @@ import {
 import type { Env } from './env.js'
 import { createFanoutQueue } from './lib/fanout-queue.js'
 import { createMailer } from './lib/mailer.js'
+import { createNotificationsQueue } from './lib/notifications-queue.js'
 import { createAuthRepository } from './modules/auth/auth.repository.js'
 import { registerAuthRoutes } from './modules/auth/auth.routes.js'
 import { createAuthService } from './modules/auth/auth.service.js'
 import { createInteractionsRepository } from './modules/interactions/interactions.repository.js'
 import { registerInteractionsRoutes } from './modules/interactions/interactions.routes.js'
 import { createInteractionsService } from './modules/interactions/interactions.service.js'
+import { createNotificationsRepository } from './modules/notifications/notifications.repository.js'
+import { registerNotificationsRoutes } from './modules/notifications/notifications.routes.js'
+import { createNotificationsService } from './modules/notifications/notifications.service.js'
 import { createPostsRepository } from './modules/posts/posts.repository.js'
 import { registerPostsRoutes } from './modules/posts/posts.routes.js'
 import { createPostsService } from './modules/posts/posts.service.js'
@@ -87,17 +91,27 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   })
 
   const fanoutQueue = createFanoutQueue(env.REDIS_URL)
+  const notificationsQueue = createNotificationsQueue(env.REDIS_URL)
   app.addHook('onClose', async () => {
-    await fanoutQueue.close()
+    await Promise.all([fanoutQueue.close(), notificationsQueue.close()])
   })
+  const publishNotification = notificationsQueue.enqueue
 
   const postsRepository = createPostsRepository(app.db)
-  const postsService = createPostsService(postsRepository, async (postId, authorId) => {
-    await fanoutQueue.enqueue({ postId: postId.toString(), authorId: authorId.toString() })
-  })
+  const postsService = createPostsService(
+    postsRepository,
+    async (postId, authorId) => {
+      await fanoutQueue.enqueue({ postId: postId.toString(), authorId: authorId.toString() })
+    },
+    publishNotification,
+  )
 
   const socialGraphRepository = createSocialGraphRepository(app.db)
-  const socialGraphService = createSocialGraphService(socialGraphRepository, app.redis)
+  const socialGraphService = createSocialGraphService(
+    socialGraphRepository,
+    app.redis,
+    publishNotification,
+  )
 
   const timelineRepository = createTimelineRepository(app.db, app.redis)
   const timelineService = createTimelineService(timelineRepository, postsService)
@@ -108,10 +122,14 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
     postsRepository,
     postsService,
     app.redis,
+    publishNotification,
   )
 
   const profilesRepository = createProfilesRepository(app.db)
   const profilesService = createProfilesService(profilesRepository)
+
+  const notificationsRepository = createNotificationsRepository(app.db)
+  const notificationsService = createNotificationsService(notificationsRepository, app.redis)
 
   app.get('/health', async () => ({ status: 'ok' }))
 
@@ -158,6 +176,13 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   await app.register(
     async (instance) => {
       await registerProfilesRoutes(instance, { profilesService, tokenService })
+    },
+    { prefix: '/v1' },
+  )
+
+  await app.register(
+    async (instance) => {
+      await registerNotificationsRoutes(instance, { notificationsService, tokenService })
     },
     { prefix: '/v1' },
   )

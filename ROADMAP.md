@@ -186,12 +186,12 @@
 
 ### 1.7 Notificaciones básicas 🟡
 
-- [ ] Tabla `notifications` + worker que consume eventos de interacción
-- [ ] Agrupación por `group_key` en ventana de 1 h
-- [ ] `GET /notifications` paginado + `GET /notifications/unread-count` (Redis)
-- [ ] `POST /notifications/read` hasta un cursor
-- [ ] Filtrado por bloqueos/silencios y preferencias del receptor
-- [ ] Polling cada 60 s en el cliente (WebSocket llega en fase 2)
+- [x] Tabla `notifications` (particionada por mes, igual que `posts` — SPECS.md §14.1) + worker que consume eventos de interacción (`apps/workers/src/notifications/`), publicados desde `posts.service` (reply/quote/mention/repost), `interactions.service` (like) y `social-graph.service` (follow) vía una cola BullMQ dedicada
+- [x] `group_key` calculado y almacenado por evento (`like:{postId}`, `repost:{postId}`, `follow`); reply/quote/mention quedan sin agrupar (cada uno es individualmente relevante). ⚪ El colapso visual "Ana y 12 más..." en una sola fila de UI a partir de ese `group_key` (ventana de 1h) no está implementado — cada evento se lista hoy como una notificación individual; `group_key` viaja en la respuesta para que el cliente lo haga, o para una iteración futura del servidor
+- [x] `GET /notifications` paginado (cursor por Snowflake id) + `GET /notifications/unread-count` (Redis, autoritativo para lectura — mismo patrón que los contadores de posts: seed perezoso desde Postgres en frío, ajuste incremental en caliente)
+- [x] `POST /notifications/read` hasta un cursor — decrementa el contador de Redis exactamente en lo que cambió, nunca un reseteo a ciegas
+- [ ] Filtrado por bloqueos/silencios y preferencias del receptor — depende de bloqueos/silencios, diferido junto con ellos en 1.2
+- [ ] Polling cada 60 s en el cliente (WebSocket llega en fase 2) — trabajo de `apps/web`, no de la API
 
 ### 1.8 Frontend del MVP 🟡
 

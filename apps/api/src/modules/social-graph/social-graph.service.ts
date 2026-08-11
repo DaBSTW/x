@@ -1,4 +1,4 @@
-import { ConflictError, NotFoundError, ValidationError } from '@x/utils'
+import { ConflictError, NotFoundError, type NotificationJobData, ValidationError } from '@x/utils'
 import type { Redis } from 'ioredis'
 import { addToFollowingCache, removeFromFollowingCache } from '../../lib/following-cache.js'
 import type { SocialGraphRepository } from './social-graph.repository.js'
@@ -13,7 +13,13 @@ export type FollowListItem = {
 
 export type SocialGraphService = ReturnType<typeof createSocialGraphService>
 
-export function createSocialGraphService(repository: SocialGraphRepository, redis: Redis) {
+export type PublishNotification = (data: NotificationJobData) => Promise<void>
+
+export function createSocialGraphService(
+  repository: SocialGraphRepository,
+  redis: Redis,
+  publishNotification?: PublishNotification,
+) {
   async function follow(followerId: bigint, followeeId: bigint): Promise<void> {
     if (followerId === followeeId) {
       throw new ValidationError('cannot follow yourself')
@@ -27,6 +33,25 @@ export function createSocialGraphService(repository: SocialGraphRepository, redi
 
     await repository.insertFollow(followerId, followeeId)
     await addToFollowingCache(redis, followerId, followeeId)
+
+    if (publishNotification) {
+      try {
+        await publishNotification({
+          userId: followeeId.toString(),
+          kind: 'follow',
+          actorId: followerId.toString(),
+          postId: null,
+          // Not per-actor: every "X followed you" for this recipient shares
+          // one bucket — `user_id` (implicit in every query) already scopes
+          // it to the recipient, so the key only needs to say "this is a
+          // follow event", the same way `like:{postId}` says "this is a
+          // like on that specific post".
+          groupKey: 'follow',
+        })
+      } catch {
+        // Swallowed intentionally — see posts.service.ts's onPostCreated for why.
+      }
+    }
   }
 
   async function unfollow(followerId: bigint, followeeId: bigint): Promise<void> {

@@ -110,18 +110,25 @@ describe('createInteractionsService', () => {
   let interactionsRepository: InteractionsRepository
   let postId: bigint
   let userId: bigint
+  let postAuthorId: bigint
 
   beforeEach(() => {
     redis = createFakeRedis()
     interactionsRepository = createFakeInteractionsRepository()
     postId = generateId()
     userId = generateId()
+    postAuthorId = generateId()
   })
 
-  function createService(overrides: { postExists?: boolean } = {}) {
+  function createService(
+    overrides: { postExists?: boolean } = {},
+    publishNotification?: (data: unknown) => Promise<void>,
+  ) {
     const postsRepository = {
       async findPostById() {
-        return overrides.postExists === false ? null : ({ id: postId } as DbPost)
+        return overrides.postExists === false
+          ? null
+          : ({ id: postId, authorId: postAuthorId } as DbPost)
       },
       async findPostCounters() {
         return makeCounters(postId)
@@ -146,7 +153,13 @@ describe('createInteractionsService', () => {
       }),
       unrepost: async () => true,
     }
-    return createInteractionsService(interactionsRepository, postsRepository, postsService, redis)
+    return createInteractionsService(
+      interactionsRepository,
+      postsRepository,
+      postsService,
+      redis,
+      publishNotification,
+    )
   }
 
   describe('like / unlike', () => {
@@ -179,6 +192,36 @@ describe('createInteractionsService', () => {
 
       await service.unlike(userId, postId) // already gone — must not go negative
       expect(await redis.hgetall(`post:${postId}:counters`)).toMatchObject({ likes: '0' })
+    })
+
+    it('publishes a like notification to the post author', async () => {
+      const published: unknown[] = []
+      const service = createService({}, async (data) => {
+        published.push(data)
+      })
+
+      await service.like(userId, postId)
+
+      expect(published).toEqual([
+        {
+          userId: postAuthorId.toString(),
+          kind: 'like',
+          actorId: userId.toString(),
+          postId: postId.toString(),
+          groupKey: `like:${postId}`,
+        },
+      ])
+    })
+
+    it('does not notify when liking your own post', async () => {
+      const published: unknown[] = []
+      const service = createService({}, async (data) => {
+        published.push(data)
+      })
+
+      await service.like(postAuthorId, postId)
+
+      expect(published).toEqual([])
     })
   })
 
