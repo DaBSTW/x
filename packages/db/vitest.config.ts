@@ -2,6 +2,14 @@ import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
   test: {
+    // generate.test.ts creates a few thousand users/posts/follows in
+    // memory — comfortably under 5s standalone, but this monorepo's full
+    // `turbo run typecheck test build` runs every package's build and test
+    // suite in parallel, and enough concurrent CPU-bound work elsewhere
+    // (sharp/AVIF encoding, argon2 hashing, tsc, webpack) can push even
+    // legitimate work past the default budget — same reasoning as
+    // packages/utils' and apps/api's own vitest.config.ts.
+    testTimeout: 15_000,
     exclude: ['**/node_modules/**', '**/migrations/**'],
     coverage: {
       provider: 'v8',

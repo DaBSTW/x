@@ -41,10 +41,14 @@ type FakeUser = {
   isVerified: boolean
 }
 type FakeFollow = { followerId: bigint; followeeId: bigint; createdAt: Date }
+type FakeBlock = { blockerId: bigint; blockedId: bigint; createdAt: Date }
+type FakeMute = { muterId: bigint; mutedId: bigint; createdAt: Date }
 
 function createFakeRepository() {
   const users = new Map<bigint, FakeUser>()
   const followsList: FakeFollow[] = []
+  const blocksList: FakeBlock[] = []
+  const mutesList: FakeMute[] = []
 
   const repository: SocialGraphRepository = {
     async findFollow(followerId, followeeId) {
@@ -61,6 +65,39 @@ function createFakeRepository() {
         (f) => f.followerId === followerId && f.followeeId === followeeId,
       )
       if (index >= 0) followsList.splice(index, 1)
+    },
+    async findBlock(blockerId, blockedId) {
+      return blocksList.find((b) => b.blockerId === blockerId && b.blockedId === blockedId) ?? null
+    },
+    async insertBlock(blockerId, blockedId) {
+      blocksList.push({ blockerId, blockedId, createdAt: new Date() })
+      // Mirrors the real repository's transaction: a block drops any follow
+      // in either direction.
+      for (const [followerId, followeeId] of [
+        [blockerId, blockedId],
+        [blockedId, blockerId],
+      ] as const) {
+        const index = followsList.findIndex(
+          (f) => f.followerId === followerId && f.followeeId === followeeId,
+        )
+        if (index >= 0) followsList.splice(index, 1)
+      }
+    },
+    async deleteBlock(blockerId, blockedId) {
+      const index = blocksList.findIndex(
+        (b) => b.blockerId === blockerId && b.blockedId === blockedId,
+      )
+      if (index >= 0) blocksList.splice(index, 1)
+    },
+    async findMute(muterId, mutedId) {
+      return mutesList.find((m) => m.muterId === muterId && m.mutedId === mutedId) ?? null
+    },
+    async insertMute(muterId, mutedId) {
+      mutesList.push({ muterId, mutedId, createdAt: new Date() })
+    },
+    async deleteMute(muterId, mutedId) {
+      const index = mutesList.findIndex((m) => m.muterId === muterId && m.mutedId === mutedId)
+      if (index >= 0) mutesList.splice(index, 1)
     },
     async findUserIdByUsername(usernameLower) {
       for (const user of users.values()) {
@@ -205,6 +242,107 @@ describe('createSocialGraphService', () => {
 
       const page = await service.listFollowing('alice', 20, null)
       expect(page.items).toHaveLength(0)
+    })
+  })
+
+  describe('block', () => {
+    it('creates a block relationship', async () => {
+      const service = createSocialGraphService(repository, redis)
+      const alice = addUser({ username: 'alice' })
+      const bob = addUser({ username: 'bob' })
+
+      await service.block(alice.id, bob.id)
+
+      await expect(service.block(alice.id, bob.id)).rejects.toMatchObject({ code: 'CONFLICT' })
+    })
+
+    it('rejects blocking yourself', async () => {
+      const service = createSocialGraphService(repository, redis)
+      const alice = addUser({ username: 'alice' })
+
+      await expect(service.block(alice.id, alice.id)).rejects.toMatchObject({
+        code: 'VALIDATION_ERROR',
+      })
+    })
+
+    it('rejects blocking a nonexistent user', async () => {
+      const service = createSocialGraphService(repository, redis)
+      const alice = addUser({ username: 'alice' })
+
+      await expect(service.block(alice.id, 999999999999999999n)).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      })
+    })
+
+    it('removes a mutual follow in both directions', async () => {
+      const service = createSocialGraphService(repository, redis)
+      const alice = addUser({ username: 'alice' })
+      const bob = addUser({ username: 'bob' })
+      await service.follow(alice.id, bob.id)
+      await service.follow(bob.id, alice.id)
+
+      await service.block(alice.id, bob.id)
+
+      expect((await service.listFollowing('alice', 20, null)).items).toHaveLength(0)
+      expect((await service.listFollowing('bob', 20, null)).items).toHaveLength(0)
+    })
+  })
+
+  describe('unblock', () => {
+    it('removes the block relationship, allowing it to be recreated', async () => {
+      const service = createSocialGraphService(repository, redis)
+      const alice = addUser({ username: 'alice' })
+      const bob = addUser({ username: 'bob' })
+      await service.block(alice.id, bob.id)
+
+      await service.unblock(alice.id, bob.id)
+
+      await expect(service.block(alice.id, bob.id)).resolves.toBeUndefined()
+    })
+  })
+
+  describe('mute', () => {
+    it('creates a mute relationship', async () => {
+      const service = createSocialGraphService(repository, redis)
+      const alice = addUser({ username: 'alice' })
+      const bob = addUser({ username: 'bob' })
+
+      await service.mute(alice.id, bob.id)
+
+      await expect(service.mute(alice.id, bob.id)).rejects.toMatchObject({ code: 'CONFLICT' })
+    })
+
+    it('rejects muting yourself', async () => {
+      const service = createSocialGraphService(repository, redis)
+      const alice = addUser({ username: 'alice' })
+
+      await expect(service.mute(alice.id, alice.id)).rejects.toMatchObject({
+        code: 'VALIDATION_ERROR',
+      })
+    })
+
+    it('does not affect an existing follow', async () => {
+      const service = createSocialGraphService(repository, redis)
+      const alice = addUser({ username: 'alice' })
+      const bob = addUser({ username: 'bob' })
+      await service.follow(alice.id, bob.id)
+
+      await service.mute(alice.id, bob.id)
+
+      expect((await service.listFollowing('alice', 20, null)).items).toHaveLength(1)
+    })
+  })
+
+  describe('unmute', () => {
+    it('removes the mute relationship, allowing it to be recreated', async () => {
+      const service = createSocialGraphService(repository, redis)
+      const alice = addUser({ username: 'alice' })
+      const bob = addUser({ username: 'bob' })
+      await service.mute(alice.id, bob.id)
+
+      await service.unmute(alice.id, bob.id)
+
+      await expect(service.mute(alice.id, bob.id)).resolves.toBeUndefined()
     })
   })
 

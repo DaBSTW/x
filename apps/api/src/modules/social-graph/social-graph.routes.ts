@@ -63,6 +63,82 @@ export async function registerSocialGraphRoutes(
     },
   )
 
+  // Tables + endpoints only (ROADMAP.md 1.2) — nothing reads these yet to
+  // filter feeds, replies, or search; that application lands in phase 2.
+  server.post(
+    '/users/:id/block',
+    {
+      schema: {
+        params: z.object({ id: snowflakeIdSchema }),
+        response: {
+          204: z.null(),
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+          409: errorResponseSchema,
+        },
+      },
+      preHandler: [requireAuth],
+    },
+    async (request, reply) => {
+      const user = getAuthenticatedUser(request)
+      await socialGraphService.block(user.id, BigInt(request.params.id))
+      return reply.status(204).send(null)
+    },
+  )
+
+  server.delete(
+    '/users/:id/block',
+    {
+      schema: {
+        params: z.object({ id: snowflakeIdSchema }),
+        response: { 204: z.null(), 401: errorResponseSchema },
+      },
+      preHandler: [requireAuth],
+    },
+    async (request, reply) => {
+      const user = getAuthenticatedUser(request)
+      await socialGraphService.unblock(user.id, BigInt(request.params.id))
+      return reply.status(204).send(null)
+    },
+  )
+
+  server.post(
+    '/users/:id/mute',
+    {
+      schema: {
+        params: z.object({ id: snowflakeIdSchema }),
+        response: {
+          204: z.null(),
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+          409: errorResponseSchema,
+        },
+      },
+      preHandler: [requireAuth],
+    },
+    async (request, reply) => {
+      const user = getAuthenticatedUser(request)
+      await socialGraphService.mute(user.id, BigInt(request.params.id))
+      return reply.status(204).send(null)
+    },
+  )
+
+  server.delete(
+    '/users/:id/mute',
+    {
+      schema: {
+        params: z.object({ id: snowflakeIdSchema }),
+        response: { 204: z.null(), 401: errorResponseSchema },
+      },
+      preHandler: [requireAuth],
+    },
+    async (request, reply) => {
+      const user = getAuthenticatedUser(request)
+      await socialGraphService.unmute(user.id, BigInt(request.params.id))
+      return reply.status(204).send(null)
+    },
+  )
+
   // Static segment sharing `/users/*` with profiles.routes.ts's `/users/:username`
   // — find-my-way always prefers the static match, so this can never be
   // captured as a username (verified precedent: profiles.routes.ts's `/users/me`).

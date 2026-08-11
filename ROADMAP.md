@@ -136,7 +136,7 @@
 - [x] Caché en Redis de la lista de seguidos (`SET`, TTL 1 h) para el timeline
 - [x] Validación: no auto-seguirse (bloqueo no aplicado aún — la tabla `blocks` es el bullet ⚪ siguiente, todavía sin construir)
 - [x] `GET /users/suggestions` (SPECS.md §5.4): cuentas más seguidas que el caller aún no sigue, excluyéndose a sí mismo — un solo `LEFT JOIN`, sin bullet propio en la versión original de este roadmap; se añadió al construir el estado vacío del timeline en 1.8
-- [ ] ⚪ `blocks` y `mutes` (tablas + endpoints; la aplicación en filtros va en fase 2)
+- [x] `blocks` y `mutes` (tablas + endpoints — la aplicación en filtros sigue yendo en fase 2, deliberadamente sin tocar aquí: nada en timeline/notificaciones/búsqueda lee estas tablas todavía). Mismo patrón que `follows` en cada capa: `CHECK` de no-auto-bloqueo/silencio en el propio esquema (no solo en el servicio), `POST`/`DELETE /users/:id/block` y `/mute` simétricos a `/follow`. Bloquear es exclusivo con seguir en ambas direcciones — el `INSERT` en `blocks` y el `DELETE` de cualquier `follows` mutuo (con sus contadores) ocurren en la misma transacción, para que un bloqueo nunca conviva con una fila de `follows` obsoleta. Silenciar no toca `follows` en absoluto: es unidireccional y silencioso por diseño, la persona silenciada nunca se entera.
 
 ### 1.3 Timeline cronológico 🔴
 
@@ -193,7 +193,7 @@
 - [x] `group_key` calculado y almacenado por evento (`like:{postId}`, `repost:{postId}`, `follow`); reply/quote/mention quedan sin agrupar (cada uno es individualmente relevante). ⚪ El colapso visual "Ana y 12 más..." en una sola fila de UI a partir de ese `group_key` (ventana de 1h) no está implementado — cada evento se lista hoy como una notificación individual; `group_key` viaja en la respuesta para que el cliente lo haga, o para una iteración futura del servidor
 - [x] `GET /notifications` paginado (cursor por Snowflake id) + `GET /notifications/unread-count` (Redis, autoritativo para lectura — mismo patrón que los contadores de posts: seed perezoso desde Postgres en frío, ajuste incremental en caliente)
 - [x] `POST /notifications/read` hasta un cursor — decrementa el contador de Redis exactamente en lo que cambió, nunca un reseteo a ciegas
-- [ ] Filtrado por bloqueos/silencios y preferencias del receptor — depende de bloqueos/silencios, diferido junto con ellos en 1.2
+- [ ] Filtrado por bloqueos/silencios y preferencias del receptor — `blocks`/`mutes` ya existen (tablas + endpoints, 1.2), pero ninguna ruta de notificaciones las consulta todavía; la aplicación en filtros sigue siendo, deliberadamente, trabajo de fase 2
 - [x] Polling cada 60 s en el cliente (WebSocket llega en fase 2): `useUnreadCount` (`refetchInterval: 60_000`) alimenta la insignia del enlace "Notificaciones" en el shell. `app/(app)/notifications/page.tsx` — nuevo — lista con `useInfiniteQuery` + el mismo sentinel de `IntersectionObserver` que `<ProfilePostList>`, más un botón explícito "Marcar todo como leído" (`POST /notifications/read` hasta el id más reciente visible) en vez de dispararlo solo con un `useEffect` al abrir la página — evita la zona gris de CODESTYLE.md §11 sobre efectos y es un patrón igual de estándar (estilo Gmail). El texto de cada notificación (`lib/notification-text.ts`) es lógica pura y está en el umbral de cobertura, igual que `lib/format.ts`.
 
 ### 1.8 Frontend del MVP 🟡

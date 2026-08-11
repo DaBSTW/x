@@ -59,6 +59,46 @@ export function createSocialGraphService(
     await removeFromFollowingCache(redis, followerId, followeeId)
   }
 
+  async function block(blockerId: bigint, blockedId: bigint): Promise<void> {
+    if (blockerId === blockedId) {
+      throw new ValidationError('cannot block yourself')
+    }
+    if (!(await repository.userExists(blockedId))) {
+      throw new NotFoundError('user', blockedId.toString())
+    }
+    if (await repository.findBlock(blockerId, blockedId)) {
+      throw new ConflictError('already blocking this user')
+    }
+
+    await repository.insertBlock(blockerId, blockedId)
+    // insertBlock may have just dropped a follow in either direction —
+    // evict both cache entries regardless of which (if either) existed,
+    // same no-op-is-safe reasoning as unfollow's own cache eviction.
+    await removeFromFollowingCache(redis, blockerId, blockedId)
+    await removeFromFollowingCache(redis, blockedId, blockerId)
+  }
+
+  async function unblock(blockerId: bigint, blockedId: bigint): Promise<void> {
+    await repository.deleteBlock(blockerId, blockedId)
+  }
+
+  async function mute(muterId: bigint, mutedId: bigint): Promise<void> {
+    if (muterId === mutedId) {
+      throw new ValidationError('cannot mute yourself')
+    }
+    if (!(await repository.userExists(mutedId))) {
+      throw new NotFoundError('user', mutedId.toString())
+    }
+    if (await repository.findMute(muterId, mutedId)) {
+      throw new ConflictError('already muting this user')
+    }
+    await repository.insertMute(muterId, mutedId)
+  }
+
+  async function unmute(muterId: bigint, mutedId: bigint): Promise<void> {
+    await repository.deleteMute(muterId, mutedId)
+  }
+
   async function listFollowers(
     usernameLower: string,
     limit: number,
@@ -88,7 +128,17 @@ export function createSocialGraphService(
     return rows.map((row) => ({ ...row, id: row.id.toString() }))
   }
 
-  return { follow, unfollow, listFollowers, listFollowing, getSuggestions }
+  return {
+    follow,
+    unfollow,
+    block,
+    unblock,
+    mute,
+    unmute,
+    listFollowers,
+    listFollowing,
+    getSuggestions,
+  }
 }
 
 type FollowRow = {

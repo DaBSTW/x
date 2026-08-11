@@ -179,4 +179,132 @@ describe('social graph routes', () => {
     const response = await app.inject({ method: 'GET', url: '/v1/users/suggestions' })
     expect(response.statusCode).toBe(401)
   })
+
+  it('blocks a user, rejects a duplicate block, and unblocks', async () => {
+    const blocker = await registerAndLogin('blockerone', 'blockerone@example.com')
+    const targetProfile = await app.inject({ method: 'GET', url: '/v1/users/bob' })
+    const targetId = targetProfile.json().data.id as string
+
+    const block = await app.inject({
+      method: 'POST',
+      url: `/v1/users/${targetId}/block`,
+      headers: { authorization: `Bearer ${blocker.accessToken}` },
+    })
+    expect(block.statusCode).toBe(204)
+
+    const duplicate = await app.inject({
+      method: 'POST',
+      url: `/v1/users/${targetId}/block`,
+      headers: { authorization: `Bearer ${blocker.accessToken}` },
+    })
+    expect(duplicate.statusCode).toBe(409)
+
+    const unblock = await app.inject({
+      method: 'DELETE',
+      url: `/v1/users/${targetId}/block`,
+      headers: { authorization: `Bearer ${blocker.accessToken}` },
+    })
+    expect(unblock.statusCode).toBe(204)
+
+    // Unblocked — a fresh block succeeds again instead of still 409ing.
+    const reblock = await app.inject({
+      method: 'POST',
+      url: `/v1/users/${targetId}/block`,
+      headers: { authorization: `Bearer ${blocker.accessToken}` },
+    })
+    expect(reblock.statusCode).toBe(204)
+  })
+
+  it('rejects blocking yourself', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: `/v1/users/${aliceId}/block`,
+      headers: { authorization: `Bearer ${aliceToken}` },
+    })
+    expect(response.statusCode).toBe(400)
+  })
+
+  it('removes a mutual follow in both directions when one side blocks the other', async () => {
+    const carol = await registerAndLogin('blockcarol', 'blockcarol@example.com')
+    const dave = await registerAndLogin('blockdave', 'blockdave@example.com')
+    const daveProfile = await app.inject({ method: 'GET', url: '/v1/users/blockdave' })
+    const daveId = daveProfile.json().data.id as string
+    const carolProfile = await app.inject({ method: 'GET', url: '/v1/users/blockcarol' })
+    const carolId = carolProfile.json().data.id as string
+
+    await app.inject({
+      method: 'POST',
+      url: `/v1/users/${daveId}/follow`,
+      headers: { authorization: `Bearer ${carol.accessToken}` },
+    })
+    await app.inject({
+      method: 'POST',
+      url: `/v1/users/${carolId}/follow`,
+      headers: { authorization: `Bearer ${dave.accessToken}` },
+    })
+
+    const block = await app.inject({
+      method: 'POST',
+      url: `/v1/users/${daveId}/block`,
+      headers: { authorization: `Bearer ${carol.accessToken}` },
+    })
+    expect(block.statusCode).toBe(204)
+
+    const carolFollowing = await app.inject({
+      method: 'GET',
+      url: '/v1/users/blockcarol/following',
+    })
+    expect(carolFollowing.json().data.map((u: { username: string }) => u.username)).not.toContain(
+      'blockdave',
+    )
+
+    const daveFollowing = await app.inject({ method: 'GET', url: '/v1/users/blockdave/following' })
+    expect(daveFollowing.json().data.map((u: { username: string }) => u.username)).not.toContain(
+      'blockcarol',
+    )
+  })
+
+  it('mutes and unmutes a user without touching an existing follow', async () => {
+    const muter = await registerAndLogin('muterone', 'muterone@example.com')
+    const targetProfile = await app.inject({ method: 'GET', url: '/v1/users/bob' })
+    const targetId = targetProfile.json().data.id as string
+
+    await app.inject({
+      method: 'POST',
+      url: `/v1/users/${targetId}/follow`,
+      headers: { authorization: `Bearer ${muter.accessToken}` },
+    })
+
+    const mute = await app.inject({
+      method: 'POST',
+      url: `/v1/users/${targetId}/mute`,
+      headers: { authorization: `Bearer ${muter.accessToken}` },
+    })
+    expect(mute.statusCode).toBe(204)
+
+    const duplicate = await app.inject({
+      method: 'POST',
+      url: `/v1/users/${targetId}/mute`,
+      headers: { authorization: `Bearer ${muter.accessToken}` },
+    })
+    expect(duplicate.statusCode).toBe(409)
+
+    const following = await app.inject({ method: 'GET', url: '/v1/users/muterone/following' })
+    expect(following.json().data.map((u: { username: string }) => u.username)).toContain('bob')
+
+    const unmute = await app.inject({
+      method: 'DELETE',
+      url: `/v1/users/${targetId}/mute`,
+      headers: { authorization: `Bearer ${muter.accessToken}` },
+    })
+    expect(unmute.statusCode).toBe(204)
+  })
+
+  it('requires authentication to block and to mute', async () => {
+    const blockResponse = await app.inject({ method: 'POST', url: `/v1/users/${bobId}/block` })
+    expect(blockResponse.statusCode).toBe(401)
+
+    const muteResponse = await app.inject({ method: 'POST', url: `/v1/users/${bobId}/mute` })
+    expect(muteResponse.statusCode).toBe(401)
+  })
 })

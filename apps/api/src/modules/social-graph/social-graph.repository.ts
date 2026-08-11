@@ -1,6 +1,6 @@
 import type { Database } from '@x/db'
-import { follows, userCounters, users } from '@x/db'
-import { and, desc, eq, isNull, lt, ne, sql } from 'drizzle-orm'
+import { blocks, follows, mutes, userCounters, users } from '@x/db'
+import { and, desc, eq, isNull, lt, ne, or, sql } from 'drizzle-orm'
 
 export type SocialGraphRepository = ReturnType<typeof createSocialGraphRepository>
 
@@ -47,6 +47,70 @@ export function createSocialGraphRepository(db: Database) {
           .set({ followersCount: sql`greatest(${userCounters.followersCount} - 1, 0)` })
           .where(eq(userCounters.userId, followeeId))
       })
+    },
+
+    async findBlock(blockerId: bigint, blockedId: bigint) {
+      const [row] = await db
+        .select()
+        .from(blocks)
+        .where(and(eq(blocks.blockerId, blockerId), eq(blocks.blockedId, blockedId)))
+        .limit(1)
+      return row ?? null
+    },
+
+    /**
+     * A block is exclusive with following, in both directions — insert +
+     * dropping any mutual follow (and its counters) happen together so a
+     * block can never coexist with a stale follow row.
+     */
+    async insertBlock(blockerId: bigint, blockedId: bigint): Promise<void> {
+      await db.transaction(async (tx) => {
+        await tx.insert(blocks).values({ blockerId, blockedId })
+
+        const removed = await tx
+          .delete(follows)
+          .where(
+            or(
+              and(eq(follows.followerId, blockerId), eq(follows.followeeId, blockedId)),
+              and(eq(follows.followerId, blockedId), eq(follows.followeeId, blockerId)),
+            ),
+          )
+          .returning({ followerId: follows.followerId, followeeId: follows.followeeId })
+
+        for (const follow of removed) {
+          await tx
+            .update(userCounters)
+            .set({ followingCount: sql`greatest(${userCounters.followingCount} - 1, 0)` })
+            .where(eq(userCounters.userId, follow.followerId))
+          await tx
+            .update(userCounters)
+            .set({ followersCount: sql`greatest(${userCounters.followersCount} - 1, 0)` })
+            .where(eq(userCounters.userId, follow.followeeId))
+        }
+      })
+    },
+
+    async deleteBlock(blockerId: bigint, blockedId: bigint): Promise<void> {
+      await db
+        .delete(blocks)
+        .where(and(eq(blocks.blockerId, blockerId), eq(blocks.blockedId, blockedId)))
+    },
+
+    async findMute(muterId: bigint, mutedId: bigint) {
+      const [row] = await db
+        .select()
+        .from(mutes)
+        .where(and(eq(mutes.muterId, muterId), eq(mutes.mutedId, mutedId)))
+        .limit(1)
+      return row ?? null
+    },
+
+    async insertMute(muterId: bigint, mutedId: bigint): Promise<void> {
+      await db.insert(mutes).values({ muterId, mutedId })
+    },
+
+    async deleteMute(muterId: bigint, mutedId: bigint): Promise<void> {
+      await db.delete(mutes).where(and(eq(mutes.muterId, muterId), eq(mutes.mutedId, mutedId)))
     },
 
     async findUserIdByUsername(usernameLower: string): Promise<bigint | null> {

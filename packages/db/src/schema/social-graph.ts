@@ -23,3 +23,48 @@ export const follows = pgTable(
 
 export type Follow = typeof follows.$inferSelect
 export type NewFollow = typeof follows.$inferInsert
+
+// Tables + endpoints only (ROADMAP.md 1.2) — nothing here filters feeds,
+// replies, or search yet; that application lands in phase 2 (2.6).
+export const blocks = pgTable(
+  'blocks',
+  {
+    blockerId: bigint('blocker_id', { mode: 'bigint' })
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    blockedId: bigint('blocked_id', { mode: 'bigint' })
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.blockerId, table.blockedId] }),
+    check('no_self_block', sql`${table.blockerId} <> ${table.blockedId}`),
+    // "who has blocked me" — phase 2's filtering needs this direction too,
+    // not just "who have I blocked" (which the primary key already serves).
+    index('idx_blocks_blocked').on(table.blockedId),
+  ],
+)
+export type Block = typeof blocks.$inferSelect
+export type NewBlock = typeof blocks.$inferInsert
+
+// No reverse index like blocks' — muting is silent and one-directional by
+// design (SPECS.md), so "who has muted me" is never a real query.
+export const mutes = pgTable(
+  'mutes',
+  {
+    muterId: bigint('muter_id', { mode: 'bigint' })
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    mutedId: bigint('muted_id', { mode: 'bigint' })
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.muterId, table.mutedId] }),
+    check('no_self_mute', sql`${table.muterId} <> ${table.mutedId}`),
+  ],
+)
+export type Mute = typeof mutes.$inferSelect
+export type NewMute = typeof mutes.$inferInsert
