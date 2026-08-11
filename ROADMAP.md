@@ -311,7 +311,7 @@ Efecto secundario corregido en el mismo checkpoint: crear una respuesta o una ci
 
 - [ ] CRUD de `lists` (públicas y privadas) + `list_members`
 - [ ] `GET /timeline/list/:id`
-- [ ] `GET /timeline/bookmarks`
+- [x] `GET /timeline/bookmarks` — reutiliza `postHydrator.getManyByIds` (bloqueos incluidos, gratis) y el mismo `withViewerState` que `getHome`, pero sin `muteLookup` a propósito: guardar un post es una decisión deliberada, silenciar a alguien después no debería des-guardarlo. Frontend: `/bookmarks`, con `<PostFeedList>` extraído de `<Timeline>` (antes vivía sólo ahí) para que ambas listas compartan la virtualización con `@tanstack/react-virtual` sin duplicarla
 
 ### 2.9 Notificaciones push 🟡
 

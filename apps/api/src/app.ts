@@ -171,6 +171,8 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
     },
     // Structurally identical to MuteLookup already, same as blockLookup above.
     socialGraphRepository,
+    // Ditto for BookmarksLookup.
+    interactionsRepository,
   )
 
   const profilesRepository = createProfilesRepository(app.db)

@@ -29,6 +29,11 @@ export type MuteLookup = {
   findMutedAuthorIds(viewerId: bigint, authorIds: bigint[]): Promise<Set<bigint>>
 }
 
+/** Backs GET /timeline/bookmarks (ROADMAP.md 2.8) — required for that one call, unlike the other lookups above, so getBookmarks throws clearly instead of silently returning nothing when it's unset. */
+export type BookmarksLookup = {
+  listBookmarkedPostIds(userId: bigint, limit: number, cursor: bigint | null): Promise<bigint[]>
+}
+
 export type TimelineService = ReturnType<typeof createTimelineService>
 
 export function createTimelineService(
@@ -36,7 +41,26 @@ export function createTimelineService(
   postHydrator: PostHydrator,
   viewerState?: ViewerStateLookup,
   muteLookup?: MuteLookup,
+  bookmarksLookup?: BookmarksLookup,
 ) {
+  async function withViewerState(items: Post[], userId: bigint): Promise<Post[]> {
+    if (!viewerState) return items
+    const ids = items.map((post) => BigInt(post.id))
+    const [liked, bookmarked, reposted] = await Promise.all([
+      viewerState.findLikedPostIds(userId, ids),
+      viewerState.findBookmarkedPostIds(userId, ids),
+      viewerState.findRepostedPostIds(userId, ids),
+    ])
+    return items.map((post) => ({
+      ...post,
+      viewer: {
+        liked: liked.has(BigInt(post.id)),
+        bookmarked: bookmarked.has(BigInt(post.id)),
+        reposted: reposted.has(BigInt(post.id)),
+      },
+    }))
+  }
+
   async function getHome(
     userId: bigint,
     limit: number,
@@ -59,27 +83,31 @@ export function createTimelineService(
     const hydrated = await postHydrator.getManyByIds(pageIds, userId)
     const items = muteLookup ? await dropMuted(muteLookup, userId, hydrated) : hydrated
 
-    if (!viewerState) return { items, hasMore }
-
-    const ids = items.map((post) => BigInt(post.id))
-    const [liked, bookmarked, reposted] = await Promise.all([
-      viewerState.findLikedPostIds(userId, ids),
-      viewerState.findBookmarkedPostIds(userId, ids),
-      viewerState.findRepostedPostIds(userId, ids),
-    ])
-    const withViewer = items.map((post) => ({
-      ...post,
-      viewer: {
-        liked: liked.has(BigInt(post.id)),
-        bookmarked: bookmarked.has(BigInt(post.id)),
-        reposted: reposted.has(BigInt(post.id)),
-      },
-    }))
-
-    return { items: withViewer, hasMore }
+    return { items: await withViewerState(items, userId), hasMore }
   }
 
-  return { getHome }
+  /**
+   * GET /timeline/bookmarks (ROADMAP.md 2.8). Deliberately doesn't run
+   * `muteLookup` — bookmarking is a deliberate save, not the passive feed
+   * mute is meant to quiet down, so muting someone after saving their post
+   * shouldn't un-save it. Blocks still apply, for free, via getManyByIds.
+   */
+  async function getBookmarks(
+    userId: bigint,
+    limit: number,
+    cursor: bigint | null,
+  ): Promise<{ items: Post[]; hasMore: boolean }> {
+    if (!bookmarksLookup) {
+      throw new Error('createTimelineService: bookmarksLookup is required for getBookmarks')
+    }
+    const ids = await bookmarksLookup.listBookmarkedPostIds(userId, limit + 1, cursor)
+    const hasMore = ids.length > limit
+    const items = await postHydrator.getManyByIds(ids.slice(0, limit), userId)
+
+    return { items: await withViewerState(items, userId), hasMore }
+  }
+
+  return { getHome, getBookmarks }
 }
 
 async function resolvePrecomputedIds(

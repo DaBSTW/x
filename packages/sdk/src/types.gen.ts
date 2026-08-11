@@ -1975,6 +1975,115 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/timeline/bookmarks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                    cursor?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                id: string;
+                                text: string | null;
+                                /** Format: date-time */
+                                createdAt: string;
+                                author: {
+                                    id: string;
+                                    username: string;
+                                    displayName: string;
+                                    /** Format: uri */
+                                    avatarUrl: string | null;
+                                    isVerified: boolean;
+                                };
+                                entities: {
+                                    /** @enum {string} */
+                                    kind: "mention" | "hashtag" | "url" | "cashtag";
+                                    value: string;
+                                    start: number;
+                                    end: number;
+                                }[];
+                                media: {
+                                    id: string;
+                                    /** @enum {string} */
+                                    kind: "image" | "gif" | "video";
+                                    /** Format: uri */
+                                    url: string;
+                                    width: number | null;
+                                    height: number | null;
+                                    blurhash: string | null;
+                                    altText: string | null;
+                                }[];
+                                conversationId: string;
+                                inReplyToId: string | null;
+                                counters: {
+                                    likes: number;
+                                    reposts: number;
+                                    replies: number;
+                                    quotes: number;
+                                    views: number;
+                                };
+                                viewer?: {
+                                    liked: boolean;
+                                    reposted: boolean;
+                                    bookmarked: boolean;
+                                };
+                            }[];
+                            meta: {
+                                nextCursor: string | null;
+                                prevCursor: string | null;
+                                hasMore: boolean;
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /** @enum {string} */
+                                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "BLOCKED_BY_USER" | "NOT_FOUND" | "CONFLICT" | "UNPROCESSABLE" | "RATE_LIMIT_EXCEEDED" | "INTERNAL_ERROR" | "SERVICE_UNAVAILABLE";
+                                message: string;
+                                details?: {
+                                    [key: string]: unknown;
+                                };
+                                requestId: string;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/posts/{id}/like": {
         parameters: {
             query?: never;

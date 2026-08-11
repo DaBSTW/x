@@ -185,4 +185,49 @@ describe('createTimelineService', () => {
       expect(items.map((post) => post.id)).toEqual(['30'])
     })
   })
+
+  describe('getBookmarks', () => {
+    it('hydrates the bookmarked ids, newest first, with viewer state attached', async () => {
+      const repository = createFakeRepository()
+      const service = createTimelineService(
+        repository,
+        createFakeHydrator(),
+        {
+          findLikedPostIds: async () => new Set(),
+          findBookmarkedPostIds: async () => new Set([30n, 10n]),
+          findRepostedPostIds: async () => new Set(),
+        },
+        undefined,
+        { listBookmarkedPostIds: async () => [30n, 10n] },
+      )
+
+      const { items } = await service.getBookmarks(1n, 20, null)
+
+      expect(items.map((post) => post.id)).toEqual(['30', '10'])
+      expect(items.map((post) => post.viewer?.bookmarked)).toEqual([true, true])
+    })
+
+    it('reports hasMore from the lookup, one page at a time', async () => {
+      const repository = createFakeRepository()
+      const service = createTimelineService(
+        repository,
+        createFakeHydrator(),
+        undefined,
+        undefined,
+        { listBookmarkedPostIds: async () => [30n, 20n, 10n] },
+      )
+
+      const { items, hasMore } = await service.getBookmarks(1n, 2, null)
+
+      expect(items.map((post) => post.id)).toEqual(['30', '20'])
+      expect(hasMore).toBe(true)
+    })
+
+    it('throws when no bookmarksLookup was configured at all', async () => {
+      const repository = createFakeRepository()
+      const service = createTimelineService(repository, createFakeHydrator())
+
+      await expect(service.getBookmarks(1n, 20, null)).rejects.toThrow(/bookmarksLookup/)
+    })
+  })
 })

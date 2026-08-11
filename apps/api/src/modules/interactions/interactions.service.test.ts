@@ -96,6 +96,15 @@ function createFakeInteractionsRepository(): InteractionsRepository {
     async findBookmarkedPostIds(userId, postIds) {
       return new Set(postIds.filter((postId) => bookmarks.has(key(userId, postId))))
     },
+    async listBookmarkedPostIds(userId, limit, cursor) {
+      const prefix = `${userId}:`
+      return [...bookmarks]
+        .filter((entry) => entry.startsWith(prefix))
+        .map((entry) => BigInt(entry.slice(prefix.length)))
+        .filter((postId) => cursor === null || postId < cursor)
+        .sort((a, b) => (b > a ? 1 : -1))
+        .slice(0, limit)
+    },
   }
 }
 

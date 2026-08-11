@@ -169,6 +169,19 @@ describe('timeline routes', () => {
       bookmarked: true,
       reposted: false,
     })
+
+    // Same fixture, same session — GET /timeline/bookmarks (ROADMAP.md 2.8)
+    // reuses alice's token instead of registering yet another user: this
+    // file already sits at auth/login's 10-per-window rate limit (one
+    // registerAndLogin per test), so a fresh user here would 429 the login.
+    const bookmarksResponse = await app.inject({
+      method: 'GET',
+      url: '/v1/timeline/bookmarks',
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+    })
+    expect(bookmarksResponse.statusCode).toBe(200)
+    expect(bookmarksResponse.json().data.map((p: { id: string }) => p.id)).toEqual([post.id])
+    expect(bookmarksResponse.json().data[0].viewer.bookmarked).toBe(true)
   })
 
   it('merges in posts from followed celebrity accounts even without fan-out', async () => {
@@ -222,5 +235,10 @@ describe('timeline routes', () => {
       url: '/v1/users/mutealice/following',
     })
     expect(following.json().data.map((u: { username: string }) => u.username)).toContain('mutebob')
+  })
+
+  it('requires authentication for bookmarks', async () => {
+    const response = await app.inject({ method: 'GET', url: '/v1/timeline/bookmarks' })
+    expect(response.statusCode).toBe(401)
   })
 })

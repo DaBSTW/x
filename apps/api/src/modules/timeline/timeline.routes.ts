@@ -35,4 +35,28 @@ export async function registerTimelineRoutes(app: FastifyInstance, options: Time
       return reply.send({ data: items, meta: { nextCursor, prevCursor: null, hasMore } })
     },
   )
+
+  server.get(
+    '/timeline/bookmarks',
+    {
+      schema: {
+        querystring: paginationQuerySchema,
+        response: { 200: postListResponseSchema, 401: errorResponseSchema },
+      },
+      preHandler: [requireAuth],
+    },
+    async (request, reply) => {
+      const user = getAuthenticatedUser(request)
+      const cursor = request.query.cursor ? decodeCursor(request.query.cursor) : null
+      const { items, hasMore } = await timelineService.getBookmarks(
+        user.id,
+        request.query.limit,
+        cursor,
+      )
+      const lastItem = items.at(-1)
+      const nextCursor = hasMore && lastItem ? encodeCursor(BigInt(lastItem.id)) : null
+
+      return reply.send({ data: items, meta: { nextCursor, prevCursor: null, hasMore } })
+    },
+  )
 }

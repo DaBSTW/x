@@ -49,6 +49,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               </span>
             )}
           </Link>
+          <Link href="/bookmarks">Guardados</Link>
           {me && <Link href={`/${me.username}`}>Perfil</Link>}
         </nav>
         <div className="mt-auto">

@@ -1,6 +1,6 @@
 import type { Database } from '@x/db'
 import { bookmarks, likes } from '@x/db'
-import { and, eq, inArray } from 'drizzle-orm'
+import { and, desc, eq, inArray, lt } from 'drizzle-orm'
 
 export type InteractionsRepository = ReturnType<typeof createInteractionsRepository>
 
@@ -66,6 +66,24 @@ export function createInteractionsRepository(db: Database) {
         .from(bookmarks)
         .where(and(eq(bookmarks.userId, userId), inArray(bookmarks.postId, postIds)))
       return new Set(rows.map((row) => row.postId))
+    },
+
+    /** GET /timeline/bookmarks (ROADMAP.md 2.8) — cursor-paginated by post id desc, same as every other list here; `bookmarks`' own primary key `(user_id, post_id)` already covers this scan. */
+    async listBookmarkedPostIds(
+      userId: bigint,
+      limit: number,
+      cursor: bigint | null,
+    ): Promise<bigint[]> {
+      const conditions = [eq(bookmarks.userId, userId)]
+      if (cursor !== null) conditions.push(lt(bookmarks.postId, cursor))
+
+      const rows = await db
+        .select({ postId: bookmarks.postId })
+        .from(bookmarks)
+        .where(and(...conditions))
+        .orderBy(desc(bookmarks.postId))
+        .limit(limit)
+      return rows.map((row) => row.postId)
     },
   }
 }
