@@ -1,7 +1,10 @@
 import {
+  BucketAlreadyOwnedByYou,
+  CreateBucketCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  PutBucketPolicyCommand,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3'
@@ -84,6 +87,45 @@ export async function deleteObject(client: S3Client, bucket: string, key: string
 /** `publicUrlBase` is deliberately separate from `endpoint`: the address this process uses to reach S3/MinIO internally (e.g. a Docker service name) usually differs from the address a browser needs (a CDN, or MinIO's own public port). */
 export function buildPublicUrl(publicUrlBase: string, bucket: string, key: string): string {
   return `${publicUrlBase.replace(/\/+$/, '')}/${bucket}/${key}`
+}
+
+/** The exact statement `buildPublicUrl`'s URLs need to actually be fetchable: anyone (no credentials) can GET any object in the bucket, nothing else. Exported so it's testable on its own — the shape of the policy is the part worth getting right, not the two SDK calls around it. */
+export function publicReadBucketPolicy(bucket: string): string {
+  return JSON.stringify({
+    Version: '2012-10-17',
+    Statement: [
+      {
+        Effect: 'Allow',
+        Principal: '*',
+        Action: 's3:GetObject',
+        Resource: `arn:aws:s3:::${bucket}/*`,
+      },
+    ],
+  })
+}
+
+/**
+ * Idempotent — safe to call on every process boot (apps/api/src/server.ts)
+ * and from e2e's global-setup.ts alike: creates `bucket` if it doesn't exist yet
+ * (swallows "already owned by you", the one AWS SDK ever throws for a
+ * bucket this same account already created), then (re)applies the
+ * public-read policy every time regardless, since setting the same policy
+ * twice is a no-op. Without this, every URL `buildPublicUrl` builds 403s
+ * for the very audience it's meant for — a real gap that a component
+ * merely present in the DOM (a plain `<img>`, or a test asserting on one)
+ * never surfaces, since the browser doesn't need to actually fetch the
+ * bytes to be "visible"; found via `<Avatar>`'s own real fetch on load
+ * (ROADMAP.md 1.6), not assumed.
+ */
+export async function ensurePublicBucket(client: S3Client, bucket: string): Promise<void> {
+  try {
+    await client.send(new CreateBucketCommand({ Bucket: bucket }))
+  } catch (error) {
+    if (!(error instanceof BucketAlreadyOwnedByYou)) throw error
+  }
+  await client.send(
+    new PutBucketPolicyCommand({ Bucket: bucket, Policy: publicReadBucketPolicy(bucket) }),
+  )
 }
 
 function isNotFoundError(error: unknown): boolean {

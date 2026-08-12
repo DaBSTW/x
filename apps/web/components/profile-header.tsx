@@ -1,10 +1,13 @@
 'use client'
 
 import { FollowButton } from '@/components/follow-button'
+import { ProfileEditDialog } from '@/components/profile-edit-dialog'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { Button } from '@/components/ui/button'
 import { formatCompactNumber, formatJoinDate } from '@/lib/format'
 import { useCurrentUser } from '@/lib/use-current-user'
 import type { UserProfile } from '@x/contracts'
+import { useState } from 'react'
 
 type ProfileHeaderProps = {
   profile: UserProfile
@@ -14,6 +17,11 @@ type ProfileHeaderProps = {
 export function ProfileHeader({ profile }: ProfileHeaderProps) {
   const { data: me } = useCurrentUser()
   const isOwnProfile = me?.id === profile.id
+  const [isEditing, setIsEditing] = useState(false)
+  // Forces ProfileEditDialog to remount on every open, same reasoning as
+  // composer.tsx's AttachmentThumbnail/AltTextDialog — the draft always
+  // re-seeds from the current profile instead of a cancelled edit's values.
+  const [dialogInstance, setDialogInstance] = useState(0)
 
   return (
     <div className="border-b border-border">
@@ -30,7 +38,20 @@ export function ProfileHeader({ profile }: ProfileHeaderProps) {
               {profile.displayName.slice(0, 1).toUpperCase()}
             </AvatarFallback>
           </Avatar>
-          {!isOwnProfile && <FollowButton userId={profile.id} />}
+          {isOwnProfile ? (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setDialogInstance((current) => current + 1)
+                setIsEditing(true)
+              }}
+            >
+              Editar perfil
+            </Button>
+          ) : (
+            <FollowButton userId={profile.id} />
+          )}
         </div>
         <div>
           <div className="flex items-center gap-1 text-xl font-bold">
@@ -65,6 +86,14 @@ export function ProfileHeader({ profile }: ProfileHeaderProps) {
           </span>
         </div>
       </div>
+      {isOwnProfile && (
+        <ProfileEditDialog
+          key={dialogInstance}
+          profile={profile}
+          open={isEditing}
+          onOpenChange={setIsEditing}
+        />
+      )}
     </div>
   )
 }

@@ -1,12 +1,11 @@
 import { type ChildProcess, spawn } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { CreateBucketCommand } from '@aws-sdk/client-s3'
 import { MinioContainer } from '@testcontainers/minio'
 import { PostgreSqlContainer } from '@testcontainers/postgresql'
 import { RedisContainer } from '@testcontainers/redis'
 import { createDatabase, migrationsFolderUrl } from '@x/db'
-import { createS3Client } from '@x/utils'
+import { createS3Client, ensurePublicBucket } from '@x/utils'
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
 import { GenericContainer, Wait } from 'testcontainers'
 
@@ -97,7 +96,12 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     secretAccessKey: minio.getPassword(),
     forcePathStyle: true,
   })
-  await s3Client.send(new CreateBucketCommand({ Bucket: S3_BUCKET }))
+  // Not just CreateBucketCommand — every media URL apps/web renders
+  // (avatar/banner/post images, ROADMAP.md 1.5/1.6) is a plain public GET
+  // the browser makes directly against MinIO, which 403s without an
+  // explicit bucket policy. apps/api's own boot does the exact same thing
+  // for local dev, for the same reason.
+  await ensurePublicBucket(s3Client, S3_BUCKET)
 
   const sharedEnv: NodeJS.ProcessEnv = {
     ...process.env,

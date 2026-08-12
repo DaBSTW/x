@@ -1,9 +1,10 @@
 'use client'
 
-import { ALLOWED_IMAGE_MIME_TYPES, type AllowedImageMimeType, MEDIA_LIMITS } from '@x/utils/media'
+import { MEDIA_LIMITS } from '@x/utils/media'
 import { useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { apiClient } from './api-client'
+import { isAllowedImageMimeType, uploadImage } from './upload-image.js'
 
 export type MediaAttachmentStatus = 'uploading' | 'processing' | 'ready' | 'error'
 
@@ -18,13 +19,6 @@ export type MediaAttachment = {
   altText: string
 }
 
-const POLL_INTERVAL_MS = 1000
-const POLL_TIMEOUT_MS = 30_000
-
-function isAllowedImageMimeType(type: string): type is AllowedImageMimeType {
-  return (ALLOWED_IMAGE_MIME_TYPES as readonly string[]).includes(type)
-}
-
 /** Narrows to attachments a post can actually be submitted with — ready and carrying the mediaId the upload-url step assigned. */
 export function isReadyAttachment(
   attachment: MediaAttachment,
@@ -32,26 +26,8 @@ export function isReadyAttachment(
   return attachment.status === 'ready' && attachment.mediaId !== undefined
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback
-}
-
-async function pollUntilReady(mediaId: string): Promise<void> {
-  const deadline = Date.now() + POLL_TIMEOUT_MS
-  while (Date.now() < deadline) {
-    const { data, error } = await apiClient.GET('/media/{id}', {
-      params: { path: { id: mediaId } },
-    })
-    if (error) throw new Error(error.error.message)
-    if (data.data.status === 'ready') return
-    if (data.data.status === 'failed') throw new Error('El procesamiento de la imagen falló.')
-    await sleep(POLL_INTERVAL_MS)
-  }
-  throw new Error('El procesamiento de la imagen está tardando demasiado.')
 }
 
 /**
@@ -76,36 +52,13 @@ export function useMediaUpload() {
 
   async function uploadOne(localId: string, file: File) {
     try {
-      // Safe: addFiles only ever calls uploadOne for files that already
-      // passed isAllowedImageMimeType.
-      const mimeType = file.type as AllowedImageMimeType
-      const { data: uploadData, error: uploadError } = await apiClient.POST('/media/upload-url', {
-        body: { mimeType },
-      })
-      if (uploadError) throw new Error(uploadError.error.message)
-
-      const putResponse = await fetch(uploadData.data.uploadUrl, {
-        method: 'PUT',
-        headers: { 'Content-Type': mimeType },
-        body: file,
-      })
-      if (!putResponse.ok) throw new Error('No se pudo subir el archivo.')
-
-      updateAttachment(localId, { status: 'processing', mediaId: uploadData.data.mediaId })
-
-      const { data: finalizeData, error: finalizeError } = await apiClient.POST(
-        '/media/{id}/finalize',
-        { params: { path: { id: uploadData.data.mediaId } } },
-      )
-      if (finalizeError) throw new Error(finalizeError.error.message)
-      if (finalizeData.data.status === 'failed') {
-        throw new Error('El procesamiento de la imagen falló.')
-      }
-      if (finalizeData.data.status === 'pending') {
-        await pollUntilReady(uploadData.data.mediaId)
-      }
-
-      updateAttachment(localId, { status: 'ready' })
+      // uploadImage() (lib/upload-image.ts) covers upload-url → PUT →
+      // finalize → poll in one call — composer.tsx never actually
+      // distinguishes 'uploading' from 'processing' visually (same spinner,
+      // same isBusy check), so collapsing that intermediate status update
+      // changes nothing a user or a test can observe.
+      const mediaId = await uploadImage(file)
+      updateAttachment(localId, { status: 'ready', mediaId })
     } catch (error) {
       updateAttachment(localId, {
         status: 'error',

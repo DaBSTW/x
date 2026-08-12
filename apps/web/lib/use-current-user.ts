@@ -1,6 +1,7 @@
 'use client'
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import type { UpdateUserInput } from '@x/contracts'
 import { apiClient } from './api-client'
 import { useAuthStore } from './auth-store'
 
@@ -22,18 +23,33 @@ export function useCurrentUser() {
 }
 
 /**
- * PATCH /users/me, narrowed to just `isProtected` (ROADMAP.md 2.6) — the
- * only field any UI sets today. `UpdateUserInput`'s other optional fields
- * are typed `T | undefined` (Zod's `.optional()`), which
- * `exactOptionalPropertyTypes` rejects against the SDK's stricter
- * "omitted, never present-as-undefined" body type; a single required
- * boolean has no such ambiguity to hit.
+ * `UpdateUserInput` (packages/contracts, from Zod's `.optional()`) types
+ * every field `T | undefined` — the SDK's generated body type is stricter,
+ * "absent or present," never "present-as-undefined", which
+ * `exactOptionalPropertyTypes` enforces at the call to `apiClient.PATCH`
+ * below. Callers of `useUpdateProfile` build a normal `UpdateUserInput`
+ * (only setting the keys they mean to change, same as every other caller
+ * in this codebase already does — protected-account-toggle.tsx's
+ * `{isProtected: value}`); this drops any key that's still `undefined`
+ * before it reaches the SDK, so the object's actual shape matches what it
+ * was always going to be at runtime anyway.
  */
+function stripUndefined<T extends Record<string, unknown>>(
+  input: T,
+): { [K in keyof T]?: Exclude<T[K], undefined> } {
+  const result: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(input)) {
+    if (value !== undefined) result[key] = value
+  }
+  return result as { [K in keyof T]?: Exclude<T[K], undefined> }
+}
+
+/** PATCH /users/me (ROADMAP.md 1.6/2.5/2.6) — see stripUndefined above for why the body isn't passed straight through. */
 export function useUpdateProfile() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (input: { isProtected: boolean }) => {
-      const { data, error } = await apiClient.PATCH('/users/me', { body: input })
+    mutationFn: async (input: UpdateUserInput) => {
+      const { data, error } = await apiClient.PATCH('/users/me', { body: stripUndefined(input) })
       if (error) throw new Error(error.error.message)
       return data.data
     },

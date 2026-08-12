@@ -71,8 +71,10 @@ export {
   createPresignedUploadUrl,
   createS3Client,
   deleteObject,
+  ensurePublicBucket,
   getObjectBuffer,
   headObjectSize,
+  publicReadBucketPolicy,
   putObjectBuffer,
 } from './s3.js'
 export type { S3Config } from './s3.js'
