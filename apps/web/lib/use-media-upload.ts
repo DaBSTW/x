@@ -14,6 +14,8 @@ export type MediaAttachment = {
   status: MediaAttachmentStatus
   mediaId?: string
   error?: string
+  /** ROADMAP.md 1.8: editable from the composer, not just settable at upload time — PATCH /media/:id already existed since 1.5, this is the client finally calling it. */
+  altText: string
 }
 
 const POLL_INTERVAL_MS = 1000
@@ -139,11 +141,30 @@ export function useMediaUpload() {
       file,
       previewUrl: URL.createObjectURL(file),
       status: 'uploading',
+      altText: '',
     }))
     setAttachments((current) => [...current, ...newAttachments])
     for (const attachment of newAttachments) {
       void uploadOne(attachment.localId, attachment.file)
     }
+  }
+
+  /**
+   * PATCH /media/:id — doesn't require the attachment to be `ready` yet
+   * (the service only checks ownership), but `mediaId` has to exist, so an
+   * attachment still in the earliest moment of `uploading` (before
+   * upload-url even returns) has nothing to save against yet.
+   */
+  async function updateAltText(localId: string, altText: string): Promise<void> {
+    const attachment = attachments.find((candidate) => candidate.localId === localId)
+    if (!attachment?.mediaId) return
+
+    const { error } = await apiClient.PATCH('/media/{id}', {
+      params: { path: { id: attachment.mediaId } },
+      body: { altText },
+    })
+    if (error) throw new Error(error.error.message)
+    updateAttachment(localId, { altText })
   }
 
   function removeAttachment(localId: string) {
@@ -161,5 +182,5 @@ export function useMediaUpload() {
     })
   }
 
-  return { attachments, addFiles, removeAttachment, reset }
+  return { attachments, addFiles, removeAttachment, updateAltText, reset }
 }

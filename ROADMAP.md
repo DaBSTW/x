@@ -204,7 +204,7 @@
 - [x] `<PostCard>`: autor, texto con entidades enlazadas, acciones (like/repost/bookmark reales, responder como acción reconocida pero aún no funcional), timestamp relativo (`Intl.RelativeTimeFormat`, SPECS.md §7.6), `<MediaGrid media={post.media} />` cuando el post trae imágenes.
 - [x] `<RichText>`: renderizado por offsets de `entities` — **nunca** HTML crudo. Cubierto con tests de componente (`@testing-library/react`) contra `parseEntities` real, no offsets inventados a mano.
 - [x] `<Timeline>`: `useInfiniteQuery` + `useVirtualizer` (`useWindowVirtualizer`, ya que el shell no tiene contenedor de scroll de altura fija), `overscan: 5`, altura estable vía medición dinámica (`measureElement`), `role="feed"` + `aria-posinset`/`aria-setsize` (SPECS.md §7.5)
-- [x] `<MediaGrid>`: layouts para 1 (aspect-ratio propio, recortado entre 1:2 y 1.91:1), y 2/3/4 (marco 16:9 fijo compartido, la propia convención de X) — el layout es lógica pura y testeada (`lib/media-grid-layout.ts`), separada del componente. Placeholder de blurhash decodificado a un canvas en memoria y mostrado como `data:` URL hasta que la imagen real termina de cargar (`onLoad` cruza la opacidad). ⚪ Editar `alt_text` desde la UI no está construido (`PATCH /media/:id` ya existe, pero nada en `<Composer>` lo llama todavía) — el texto alternativo solo se muestra si ya venía cargado.
+- [x] `<MediaGrid>`: layouts para 1 (aspect-ratio propio, recortado entre 1:2 y 1.91:1), y 2/3/4 (marco 16:9 fijo compartido, la propia convención de X) — el layout es lógica pura y testeada (`lib/media-grid-layout.ts`), separada del componente. Placeholder de blurhash decodificado a un canvas en memoria y mostrado como `data:` URL hasta que la imagen real termina de cargar (`onLoad` cruza la opacidad). Editar `alt_text` desde la UI: cada miniatura adjunta en `<Composer>` gana un botón "ALT" (visible en cuanto `upload-url` asigna un `mediaId`, sin esperar a que el worker termine de procesar — `PATCH /media/:id` sólo comprueba propiedad, no `status`) que abre un diálogo con el texto actual; `useMediaUpload`'s nuevo `updateAltText` llama al endpoint que ya existía desde 1.5 y sólo actualiza el estado local si la llamada tuvo éxito. El diálogo se remonta por `key` cada vez que se abre (en vez de un efecto sincronizando prop→estado, CODESTYLE.md §11) para que el borrador nunca arrastre un valor cancelado de una edición anterior.
 - [x] **Actualizaciones optimistas** en like, repost y bookmark con rollback ante error — snapshot de toda query `['timeline', …]` antes de mutar, restaurado en `onError` (SPECS.md §7.3)
 - [x] Skeleton de carga en `<Timeline>` y en `<ProfilePostList>` (reusa el mismo `<TimelineSkeleton>`, genérico). ⚪ Notificaciones diferido — esa página todavía no existe (1.7 frontend sin empezar); perfil ya se construyó en 1.6.
 - [x] Estados vacíos con acción sugerida: timeline sin seguidos → tarjetas de `GET /users/suggestions` (nuevo endpoint, ver 1.2) con botón "Seguir" funcional, no un mensaje muerto
@@ -222,12 +222,12 @@
 🟡 Validación real, pieza por pieza: seguirse ✅, dar like/repost ✅ (backend + UI), ver
 el resultado en el propio timeline en <5 s ✅ (worker de fan-out verificado con
 Testcontainers: 2.70 s para 100 000 seguidores — ver 1.3). Publicar un post con imagen
-✅ de punta a punta como flujo de usuario real (`<Composer>` → `upload-url` → PUT →
-`finalize` → `POST /posts` con `mediaIds` → `<PostCard>`/`<MediaGrid>` mostrándolo) —
-⚪ salvo *editar* el alt-text desde el cliente, que sigue sin UI (`PATCH /media/:id`
-existe, pero nada en `<Composer>` lo llama todavía). El p95 < 200 ms a 1000 usuarios
-concurrentes en staging sigue sin poderse certificar — no hay despliegue de staging en
-este entorno (mismo hueco señalado en 1.3's nota de k6).
+y alt-text ✅ de punta a punta como flujo de usuario real (`<Composer>` → `upload-url` →
+PUT → `finalize` → `POST /posts` con `mediaIds` → `<PostCard>`/`<MediaGrid>` mostrándolo,
+alt-text incluido — editarlo desde el cliente también tiene UI ya, ver 1.8's bullet de
+`<MediaGrid>`). El p95 < 200 ms a 1000 usuarios concurrentes en staging sigue sin poderse
+certificar — no hay despliegue de staging en este entorno (mismo hueco señalado en 1.3's
+nota de k6).
 
 ---
 
