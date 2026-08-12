@@ -69,7 +69,12 @@ export default tseslint.config(
     // Declaration merging into a third-party module (Fastify decorators)
     // requires `interface` — `type` can't merge, so the repo-wide rule
     // above doesn't apply inside `declare module` blocks.
-    files: ['**/src/middleware/require-auth.ts', '**/src/plugins/db.ts', '**/src/plugins/redis.ts'],
+    files: [
+      '**/src/middleware/require-auth.ts',
+      '**/src/plugins/db.ts',
+      '**/src/plugins/redis.ts',
+      '**/src/gateway/gateway.plugin.ts',
+    ],
     rules: {
       '@typescript-eslint/consistent-type-definitions': 'off',
     },

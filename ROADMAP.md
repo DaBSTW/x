@@ -250,17 +250,17 @@ Efecto secundario corregido en el mismo checkpoint: crear una respuesta o una ci
 
 ### 2.2 Tiempo real 🔴
 
-- [ ] Servicio `ws-gateway` independiente
-- [ ] `POST /realtime/ticket` — ticket de un solo uso, TTL 60 s (el JWT **nunca** en la query string)
-- [ ] Suscripción por canales: `user:{id}`, `conv:{id}`, `post:{id}`, `timeline:{id}`
-- [ ] Redis Pub/Sub para fan-out entre instancias del gateway
-- [ ] Heartbeat 30 s / timeout 60 s
-- [ ] Reconexión con backoff exponencial + jitter (1 s → 30 s)
-- [ ] **Recuperación de eventos perdidos** vía Redis Streams (`last_event_id`, retención 5 min)
-- [ ] Backpressure: cerrar conexión si la cola de escritura supera 1 MB
-- [ ] Fallback a SSE y, en último caso, polling adaptativo
-- [ ] Badge "N posts nuevos" en el timeline vía canal `timeline:{id}`
-- [ ] Test: reconexión recuperando 500 eventos sin duplicados ni huecos
+- [x] Servicio `ws-gateway` independiente — nueva app `apps/ws-gateway` (mismo patrón que `apps/workers`: `env.ts`/`app.ts`/`server.ts`, Dockerfile multi-stage, sin importar ninguna otra `apps/*` — CODESTYLE.md §7). Fastify + `@fastify/websocket` sobre `GET /v1`; un `preHandler` (no el propio wsHandler — `@fastify/websocket` sólo envuelve el handler final; el ciclo de vida normal de Fastify, `preHandler` incluido, corre antes) redime el ticket antes de que el upgrade ocurra siquiera, así que un ticket inválido responde con un 401/403 HTTP normal en vez de abrir la conexión para cerrarla después
+- [x] `POST /realtime/ticket` — nuevo módulo `apps/api/src/modules/realtime`: `issueTicket` genera un token opaco (`generateOpaqueToken`) y lo guarda hasheado (`sha256Hex`, mismo criterio que los tokens de refresh/verificación) bajo `realtimeTicketKey` (nuevo, `@x/utils` — la clave Redis que comparten `apps/api`, que escribe, y `apps/ws-gateway`, que lee con `GETDEL`, ya que ninguna de las dos puede importar a la otra) con TTL 60 s (`REALTIME_TICKET_TTL_SECONDS`). `GETDEL` hace el canje de un solo uso atómicamente, sin Lua aparte
+- [x] Suscripción por canales: `user:{id}`, `conv:{id}`, `post:{id}`, `timeline:{id}` — `channel-authorization.ts`'s `authorizeChannel`: `user:`/`timeline:` sólo el propio id, `conv:` sólo un miembro real (`realtime.repository.ts`, una réplica de sólo lectura de la misma consulta que `conversations.repository.ts`'s `findMember` — no importable directamente, mismo motivo de arriba), `post:` cualquier conexión autenticada (los contadores no son sensibles, y este bullet no pidió aplicar bloqueos aquí — eso ya vive en las lecturas REST, ROADMAP.md 2.6). `connection-registry.ts` lleva la contabilidad canal↔conexión en memoria, pura y testeada sin red de por medio
+- [x] Redis Pub/Sub para fan-out entre instancias del gateway — una conexión Redis por proceso dedicada a modo `SUBSCRIBE` (una conexión que ya ha hecho `SUBSCRIBE` no puede emitir ningún otro comando, restricción documentada de ioredis) reenvía cada mensaje entrante a las conexiones locales suscritas a ese canal, sin deserializarlo — un relé puro que confía en que quien publique ya construyó el sobre completo (todavía nadie: ningún evento de dominio real se publica aún, queda para un checkpoint futuro), mismo nivel de confianza que ya tienen los payloads de BullMQ en este código. `subscription-handler.ts` decide cuándo emitir un `SUBSCRIBE`/`UNSUBSCRIBE` real de Redis (sólo en la primera/última conexión local de un canal) — extraído de `gateway.plugin.ts` y testeado con fakes, mismo patrón que `fanout.worker.ts`/`fanout.processor.ts` en `apps/workers`
+- [x] Heartbeat 30 s / timeout 60 s — un único `setTimeout` rearmado en cada `pong` (no un intervalo de comprobación aproximado) da un timeout exacto; intervalo de ping independiente. Ambos configurables por env (`HEARTBEAT_INTERVAL_MS`/`HEARTBEAT_TIMEOUT_MS`) para que el test de integración use una escala de milisegundos real en vez de esperar 60 s de verdad — probado con la opción `autoPong: false` de la librería `ws` (la única forma soportada de que un cliente deje de responder a los pings automáticamente) para ejercer el cierre real, no sólo el camino de "sigue vivo"
+- [ ] Reconexión con backoff exponencial + jitter (1 s → 30 s) — lado cliente, sin construir: `apps/web` todavía no tiene ningún consumidor de este gateway
+- [ ] **Recuperación de eventos perdidos** vía Redis Streams (`last_event_id`, retención 5 min) — el sobre de evento (`realtimeServerEventSchema`, `@x/contracts`) ya incluye `eventId` pensando en esto, pero nada lo publica todavía ni hay Stream que leer
+- [x] Backpressure: cerrar conexión si la cola de escritura supera 1 MB — `sendRaw` comprueba `socket.bufferedAmount` antes de cada envío (incluidos los eventos reenviados por pub/sub) y hace `terminate()` en vez de `send()` si ya está por encima del límite (`BACKPRESSURE_LIMIT_BYTES`, configurable)
+- [ ] Fallback a SSE y, en último caso, polling adaptativo — sin construir
+- [ ] Badge "N posts nuevos" en el timeline vía canal `timeline:{id}` — el canal y su autorización ya existen (bullet de arriba), pero nada publica `post.available` todavía ni hay UI en `apps/web` que escuche
+- [ ] Test: reconexión recuperando 500 eventos sin duplicados ni huecos — depende de la recuperación vía Redis Streams, todavía sin construir
 
 ### 2.3 Búsqueda 🟡
 
