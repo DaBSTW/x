@@ -13,11 +13,16 @@ import { GenericContainer, Wait } from 'testcontainers'
 const REPO_ROOT = fileURLToPath(new URL('../../..', import.meta.url))
 const API_DIR = path.join(REPO_ROOT, 'apps/api')
 const WORKERS_DIR = path.join(REPO_ROOT, 'apps/workers')
+const WS_GATEWAY_DIR = path.join(REPO_ROOT, 'apps/ws-gateway')
 const WEB_DIR = path.join(REPO_ROOT, 'apps/web')
 
 const S3_BUCKET = 'x-media'
 const API_PORT = 3001
 const WEB_PORT = 3000
+// Matches ws-gateway's own env.ts default — apps/web's
+// NEXT_PUBLIC_WS_GATEWAY_URL fallback already points here, so nothing needs
+// overriding for the web process to find it.
+const WS_GATEWAY_PORT = 3002
 
 async function waitForUrl(url: string, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs
@@ -128,6 +133,21 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   )
   await new Promise((resolve) => setTimeout(resolve, 2_000))
 
+  const wsGatewayProcess = spawnService(
+    'ws-gateway',
+    path.join(WS_GATEWAY_DIR, 'node_modules/.bin/tsx'),
+    ['src/server.ts'],
+    {
+      cwd: WS_GATEWAY_DIR,
+      env: {
+        ...sharedEnv,
+        WS_GATEWAY_PORT: String(WS_GATEWAY_PORT),
+        CORS_ORIGIN: `http://localhost:${WEB_PORT}`,
+      },
+    },
+  )
+  await waitForUrl(`http://localhost:${WS_GATEWAY_PORT}/health`, 30_000)
+
   const webProcess = spawnService(
     'web',
     path.join(WEB_DIR, 'node_modules/.bin/next'),
@@ -137,7 +157,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   await waitForUrl(`http://localhost:${WEB_PORT}`, 60_000)
 
   return async () => {
-    for (const child of [webProcess, workersProcess, apiProcess]) killTree(child)
+    for (const child of [webProcess, wsGatewayProcess, workersProcess, apiProcess]) killTree(child)
     await Promise.all([postgres.stop(), redis.stop(), mailpit.stop(), minio.stop()])
   }
 }

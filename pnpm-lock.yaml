@@ -289,6 +289,9 @@ importers:
       '@x/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@x/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@x/db':
         specifier: workspace:*
         version: link:../../packages/db

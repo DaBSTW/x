@@ -8,7 +8,8 @@
     ".": "./src/index.ts",
     "./text": "./src/text/index.ts",
     "./media": "./src/media.ts",
-    "./notifications": "./src/notifications.ts"
+    "./notifications": "./src/notifications.ts",
+    "./realtime": "./src/realtime.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

@@ -13,12 +13,13 @@ import {
   CELEBRITY_FOLLOWER_THRESHOLD,
   TIMELINE_RETENTION_SIZE,
   generateId,
+  timelineChannel,
   timelineKey,
 } from '@x/utils'
 import { Queue } from 'bullmq'
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
 import { Redis } from 'ioredis'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createFanoutProcessor } from './fanout.processor.js'
 import { createFanoutRepository } from './fanout.repository.js'
 import { createFanoutWorker } from './fanout.worker.js'
@@ -81,6 +82,38 @@ describe('fan-out worker', () => {
     expect(members).toEqual([postId.toString()])
     const ttl = await redis.ttl(timelineKey(follower))
     expect(ttl).toBeGreaterThan(0)
+  })
+
+  it("publishes a post.available event on the follower's timeline channel, over real Redis pub/sub (ROADMAP.md 2.2 badge)", async () => {
+    const author = await insertUser(db, { prefix: 'a' })
+    const follower = await insertUser(db, { prefix: 'f' })
+    await db.insert(follows).values({ followerId: follower, followeeId: author })
+
+    const subscriber = new Redis(redisContainer.getConnectionUrl())
+    const received: unknown[] = []
+    await subscriber.subscribe(timelineChannel(follower))
+    subscriber.on('message', (_channel, message) => received.push(JSON.parse(message)))
+
+    try {
+      const repository = createFanoutRepository(db)
+      const process = createFanoutProcessor({ repository, redis })
+      const postId = generateId()
+
+      await process({ postId: postId.toString(), authorId: author.toString() })
+      // PUBLISH fans out synchronously to already-subscribed clients on the
+      // same Redis server, but the subscriber's own event loop still needs
+      // a tick to deliver it — a short poll instead of a fixed sleep.
+      await vi.waitFor(() => expect(received).toHaveLength(1))
+
+      expect(received[0]).toMatchObject({
+        op: 'event',
+        channel: timelineChannel(follower),
+        event: 'post.available',
+        data: { postId: postId.toString() },
+      })
+    } finally {
+      subscriber.disconnect()
+    }
   })
 
   it('trims a follower timeline down to the retention size', async () => {

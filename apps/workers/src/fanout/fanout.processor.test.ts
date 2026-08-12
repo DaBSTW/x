@@ -1,14 +1,14 @@
-import { CELEBRITY_FOLLOWER_THRESHOLD, timelineKey } from '@x/utils'
+import { CELEBRITY_FOLLOWER_THRESHOLD, timelineChannel, timelineKey } from '@x/utils'
 import type { Redis } from 'ioredis'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createFanoutProcessor } from './fanout.processor.js'
 import type { FanoutRepository } from './fanout.repository.js'
 
-type PipelineCommand = ['zadd' | 'zremrangebyrank' | 'expire', ...unknown[]]
+type PipelineCommand = ['zadd' | 'zremrangebyrank' | 'expire' | 'publish', ...unknown[]]
 
 // Hand-rolled, recording only the pipelined commands the processor actually
-// issues — real Redis ZADD/ZREMRANGEBYRANK/EXPIRE semantics are exercised by
-// fanout.integration.test.ts against a real container.
+// issues — real Redis ZADD/ZREMRANGEBYRANK/EXPIRE/PUBLISH semantics are
+// exercised by fanout.integration.test.ts against a real container.
 function createFakeRedis() {
   const strings = new Map<string, string>()
   const executed: PipelineCommand[] = []
@@ -32,6 +32,10 @@ function createFakeRedis() {
         },
         expire(...args: unknown[]) {
           batch.push(['expire', ...args])
+          return api
+        },
+        publish(...args: unknown[]) {
+          batch.push(['publish', ...args])
           return api
         },
         async exec() {
@@ -75,6 +79,37 @@ describe('createFanoutProcessor', () => {
     expect(zaddCalls).toHaveLength(3)
     for (const followerId of followerIds) {
       expect(zaddCalls).toContainEqual(['zadd', timelineKey(followerId), '999', '999'])
+    }
+  })
+
+  it("publishes a post.available event on every follower's timeline channel (ROADMAP.md 2.2 badge)", async () => {
+    const followerIds = [10n, 11n]
+    const repository = createFakeRepository({
+      getFollowersCount: async () => 2,
+      listFollowerIdsBatch: async (_authorId, afterId) => (afterId === null ? followerIds : []),
+    })
+    const process = createFanoutProcessor({ repository, redis: fakeRedis.redis })
+
+    await process({ postId: '999', authorId: '1' })
+
+    const publishCalls = fakeRedis.executed.filter(([op]) => op === 'publish')
+    expect(publishCalls).toHaveLength(2)
+    for (const followerId of followerIds) {
+      const call = publishCalls.find(([, channel]) => channel === timelineChannel(followerId))
+      expect(call).toBeDefined()
+      const [, , payload] = call as [string, string, string]
+      const event = JSON.parse(payload)
+      expect(event).toMatchObject({
+        op: 'event',
+        channel: timelineChannel(followerId),
+        event: 'post.available',
+        data: { postId: '999' },
+      })
+      // A fresh Snowflake id, forward-compatible plumbing for the Redis
+      // Streams recovery bullet (ROADMAP.md 2.2) that doesn't exist yet —
+      // not a fixed/predictable value, just present and well-formed.
+      expect(typeof event.eventId).toBe('string')
+      expect(event.eventId.length).toBeGreaterThan(0)
     }
   })
 

@@ -1,9 +1,12 @@
+import type { RealtimeServerEvent } from '@x/contracts'
 import type { FanoutJobData } from '@x/utils'
 import {
   CELEBRITY_FOLLOWER_THRESHOLD,
   FANOUT_BATCH_SIZE,
   TIMELINE_RETENTION_SIZE,
   TIMELINE_TTL_SECONDS,
+  generateId,
+  timelineChannel,
   timelineKey,
 } from '@x/utils'
 import type { Redis } from 'ioredis'
@@ -58,6 +61,20 @@ export function createFanoutProcessor({ repository, redis }: FanoutProcessorDeps
         pipeline.zadd(key, postId.toString(), data.postId)
         pipeline.zremrangebyrank(key, 0, -(TIMELINE_RETENTION_SIZE + 1))
         pipeline.expire(key, TIMELINE_TTL_SECONDS)
+
+        // "Badge de N posts nuevos" (ROADMAP.md 2.2, SPECS.md §8.2) — best
+        // effort: PUBLISH to a channel with nobody subscribed (ws-gateway
+        // down, or the follower simply not connected right now) is a
+        // Redis no-op, never an error, and the timeline itself is already
+        // correct via the ZADD above regardless of whether this arrives.
+        const event: RealtimeServerEvent = {
+          op: 'event',
+          channel: timelineChannel(followerId),
+          event: 'post.available',
+          data: { postId: data.postId },
+          eventId: generateId().toString(),
+        }
+        pipeline.publish(timelineChannel(followerId), JSON.stringify(event))
       }
       await pipeline.exec()
 
