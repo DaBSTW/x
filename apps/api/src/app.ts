@@ -3,6 +3,7 @@ import cors from '@fastify/cors'
 import helmet from '@fastify/helmet'
 import swagger from '@fastify/swagger'
 import scalarApiReference from '@scalar/fastify-api-reference'
+import { REALTIME_TICKET_TTL_SECONDS } from '@x/utils'
 import Fastify, { type FastifyInstance } from 'fastify'
 import {
   type ZodTypeProvider,
@@ -43,6 +44,8 @@ import { createProfilesService } from './modules/profiles/profiles.service.js'
 import { createPushRepository } from './modules/push/push.repository.js'
 import { registerPushRoutes } from './modules/push/push.routes.js'
 import { createPushService } from './modules/push/push.service.js'
+import { registerRealtimeRoutes } from './modules/realtime/realtime.routes.js'
+import { createRealtimeService } from './modules/realtime/realtime.service.js'
 import { createSocialGraphRepository } from './modules/social-graph/social-graph.repository.js'
 import { registerSocialGraphRoutes } from './modules/social-graph/social-graph.routes.js'
 import { createSocialGraphService } from './modules/social-graph/social-graph.service.js'
@@ -215,6 +218,8 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
     vapidPublicKey: env.VAPID_PUBLIC_KEY ?? null,
   })
 
+  const realtimeService = createRealtimeService(app.redis, REALTIME_TICKET_TTL_SECONDS)
+
   app.get('/health', async () => ({ status: 'ok' }))
 
   await app.register(
@@ -297,6 +302,13 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   await app.register(
     async (instance) => {
       await registerPushRoutes(instance, { pushService, tokenService })
+    },
+    { prefix: '/v1' },
+  )
+
+  await app.register(
+    async (instance) => {
+      await registerRealtimeRoutes(instance, { realtimeService, tokenService })
     },
     { prefix: '/v1' },
   )

@@ -30,6 +30,7 @@ export default defineConfig({
         'src/pagination.ts',
         'src/password.ts',
         'src/queues.ts',
+        'src/realtime.ts',
         'src/snowflake/id.ts',
         'src/snowflake/snowflake.ts',
         'src/text/character-count.ts',
