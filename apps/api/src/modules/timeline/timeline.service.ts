@@ -1,22 +1,17 @@
 import type { Post } from '@x/contracts'
-import type { PostsService } from '../posts/posts.service.js'
+import type { PostsService, ViewerStateLookup } from '../posts/posts.service.js'
 import type { TimelineRepository } from './timeline.repository.js'
 
 /** Timeline only ever needs to turn ids into posts, not the full PostsService surface. */
 export type PostHydrator = Pick<PostsService, 'getManyByIds'>
 
-/**
- * Batch viewer-state lookups (SPECS.md §5.4's `viewer` field). Optional:
- * without it the timeline still works, just without per-post like/repost/
- * bookmark state — see ROADMAP.md 1.4's note on why this isn't wired into
- * every post-producing endpoint, only here where the caller is already
- * guaranteed authenticated.
- */
-export type ViewerStateLookup = {
-  findLikedPostIds: (userId: bigint, postIds: bigint[]) => Promise<Set<bigint>>
-  findBookmarkedPostIds: (userId: bigint, postIds: bigint[]) => Promise<Set<bigint>>
-  findRepostedPostIds: (userId: bigint, postIds: bigint[]) => Promise<Set<bigint>>
-}
+// Batch viewer-state lookups (SPECS.md §5.4's `viewer` field) — the type
+// itself now lives on posts.service.ts (GET /posts/:id uses it too, since
+// ROADMAP.md 1.4's gap there closed); re-exported here so nothing importing
+// `ViewerStateLookup` from this module needs to change. Optional: without
+// it the timeline still works, just without per-post like/repost/bookmark
+// state.
+export type { ViewerStateLookup }
 
 /**
  * Backs mute filtering (ROADMAP.md 2.6) — deliberately only consulted here,

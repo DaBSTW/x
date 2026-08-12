@@ -60,6 +60,48 @@ describe('userProfileSchema', () => {
 
     expect(result.success).toBe(false)
   })
+
+  // ROADMAP.md 1.6/1.4: viewer.following/requested, only ever populated by
+  // GET /users/:username for an authenticated, non-self caller.
+  it('accepts a profile without viewer (the common case: anonymous or self)', () => {
+    const result = userProfileSchema.safeParse({
+      id: '1823456789012345678',
+      username: 'ana',
+      displayName: 'Ana',
+      bio: null,
+      location: null,
+      websiteUrl: null,
+      avatarUrl: null,
+      bannerUrl: null,
+      isProtected: false,
+      isVerified: true,
+      createdAt: '2026-08-11T14:32:00Z',
+      counters: { followers: 0, following: 0, posts: 0 },
+    })
+
+    expect(result.success).toBe(true)
+    if (result.success) expect(result.data.viewer).toBeUndefined()
+  })
+
+  it('accepts a profile with viewer.following/requested set', () => {
+    const result = userProfileSchema.safeParse({
+      id: '1823456789012345678',
+      username: 'ana',
+      displayName: 'Ana',
+      bio: null,
+      location: null,
+      websiteUrl: null,
+      avatarUrl: null,
+      bannerUrl: null,
+      isProtected: true,
+      isVerified: false,
+      createdAt: '2026-08-11T14:32:00Z',
+      counters: { followers: 0, following: 0, posts: 0 },
+      viewer: { following: false, requested: true },
+    })
+
+    expect(result.success).toBe(true)
+  })
 })
 
 describe('updateUserSchema', () => {

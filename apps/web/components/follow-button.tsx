@@ -2,10 +2,18 @@
 
 import { Button } from '@/components/ui/button'
 import { useFollow, useUnfollow } from '@/lib/use-follow'
+import type { ProfileViewerState } from '@x/contracts'
 import { useState } from 'react'
 import { toast } from 'sonner'
 
 type FollowState = 'not-following' | 'following' | 'requested'
+
+function toFollowState(viewer: ProfileViewerState | null | undefined): FollowState {
+  if (!viewer) return 'not-following'
+  if (viewer.following) return 'following'
+  if (viewer.requested) return 'requested'
+  return 'not-following'
+}
 
 /**
  * The profile header's Seguir/Siguiendo toggle (ROADMAP.md 1.6). A
@@ -14,15 +22,22 @@ type FollowState = 'not-following' | 'following' | 'requested'
  * DELETE /users/{id}/follow a real unfollow uses (unfollow() handles both,
  * see social-graph.service.ts).
  *
- * ⚪ `GET /users/:username` has no `viewer.following`/`viewer.requested`
- * field yet — it's public and would need the same optional-auth support
- * `GET /posts/:id` already deferred for the same reason (ROADMAP.md 1.4).
- * So this always starts at "Seguir", even on an account already followed
- * or requested, until that lands — the toggle itself is real from the
- * first click onward.
+ * `initialViewerState` seeds the starting label from `GET
+ * /users/:username`'s `viewer` field (ROADMAP.md 1.4/1.6) — `undefined`
+ * (the caller hasn't fetched it, or there's nothing to fetch: anonymous,
+ * or no `<ProfileHeader>` caller at all) falls back to "Seguir", same as
+ * before this existed. `<ProfileHeader>` passes it via `key` so this
+ * remounts (and re-seeds `useState`) once the async lookup resolves,
+ * instead of a `useEffect` syncing a prop into state (CODESTYLE.md §11).
  */
-export function FollowButton({ userId }: { userId: string }) {
-  const [state, setState] = useState<FollowState>('not-following')
+export function FollowButton({
+  userId,
+  initialViewerState,
+}: {
+  userId: string
+  initialViewerState?: ProfileViewerState | null
+}) {
+  const [state, setState] = useState<FollowState>(() => toFollowState(initialViewerState))
   const follow = useFollow()
   const unfollow = useUnfollow()
 

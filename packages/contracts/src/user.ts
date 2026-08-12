@@ -46,6 +46,17 @@ export const userCountersSchema = z.object({
 })
 export type UserCounters = z.infer<typeof userCountersSchema>
 
+// Mirrors post.ts's viewerStateSchema — `requested` (ROADMAP.md 2.6) is a
+// pending follow request against a protected account, distinct from
+// `following` itself; <FollowButton>'s three states map onto these two
+// booleans (neither: "Seguir", following: "Siguiendo", requested but not
+// following: "Solicitud enviada").
+export const profileViewerStateSchema = z.object({
+  following: z.boolean(),
+  requested: z.boolean(),
+})
+export type ProfileViewerState = z.infer<typeof profileViewerStateSchema>
+
 export const userProfileSchema = z.object({
   id: snowflakeIdSchema,
   username: usernameSchema,
@@ -59,6 +70,11 @@ export const userProfileSchema = z.object({
   isVerified: z.boolean(),
   createdAt: z.string().datetime(),
   counters: userCountersSchema,
+  // Only populated by GET /users/:username when the caller is authenticated
+  // (optionalAuth) and isn't looking at their own profile — same "absent,
+  // not false" contract post.ts's own `viewer` field documents (ROADMAP.md
+  // 1.6/1.4). GET /users/me never sets this: there's no "following myself".
+  viewer: profileViewerStateSchema.optional(),
 })
 export type UserProfile = z.infer<typeof userProfileSchema>
 

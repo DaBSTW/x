@@ -10618,6 +10618,22 @@
                             "posts"
                           ],
                           "additionalProperties": false
+                        },
+                        "viewer": {
+                          "type": "object",
+                          "properties": {
+                            "following": {
+                              "type": "boolean"
+                            },
+                            "requested": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "following",
+                            "requested"
+                          ],
+                          "additionalProperties": false
                         }
                       },
                       "required": [
@@ -10831,6 +10847,22 @@
                             "posts"
                           ],
                           "additionalProperties": false
+                        },
+                        "viewer": {
+                          "type": "object",
+                          "properties": {
+                            "following": {
+                              "type": "boolean"
+                            },
+                            "requested": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "following",
+                            "requested"
+                          ],
+                          "additionalProperties": false
                         }
                       },
                       "required": [
@@ -11006,6 +11038,22 @@
                             "followers",
                             "following",
                             "posts"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "viewer": {
+                          "type": "object",
+                          "properties": {
+                            "following": {
+                              "type": "boolean"
+                            },
+                            "requested": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "following",
+                            "requested"
                           ],
                           "additionalProperties": false
                         }

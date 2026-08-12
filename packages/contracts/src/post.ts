@@ -79,8 +79,9 @@ export const postSchema = z.object({
   // else in this API (ROADMAP.md 2.6).
   quotedPost: z.object(basePostFields).nullable(),
   // Only populated where the caller's identity and a batch lookup are both
-  // already in hand (GET /timeline/home) — absent elsewhere, not false;
-  // the client should not treat a missing `viewer` as "definitely not liked".
+  // already in hand (GET /timeline/home, GET /posts/:id) — absent
+  // elsewhere, not false; the client should not treat a missing `viewer`
+  // as "definitely not liked".
   viewer: viewerStateSchema.optional(),
 })
 export type Post = z.infer<typeof postSchema>

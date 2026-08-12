@@ -215,4 +215,103 @@ describe('profiles routes', () => {
 
     expect(response.statusCode).toBe(400)
   })
+
+  // ROADMAP.md 1.6/1.4: viewer.following, deferred from 1.4's GET
+  // /posts/:id note for the same "needs optional auth" reason — GET
+  // /users/:username now carries optionalAuth too.
+  it('exposes viewer.following only for an authenticated, non-self caller', async () => {
+    const bobRegister = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/register',
+      payload: {
+        username: 'bobprofile',
+        email: 'bobprofile@example.com',
+        password: 'a unique passphrase for bob 9x',
+        birthDate: '1990-01-01',
+      },
+    })
+    expect(bobRegister.statusCode).toBe(201)
+    const bobLogin = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: 'bobprofile@example.com', password: 'a unique passphrase for bob 9x' },
+    })
+    const bobToken = bobLogin.json().data.accessToken
+
+    // Anonymous: no viewer field at all, not viewer: {following: false, ...}.
+    const anonymous = await app.inject({ method: 'GET', url: '/v1/users/alice' })
+    expect(anonymous.json().data.viewer).toBeUndefined()
+
+    // Signed in, not yet following: both false, not simply absent.
+    const beforeFollow = await app.inject({
+      method: 'GET',
+      url: '/v1/users/alice',
+      headers: { authorization: `Bearer ${bobToken}` },
+    })
+    expect(beforeFollow.json().data.viewer).toEqual({ following: false, requested: false })
+
+    const follow = await app.inject({
+      method: 'POST',
+      url: `/v1/users/${aliceId}/follow`,
+      headers: { authorization: `Bearer ${bobToken}` },
+    })
+    expect(follow.json().data.status).toBe('following')
+
+    const afterFollow = await app.inject({
+      method: 'GET',
+      url: '/v1/users/alice',
+      headers: { authorization: `Bearer ${bobToken}` },
+    })
+    expect(afterFollow.json().data.viewer).toEqual({ following: true, requested: false })
+
+    // Alice viewing her own profile: never "following myself".
+    const self = await app.inject({
+      method: 'GET',
+      url: '/v1/users/alice',
+      headers: { authorization: `Bearer ${aliceToken}` },
+    })
+    expect(self.json().data.viewer).toBeUndefined()
+  })
+
+  it('reports viewer.requested for a pending request against a protected account, without viewer.following', async () => {
+    const protect = await app.inject({
+      method: 'PATCH',
+      url: '/v1/users/me',
+      headers: { authorization: `Bearer ${aliceToken}` },
+      payload: { isProtected: true },
+    })
+    expect(protect.statusCode).toBe(200)
+
+    const carolRegister = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/register',
+      payload: {
+        username: 'carolprofile',
+        email: 'carolprofile@example.com',
+        password: 'a unique passphrase for carol 4y',
+        birthDate: '1990-01-01',
+      },
+    })
+    expect(carolRegister.statusCode).toBe(201)
+    const carolLogin = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: 'carolprofile@example.com', password: 'a unique passphrase for carol 4y' },
+    })
+    const carolToken = carolLogin.json().data.accessToken
+
+    const followRequest = await app.inject({
+      method: 'POST',
+      url: `/v1/users/${aliceId}/follow`,
+      headers: { authorization: `Bearer ${carolToken}` },
+    })
+    expect(followRequest.json().data.status).toBe('requested')
+
+    const profile = await app.inject({
+      method: 'GET',
+      url: '/v1/users/alice',
+      headers: { authorization: `Bearer ${carolToken}` },
+    })
+    expect(profile.json().data.viewer).toEqual({ following: false, requested: true })
+  })
 })

@@ -2,7 +2,11 @@ import { errorResponseSchema, updateUserSchema, userProfileResponseSchema } from
 import type { FastifyInstance } from 'fastify'
 import type { ZodTypeProvider } from 'fastify-type-provider-zod'
 import { z } from 'zod'
-import { createRequireAuth, getAuthenticatedUser } from '../../middleware/require-auth.js'
+import {
+  createOptionalAuth,
+  createRequireAuth,
+  getAuthenticatedUser,
+} from '../../middleware/require-auth.js'
 import type { TokenService } from '../../plugins/tokens.js'
 import type { ProfilesService } from './profiles.service.js'
 
@@ -14,6 +18,7 @@ export type ProfilesRoutesOptions = {
 export async function registerProfilesRoutes(app: FastifyInstance, options: ProfilesRoutesOptions) {
   const { profilesService, tokenService } = options
   const requireAuth = createRequireAuth(tokenService)
+  const optionalAuth = createOptionalAuth(tokenService)
   const server = app.withTypeProvider<ZodTypeProvider>()
 
   // Registered ahead of the parametric route below for readability;
@@ -40,9 +45,16 @@ export async function registerProfilesRoutes(app: FastifyInstance, options: Prof
         params: z.object({ username: z.string() }),
         response: { 200: userProfileResponseSchema, 404: errorResponseSchema },
       },
+      // Public route, personalized when signed in — same optionalAuth
+      // posture as GET /posts/:id (ROADMAP.md 1.4/1.6): backs
+      // viewer.following/requested for <FollowButton>'s initial state.
+      preHandler: [optionalAuth],
     },
     async (request, reply) => {
-      const profile = await profilesService.getByUsername(request.params.username.toLowerCase())
+      const profile = await profilesService.getByUsername(
+        request.params.username.toLowerCase(),
+        request.user?.id,
+      )
       return reply.send({ data: profile })
     },
   )

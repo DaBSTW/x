@@ -685,6 +685,118 @@ describe('posts routes', () => {
     expect('quotedPost' in quoteOnProfile.quotedPost).toBe(false)
   })
 
+  // ROADMAP.md 1.4: GET /posts/:id's `viewer` field — deferred there
+  // originally for "needs optional auth", which 2.6 later added without
+  // anyone wiring this up too. Exercises the real interactionsRepository/
+  // postsRepository queries app.ts wires into postsService's viewerState,
+  // not the fake ones posts.service.test.ts uses.
+  it('GET /posts/:id reports the real viewer.liked/bookmarked/reposted state, per caller', async () => {
+    const viewerRegister = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/register',
+      payload: {
+        username: 'viewerstate',
+        email: 'viewerstate@example.com',
+        password: 'a unique passphrase, viewer 6k',
+        birthDate: '1990-01-01',
+      },
+    })
+    expect(viewerRegister.statusCode).toBe(201)
+    const viewerLogin = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: 'viewerstate@example.com', password: 'a unique passphrase, viewer 6k' },
+    })
+    const viewerToken = viewerLogin.json().data.accessToken
+    const viewerAuthHeader = { authorization: `Bearer ${viewerToken}` }
+
+    const created = await app.inject({
+      method: 'POST',
+      url: '/v1/posts',
+      headers: authHeader(),
+      payload: { text: 'post para probar el estado del viewer' },
+    })
+    const postId = created.json().data.id
+
+    // Anonymous: no viewer field at all.
+    const anonymous = await app.inject({ method: 'GET', url: `/v1/posts/${postId}` })
+    expect(anonymous.json().data.viewer).toBeUndefined()
+
+    // Signed in, no interaction yet: all three false, not absent.
+    const beforeInteracting = await app.inject({
+      method: 'GET',
+      url: `/v1/posts/${postId}`,
+      headers: viewerAuthHeader,
+    })
+    expect(beforeInteracting.json().data.viewer).toEqual({
+      liked: false,
+      bookmarked: false,
+      reposted: false,
+    })
+
+    await app.inject({
+      method: 'POST',
+      url: `/v1/posts/${postId}/like`,
+      headers: viewerAuthHeader,
+    })
+    await app.inject({
+      method: 'POST',
+      url: `/v1/posts/${postId}/bookmark`,
+      headers: viewerAuthHeader,
+    })
+    await app.inject({
+      method: 'POST',
+      url: `/v1/posts/${postId}/repost`,
+      headers: viewerAuthHeader,
+    })
+
+    // reposted comes from postsRepository.findRepostedPostIds (a query
+    // against posts itself, kind = 'repost') — a genuinely different table
+    // than liked/bookmarked's interactionsRepository, so this is the one
+    // check of the three that isn't just re-exercising the same query twice.
+    const afterInteracting = await app.inject({
+      method: 'GET',
+      url: `/v1/posts/${postId}`,
+      headers: viewerAuthHeader,
+    })
+    expect(afterInteracting.json().data.viewer).toEqual({
+      liked: true,
+      bookmarked: true,
+      reposted: true,
+    })
+
+    // Someone else who never interacted still reads all-false — viewer
+    // state is per caller, not a property of the post itself.
+    const otherRegister = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/register',
+      payload: {
+        username: 'viewerstate2',
+        email: 'viewerstate2@example.com',
+        password: 'a unique passphrase, viewer2 6k',
+        birthDate: '1990-01-01',
+      },
+    })
+    expect(otherRegister.statusCode).toBe(201)
+    const otherLogin = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: 'viewerstate2@example.com', password: 'a unique passphrase, viewer2 6k' },
+    })
+    const otherToken = otherLogin.json().data.accessToken
+
+    const otherView = await app.inject({
+      method: 'GET',
+      url: `/v1/posts/${postId}`,
+      headers: { authorization: `Bearer ${otherToken}` },
+    })
+    expect(otherView.json().data.viewer).toEqual({
+      liked: false,
+      bookmarked: false,
+      reposted: false,
+    })
+  })
+
   it('GET /posts/:id/replies paginates a post’s direct replies by cursor', async () => {
     const root = (
       await app.inject({

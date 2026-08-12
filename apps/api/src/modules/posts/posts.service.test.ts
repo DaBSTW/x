@@ -346,6 +346,37 @@ function pairKey(a: bigint, b: bigint): string {
   return [a, b].sort((x, y) => (x > y ? 1 : x < y ? -1 : 0)).join(':')
 }
 
+// Mirrors createFakeBlockLookup — three small `${userId}:${postId}` sets
+// stand in for interactions.repository.ts's likes/bookmarks tables and
+// posts.repository.ts's own findRepostedPostIds.
+function createFakeViewerStateLookup() {
+  const liked = new Set<string>()
+  const bookmarked = new Set<string>()
+  const reposted = new Set<string>()
+  return {
+    viewerState: {
+      async findLikedPostIds(userId: bigint, postIds: bigint[]) {
+        return new Set(postIds.filter((id) => liked.has(`${userId}:${id}`)))
+      },
+      async findBookmarkedPostIds(userId: bigint, postIds: bigint[]) {
+        return new Set(postIds.filter((id) => bookmarked.has(`${userId}:${id}`)))
+      },
+      async findRepostedPostIds(userId: bigint, postIds: bigint[]) {
+        return new Set(postIds.filter((id) => reposted.has(`${userId}:${id}`)))
+      },
+    },
+    like(userId: bigint, postId: bigint) {
+      liked.add(`${userId}:${postId}`)
+    },
+    bookmark(userId: bigint, postId: bigint) {
+      bookmarked.add(`${userId}:${postId}`)
+    },
+    repost(userId: bigint, postId: bigint) {
+      reposted.add(`${userId}:${postId}`)
+    },
+  }
+}
+
 // Mirrors createFakeBlockLookup — a protected-author set plus an approved-
 // follower set is enough to fake ProtectionLookup's one method, standing in
 // for social-graph.repository.ts's real users.is_protected + follows join.
@@ -1215,6 +1246,125 @@ describe('createPostsService', () => {
 
       const fetched = await service.getById(BigInt(quote.id))
       expect(fetched.quotedPost).toMatchObject({ id: quoted.id, text: 'post citable' })
+    })
+  })
+
+  // ROADMAP.md 1.4: GET /posts/:id's `viewer` field — deferred originally
+  // because the route was public and needed optional auth, which 2.6 later
+  // added for the block/protection checks above without anyone wiring this
+  // up too. createPostsService's 10th positional arg (viewerState).
+  describe('viewer state (getById)', () => {
+    it('omits viewer when there is no viewerId (anonymous)', async () => {
+      const { viewerState } = createFakeViewerStateLookup()
+      const service = createPostsService(
+        repository,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        viewerState,
+      )
+      const post = await service.create(author.id, {
+        text: 'hola',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      const fetched = await service.getById(BigInt(post.id))
+      expect(fetched.viewer).toBeUndefined()
+    })
+
+    it('omits viewer when no viewerState dependency is wired up', async () => {
+      const service = createPostsService(repository)
+      const post = await service.create(author.id, {
+        text: 'hola',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      const fetched = await service.getById(BigInt(post.id), generateId())
+      expect(fetched.viewer).toBeUndefined()
+    })
+
+    it('reports liked/bookmarked/reposted true only for what the viewer actually did', async () => {
+      const { viewerState, like, bookmark } = createFakeViewerStateLookup()
+      const service = createPostsService(
+        repository,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        viewerState,
+      )
+      const post = await service.create(author.id, {
+        text: 'hola',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      const viewer = generateId()
+      like(viewer, BigInt(post.id))
+      bookmark(viewer, BigInt(post.id))
+
+      const fetched = await service.getById(BigInt(post.id), viewer)
+      expect(fetched.viewer).toEqual({ liked: true, bookmarked: true, reposted: false })
+    })
+
+    it('reports all-false for a viewer who never interacted with the post', async () => {
+      const { viewerState } = createFakeViewerStateLookup()
+      const service = createPostsService(
+        repository,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        viewerState,
+      )
+      const post = await service.create(author.id, {
+        text: 'hola',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      const fetched = await service.getById(BigInt(post.id), generateId())
+      expect(fetched.viewer).toEqual({ liked: false, bookmarked: false, reposted: false })
+    })
+
+    it("getThread's own `post` field also carries viewer state, since it's built via getById", async () => {
+      const { viewerState, repost } = createFakeViewerStateLookup()
+      const service = createPostsService(
+        repository,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        viewerState,
+      )
+      const post = await service.create(author.id, {
+        text: 'hola',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      const viewer = generateId()
+      repost(viewer, BigInt(post.id))
+
+      const thread = await service.getThread(BigInt(post.id), viewer)
+      expect(thread.post.viewer).toEqual({ liked: false, bookmarked: false, reposted: true })
     })
   })
 

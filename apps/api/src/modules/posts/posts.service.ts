@@ -39,6 +39,23 @@ export type ProtectionLookup = {
   ): Promise<Set<bigint>>
 }
 
+/**
+ * Backs `viewer.liked/reposted/bookmarked` (SPECS.md §5.4) on `GET
+ * /posts/:id` — ROADMAP.md 1.4 originally deferred this here specifically
+ * because the route was public and "needed optional auth"; 2.6 added
+ * `optionalAuth` for the block/protection checks above, closing that gap
+ * without anyone coming back to wire this up too. timeline.service.ts
+ * defines a structurally identical type for the same three lookups applied
+ * to a whole page instead of one post — not reused directly (timeline
+ * already depends on posts as its PostHydrator, so the dependency only
+ * goes one way), but any object satisfying one satisfies the other.
+ */
+export type ViewerStateLookup = {
+  findLikedPostIds: (userId: bigint, postIds: bigint[]) => Promise<Set<bigint>>
+  findBookmarkedPostIds: (userId: bigint, postIds: bigint[]) => Promise<Set<bigint>>
+  findRepostedPostIds: (userId: bigint, postIds: bigint[]) => Promise<Set<bigint>>
+}
+
 const MAX_MENTIONS = 10
 const MAX_HASHTAGS = 5
 // GET /posts/:id/thread's first page of replies — ROADMAP.md 2.1. "Load
@@ -165,6 +182,11 @@ export function createPostsService(
   // Also optional, same posture again: unset means no hashtag ever reaches
   // trend scoring (ROADMAP.md 2.4) — a missing dependency, not a broken one.
   publishTrendIngest?: PublishTrendIngest,
+  // Also optional, same posture again: unset (or an anonymous viewerId —
+  // there's no "self" to look up state for) simply leaves `viewer` absent
+  // from the response, same "absent, not false" contract postSchema
+  // documents for GET /timeline/home's own use of this.
+  viewerState?: ViewerStateLookup,
 ) {
   /**
    * `undefined` when there's no viewer (anonymous) or nothing wired up —
@@ -244,6 +266,30 @@ export function createPostsService(
       )
     }
     return result
+  }
+
+  /**
+   * `viewerId` undefined (anonymous, or the dependency simply isn't wired
+   * up) leaves the DTO exactly as `toPostDto` built it — `viewer` stays
+   * absent, not `false`. Only used by `getById` today (the one route
+   * ROADMAP.md 1.4 called out by name); getThread's own `post` field gets
+   * this for free since it's built via getById, but ancestors/replies
+   * (getManyByIds) and every other list in this file still don't — a
+   * narrower fix than a page-wide one, matching the gap as written rather
+   * than quietly widening it.
+   */
+  async function withViewerState(post: Post, viewerId?: bigint): Promise<Post> {
+    if (!viewerState || viewerId === undefined) return post
+    const id = BigInt(post.id)
+    const [liked, bookmarked, reposted] = await Promise.all([
+      viewerState.findLikedPostIds(viewerId, [id]),
+      viewerState.findBookmarkedPostIds(viewerId, [id]),
+      viewerState.findRepostedPostIds(viewerId, [id]),
+    ])
+    return {
+      ...post,
+      viewer: { liked: liked.has(id), bookmarked: bookmarked.has(id), reposted: reposted.has(id) },
+    }
   }
 
   async function fetchBaseline(postId: bigint): Promise<CachedCounters> {
@@ -660,7 +706,7 @@ export function createPostsService(
     ])
     if (!author) throw new NotFoundError('user', post.authorId.toString())
 
-    return toPostDto(
+    const dto = toPostDto(
       post,
       author,
       counters ?? emptyCounters(),
@@ -669,6 +715,7 @@ export function createPostsService(
       mediaUrlConfig,
       post.quotedPostId ? (quotedPostsById.get(post.quotedPostId) ?? null) : null,
     )
+    return withViewerState(dto, viewerId)
   }
 
   async function remove(postId: bigint, requesterId: bigint): Promise<void> {

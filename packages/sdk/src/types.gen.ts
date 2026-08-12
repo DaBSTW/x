@@ -4098,6 +4098,10 @@ export interface paths {
                                     following: number;
                                     posts: number;
                                 };
+                                viewer?: {
+                                    following: boolean;
+                                    requested: boolean;
+                                };
                             };
                         };
                     };
@@ -4180,6 +4184,10 @@ export interface paths {
                                     following: number;
                                     posts: number;
                                 };
+                                viewer?: {
+                                    following: boolean;
+                                    requested: boolean;
+                                };
                             };
                         };
                     };
@@ -4252,6 +4260,10 @@ export interface paths {
                                     followers: number;
                                     following: number;
                                     posts: number;
+                                };
+                                viewer?: {
+                                    following: boolean;
+                                    requested: boolean;
                                 };
                             };
                         };

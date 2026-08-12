@@ -23,16 +23,48 @@ const DM_PRIVACY_CODES: Record<NonNullable<UpdateUserInput['dmPrivacy']>, number
   following: 1,
 }
 
+/**
+ * Backs `viewer.following`/`viewer.requested` on `GET /users/:username`
+ * (ROADMAP.md 1.6, deferred from 1.4 for the same "needs optional auth"
+ * reason `GET /posts/:id` was — posts.service.ts's own ViewerStateLookup
+ * closed that gap first). Two lookups, not one: a protected account
+ * (ROADMAP.md 2.6) can have a *pending request* without an actual follow,
+ * which <FollowButton>'s third state ("Solicitud enviada") depends on
+ * telling apart from either extreme.
+ */
+export type FollowStateLookup = {
+  isFollowing(followerId: bigint, followeeId: bigint): Promise<boolean>
+  hasPendingFollowRequest(requesterId: bigint, targetId: bigint): Promise<boolean>
+}
+
 export type ProfilesService = ReturnType<typeof createProfilesService>
 
 export function createProfilesService(
   repository: ProfilesRepository,
   mediaUrlConfig: MediaUrlConfig = DEFAULT_MEDIA_URL_CONFIG,
+  // Optional, same posture as every other lookup dependency in this
+  // codebase (posts.service.ts's blockLookup/protectionLookup/etc.): unset,
+  // no viewerId, or viewerId === the profile's own id (nothing to ask —
+  // nobody follows themselves) all leave `viewer` absent from the response.
+  followState?: FollowStateLookup,
 ) {
-  async function getByUsername(usernameLower: string): Promise<UserProfile> {
+  async function withViewerFollowState(
+    profile: UserProfile,
+    viewerId?: bigint,
+  ): Promise<UserProfile> {
+    const targetId = BigInt(profile.id)
+    if (!followState || viewerId === undefined || viewerId === targetId) return profile
+    const [following, requested] = await Promise.all([
+      followState.isFollowing(viewerId, targetId),
+      followState.hasPendingFollowRequest(viewerId, targetId),
+    ])
+    return { ...profile, viewer: { following, requested } }
+  }
+
+  async function getByUsername(usernameLower: string, viewerId?: bigint): Promise<UserProfile> {
     const row = await repository.findProfileByUsername(usernameLower)
     if (!row) throw new NotFoundError('user', usernameLower)
-    return toProfileDto(row)
+    return withViewerFollowState(toProfileDto(row), viewerId)
   }
 
   async function getById(userId: bigint): Promise<UserProfile> {

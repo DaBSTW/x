@@ -65,6 +65,29 @@ function createFakeRepository() {
   return { repository, rowsById, ownedMediaByKey }
 }
 
+// Mirrors posts.service.test.ts's createFakeFollowLookup/createFakeBlockLookup
+// — two small `${a}:${b}` sets are enough to fake FollowStateLookup's two methods.
+function createFakeFollowStateLookup() {
+  const following = new Set<string>()
+  const requested = new Set<string>()
+  return {
+    followState: {
+      async isFollowing(followerId: bigint, followeeId: bigint) {
+        return following.has(`${followerId}:${followeeId}`)
+      },
+      async hasPendingFollowRequest(requesterId: bigint, targetId: bigint) {
+        return requested.has(`${requesterId}:${targetId}`)
+      },
+    },
+    follow(followerId: bigint, followeeId: bigint) {
+      following.add(`${followerId}:${followeeId}`)
+    },
+    request(requesterId: bigint, targetId: bigint) {
+      requested.add(`${requesterId}:${targetId}`)
+    },
+  }
+}
+
 describe('createProfilesService', () => {
   let repository: ProfilesRepository
   let rowsById: Map<bigint, ProfileRow>
@@ -96,6 +119,55 @@ describe('createProfilesService', () => {
     it('throws NotFoundError for an unknown username', async () => {
       const service = createProfilesService(repository)
       await expect(service.getByUsername('ghost')).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    })
+
+    // ROADMAP.md 1.6/1.4: viewer.following/requested.
+    it('omits viewer when there is no viewerId (anonymous)', async () => {
+      const { followState } = createFakeFollowStateLookup()
+      const service = createProfilesService(repository, undefined, followState)
+      const profile = await service.getByUsername('ana')
+      expect(profile.viewer).toBeUndefined()
+    })
+
+    it('omits viewer when no followState dependency is wired up', async () => {
+      const service = createProfilesService(repository)
+      const profile = await service.getByUsername('ana', generateId())
+      expect(profile.viewer).toBeUndefined()
+    })
+
+    it('omits viewer when the viewer is looking at their own profile', async () => {
+      const { followState } = createFakeFollowStateLookup()
+      const service = createProfilesService(repository, undefined, followState)
+      const profile = await service.getByUsername('ana', userId)
+      expect(profile.viewer).toBeUndefined()
+    })
+
+    it('reports following: true for a profile the viewer already follows', async () => {
+      const { followState, follow } = createFakeFollowStateLookup()
+      const service = createProfilesService(repository, undefined, followState)
+      const viewer = generateId()
+      follow(viewer, userId)
+
+      const profile = await service.getByUsername('ana', viewer)
+      expect(profile.viewer).toEqual({ following: true, requested: false })
+    })
+
+    it('reports requested: true for a pending request against a protected account, without following', async () => {
+      const { followState, request } = createFakeFollowStateLookup()
+      const service = createProfilesService(repository, undefined, followState)
+      const viewer = generateId()
+      request(viewer, userId)
+
+      const profile = await service.getByUsername('ana', viewer)
+      expect(profile.viewer).toEqual({ following: false, requested: true })
+    })
+
+    it('reports both false for a viewer with no relationship to the profile', async () => {
+      const { followState } = createFakeFollowStateLookup()
+      const service = createProfilesService(repository, undefined, followState)
+
+      const profile = await service.getByUsername('ana', generateId())
+      expect(profile.viewer).toEqual({ following: false, requested: false })
     })
   })
 

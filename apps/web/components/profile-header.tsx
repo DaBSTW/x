@@ -6,6 +6,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { formatCompactNumber, formatJoinDate } from '@/lib/format'
 import { useCurrentUser } from '@/lib/use-current-user'
+import { useProfileViewerState } from '@/lib/use-profile-viewer-state'
 import type { UserProfile } from '@x/contracts'
 import { useState } from 'react'
 
@@ -17,6 +18,10 @@ type ProfileHeaderProps = {
 export function ProfileHeader({ profile }: ProfileHeaderProps) {
   const { data: me } = useCurrentUser()
   const isOwnProfile = me?.id === profile.id
+  // Only worth fetching for someone else's profile — nobody follows
+  // themselves, and isOwnProfile's own <FollowButton> branch below never
+  // renders for it anyway (ROADMAP.md 1.4/1.6).
+  const viewerState = useProfileViewerState(profile.username, !isOwnProfile)
   const [isEditing, setIsEditing] = useState(false)
   // Forces ProfileEditDialog to remount on every open, same reasoning as
   // composer.tsx's AttachmentThumbnail/AltTextDialog — the draft always
@@ -50,7 +55,16 @@ export function ProfileHeader({ profile }: ProfileHeaderProps) {
               Editar perfil
             </Button>
           ) : (
-            <FollowButton userId={profile.id} />
+            // key flips exactly once, from "pending" to "resolved", so
+            // FollowButton's useState re-seeds from the real viewer state
+            // once the client-side lookup above resolves — same remount
+            // pattern as ProfileEditDialog's dialogInstance, just triggered
+            // by a query settling instead of a click.
+            <FollowButton
+              key={viewerState.isSuccess ? 'resolved' : 'pending'}
+              userId={profile.id}
+              initialViewerState={viewerState.data ?? null}
+            />
           )}
         </div>
         <div>

@@ -139,6 +139,12 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   const socialGraphRepository = createSocialGraphRepository(app.db)
 
   const postsRepository = createPostsRepository(app.db)
+  // Created ahead of postsService (only app.db needed, not postsService
+  // itself) so its findLikedPostIds/findBookmarkedPostIds can back
+  // postsService's own viewerState — GET /posts/:id (ROADMAP.md 1.4).
+  // interactionsService below reuses this same instance rather than a
+  // second one.
+  const interactionsRepository = createInteractionsRepository(app.db)
   const postsService = createPostsService(
     postsRepository,
     async (postId, authorId) => {
@@ -156,6 +162,11 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
     socialGraphRepository,
     socialGraphRepository,
     trendIngestQueue.enqueue,
+    {
+      findLikedPostIds: interactionsRepository.findLikedPostIds,
+      findBookmarkedPostIds: interactionsRepository.findBookmarkedPostIds,
+      findRepostedPostIds: postsRepository.findRepostedPostIds,
+    },
   )
 
   const mediaStorage = createMediaStorage({
@@ -179,7 +190,6 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
     publishNotification,
   )
 
-  const interactionsRepository = createInteractionsRepository(app.db)
   const interactionsService = createInteractionsService(
     interactionsRepository,
     postsRepository,
@@ -218,7 +228,16 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   )
 
   const profilesRepository = createProfilesRepository(app.db)
-  const profilesService = createProfilesService(profilesRepository, mediaUrlConfig)
+  const profilesService = createProfilesService(profilesRepository, mediaUrlConfig, {
+    // Same findFollow adapter as postsService/conversationsService above,
+    // plus findFollowRequest for the "pending, not yet following" case
+    // (ROADMAP.md 2.6's protected accounts) — GET /users/:username's
+    // viewer.following/requested (ROADMAP.md 1.6).
+    isFollowing: (followerId, followeeId) =>
+      socialGraphRepository.findFollow(followerId, followeeId).then(Boolean),
+    hasPendingFollowRequest: (requesterId, targetId) =>
+      socialGraphRepository.findFollowRequest(requesterId, targetId).then(Boolean),
+  })
 
   const notificationsRepository = createNotificationsRepository(app.db)
   const notificationsService = createNotificationsService(notificationsRepository, app.redis)
