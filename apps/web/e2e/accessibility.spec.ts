@@ -20,6 +20,13 @@ test.describe('accessibility (ROADMAP.md 2.10)', () => {
   test('the authenticated app has no WCAG 2.2 AA violations across its main pages', async ({
     page,
   }) => {
+    // 8 pages × (a cold Next.js dev-mode compile on first visit + a full
+    // axe-core scan) outgrew the default 30s as (app)/layout.tsx picked up
+    // another globally-mounted client component (<QuoteComposerDialog>,
+    // ROADMAP.md 2.1 "Citas", alongside <KeyboardShortcutsDialog>) — every
+    // route under that layout now bundles it. Purely a timing budget, not a
+    // retry for flakiness: each page still gets exactly one real scan below.
+    test.setTimeout(60_000)
     const username = await signUpAndLogIn(page, 'a11y')
 
     const paths = [

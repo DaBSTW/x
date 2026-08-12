@@ -14,13 +14,16 @@ import { toast } from 'sonner'
 type ComposerProps = {
   /** Set to compose a reply instead of a top-level post (ROADMAP.md 2.1) — threaded straight through to POST /posts, whose reply_policy enforcement can reject it. */
   inReplyToId?: string
+  /** Set to compose a quote instead of a top-level post (ROADMAP.md 2.1 "Citas") — <QuoteComposerDialog> is the one caller today. Mutually exclusive with inReplyToId in practice (nothing currently opens a Composer with both), but nothing here enforces that; POST /posts itself only branches on inReplyToId first. */
+  quotedPostId?: string
   placeholder?: string
-  /** Called after a successful post/reply, in addition to the built-in reset — e.g. the thread page uses it to router.refresh() so the new reply shows up in its server-rendered list. */
+  /** Called after a successful post/reply/quote, in addition to the built-in reset — e.g. the thread page uses it to router.refresh() so the new reply shows up in its server-rendered list. */
   onPosted?: () => void
 }
 
 export function Composer({
   inReplyToId,
+  quotedPostId,
   placeholder = '¿Qué está pasando?',
   onPosted,
 }: ComposerProps = {}) {
@@ -50,6 +53,7 @@ export function Composer({
         text,
         ...(readyMediaIds.length > 0 && { mediaIds: readyMediaIds }),
         ...(inReplyToId !== undefined && { inReplyToId }),
+        ...(quotedPostId !== undefined && { quotedPostId }),
         replyPolicy: 'everyone',
         isSensitive: false,
       },

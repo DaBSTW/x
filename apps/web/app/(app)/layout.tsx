@@ -1,6 +1,7 @@
 'use client'
 
 import { KeyboardShortcutsDialog } from '@/components/keyboard-shortcuts-dialog'
+import { QuoteComposerDialog } from '@/components/quote-composer-dialog'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { useCurrentUser } from '@/lib/use-current-user'
 import { useGlobalKeyboardShortcuts } from '@/lib/use-global-keyboard-shortcuts'
@@ -65,6 +66,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       </aside>
       <main className="flex-1 p-6">{children}</main>
       <KeyboardShortcutsDialog />
+      <QuoteComposerDialog />
     </div>
   )
 }

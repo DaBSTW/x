@@ -47,7 +47,9 @@ export const viewerStateSchema = z.object({
 })
 export type ViewerState = z.infer<typeof viewerStateSchema>
 
-export const postSchema = z.object({
+// Shared by postSchema and its own embedded quotedPost — see the comment on
+// `quotedPost` below for why the embed doesn't just reuse postSchema itself.
+const basePostFields = {
   id: snowflakeIdSchema,
   text: z.string().nullable(),
   createdAt: z.string().datetime(),
@@ -63,6 +65,19 @@ export const postSchema = z.object({
   conversationId: snowflakeIdSchema,
   inReplyToId: snowflakeIdSchema.nullable(),
   counters: postCountersSchema,
+}
+
+export const postSchema = z.object({
+  ...basePostFields,
+  // ROADMAP.md 2.1 "Citas": the quoted post, embedded one level deep only —
+  // a quote of a quote shows just the innermost post's own text/media, the
+  // same way every quoting-post UI stops nesting, rather than a schema
+  // that's self-referential to unbounded depth. `null` both for a post that
+  // isn't a quote and for a quote whose target has since become unreachable
+  // (deleted, or hidden by a block/protected-account rule) — same "silently
+  // gone, not a distinct error" posture a stale reference gets everywhere
+  // else in this API (ROADMAP.md 2.6).
+  quotedPost: z.object(basePostFields).nullable(),
   // Only populated where the caller's identity and a batch lookup are both
   // already in hand (GET /timeline/home) — absent elsewhere, not false;
   // the client should not treat a missing `viewer` as "definitely not liked".

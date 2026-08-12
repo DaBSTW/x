@@ -553,6 +553,92 @@ describe('createPostsService', () => {
       expect(await redis.hgetall(`post:${quoted.id}:counters`)).toMatchObject({ quotes: '1' })
     })
 
+    it('embeds the quoted post (ROADMAP.md 2.1 "Citas")', async () => {
+      const service = createPostsService(repository)
+      const stranger = addAuthor(authorsById, { id: generateId(), username: 'eve' })
+      const quoted = await service.create(stranger.id, {
+        text: 'post citable',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      const quote = await service.create(author.id, {
+        text: 'una cita',
+        quotedPostId: BigInt(quoted.id),
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      expect(quote.quotedPost).toMatchObject({
+        id: quoted.id,
+        text: 'post citable',
+        author: { username: 'eve' },
+      })
+    })
+
+    it('sets quotedPost to null for a post that does not quote anything', async () => {
+      const service = createPostsService(repository)
+
+      const post = await service.create(author.id, {
+        text: 'hola mundo',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      expect(post.quotedPost).toBeNull()
+    })
+
+    it('embeds one level deep only — a quote of a quote does not carry its own nested quotedPost', async () => {
+      const service = createPostsService(repository)
+      const root = await service.create(author.id, {
+        text: 'raíz citable',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      const middle = await service.create(author.id, {
+        text: 'cita de la raíz',
+        quotedPostId: BigInt(root.id),
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      const outer = await service.create(author.id, {
+        text: 'cita de la cita',
+        quotedPostId: BigInt(middle.id),
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      expect(outer.quotedPost).toMatchObject({ id: middle.id, text: 'cita de la raíz' })
+      // `Post['quotedPost']`'s own type has no `quotedPost` field to read —
+      // contracts/post.ts's embed schema doesn't declare one, so this is
+      // enforced at compile time for every caller, not just checked here at
+      // runtime. The wire contract backs that up independently by stripping
+      // a stray second level instead of erroring — see post.test.ts's
+      // "strips a second level of nesting".
+    })
+
+    it('leaves quotedPost null once the quoted post has since been deleted', async () => {
+      const service = createPostsService(repository)
+      const quoted = await service.create(author.id, {
+        text: 'será borrado',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      const quote = await service.create(author.id, {
+        text: 'cita a un post que luego se borra',
+        quotedPostId: BigInt(quoted.id),
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      expect(quote.quotedPost).not.toBeNull()
+
+      await service.remove(BigInt(quoted.id), author.id)
+      const refetched = await service.getById(BigInt(quote.id))
+
+      expect(refetched.quotedPost).toBeNull()
+    })
+
     it('does not touch Redis counters when no redis client was configured', async () => {
       // The optional-dependency default every other test in this file relies
       // on — must not throw just because nobody passed a redis client.
@@ -862,6 +948,24 @@ describe('createPostsService', () => {
         code: 'NOT_FOUND',
       })
     })
+
+    it('embeds the quoted post when fetching a quote by id', async () => {
+      const service = createPostsService(repository)
+      const quoted = await service.create(author.id, {
+        text: 'post citable',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      const quote = await service.create(author.id, {
+        text: 'una cita',
+        quotedPostId: BigInt(quoted.id),
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      const fetched = await service.getById(BigInt(quote.id))
+      expect(fetched.quotedPost).toMatchObject({ id: quoted.id, text: 'post citable' })
+    })
   })
 
   // ROADMAP.md 2.6 — every read below takes the same createPostsService(...)
@@ -912,6 +1016,39 @@ describe('createPostsService', () => {
       await expect(service.getById(BigInt(post.id), generateId())).resolves.toMatchObject({
         id: post.id,
       })
+    })
+
+    it('hides the embedded quotedPost when its own author blocked the viewer, without hiding the quoting post itself', async () => {
+      const { blockLookup, block } = createFakeBlockLookup()
+      const service = createPostsService(
+        repository,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        blockLookup,
+      )
+      const viewer = generateId()
+      const stranger = addAuthor(authorsById, { id: generateId(), username: 'eve' })
+      block(stranger.id, viewer)
+      const quoted = await service.create(stranger.id, {
+        text: 'post de alguien que te bloqueó',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      // `author` has no block relationship with anyone here — only the
+      // *quoted* post's author (`stranger`) blocked the viewer.
+      const quote = await service.create(author.id, {
+        text: 'una cita',
+        quotedPostId: BigInt(quoted.id),
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      const fetched = await service.getById(BigInt(quote.id), viewer)
+      expect(fetched.id).toBe(quote.id)
+      expect(fetched.quotedPost).toBeNull()
     })
 
     it('listByUsername returns an empty page for a blocked profile owner', async () => {
@@ -1449,6 +1586,26 @@ describe('createPostsService', () => {
 
       expect(page.items.map((item) => item.id)).toEqual([likedPost.id])
     })
+
+    it('embeds quotedPost for a quote appearing in a profile page', async () => {
+      const service = createPostsService(repository)
+      const quoted = await service.create(author.id, {
+        text: 'post citable',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      await service.create(author.id, {
+        text: 'una cita',
+        quotedPostId: BigInt(quoted.id),
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      const page = await service.listByUsername(author.username.toLowerCase(), 20, null, 'posts')
+
+      const quote = page.items.find((item) => item.text === 'una cita')
+      expect(quote?.quotedPost).toMatchObject({ id: quoted.id, text: 'post citable' })
+    })
   })
 
   describe('getManyByIds', () => {
@@ -1487,6 +1644,25 @@ describe('createPostsService', () => {
     it('returns an empty array without querying the repository for an empty input', async () => {
       const service = createPostsService(repository)
       expect(await service.getManyByIds([])).toEqual([])
+    })
+
+    it('embeds quotedPost for a quote hydrated as part of a batch — the timeline/lists/bookmarks path (ROADMAP.md 2.1)', async () => {
+      const service = createPostsService(repository)
+      const quoted = await service.create(author.id, {
+        text: 'post citable',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      const quote = await service.create(author.id, {
+        text: 'una cita',
+        quotedPostId: BigInt(quoted.id),
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      const items = await service.getManyByIds([BigInt(quote.id)])
+
+      expect(items[0]?.quotedPost).toMatchObject({ id: quoted.id, text: 'post citable' })
     })
   })
 })

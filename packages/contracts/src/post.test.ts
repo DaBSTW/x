@@ -51,6 +51,7 @@ describe('postSchema', () => {
       conversationId: '123',
       inReplyToId: null,
       counters: { likes: 0, reposts: 0, replies: 0, quotes: 0, views: 0 },
+      quotedPost: null,
     })
 
     expect(result.success).toBe(true)
@@ -77,6 +78,7 @@ describe('postSchema', () => {
       conversationId: '123',
       inReplyToId: null,
       counters: { likes: 0, reposts: 0, replies: 0, quotes: 0, views: 0 },
+      quotedPost: null,
     })
 
     expect(result.success).toBe(true)
@@ -93,6 +95,7 @@ describe('postSchema', () => {
       conversationId: '123',
       inReplyToId: null,
       counters: { likes: 0, reposts: 0, replies: 0, quotes: 0, views: 0 },
+      quotedPost: null,
     }
 
     expect(postSchema.safeParse(base).success).toBe(true)
@@ -102,5 +105,87 @@ describe('postSchema', () => {
         viewer: { liked: true, reposted: false, bookmarked: false },
       }).success,
     ).toBe(true)
+  })
+
+  it('accepts a quote embedding the post it quotes, one level deep', () => {
+    const inner = {
+      id: '456',
+      text: 'post original',
+      createdAt: '2026-08-11T00:00:00Z',
+      author: { id: '2', username: 'bob', displayName: 'Bob', avatarUrl: null, isVerified: false },
+      entities: [],
+      media: [],
+      conversationId: '456',
+      inReplyToId: null,
+      counters: { likes: 0, reposts: 0, replies: 0, quotes: 1, views: 0 },
+    }
+    const result = postSchema.safeParse({
+      id: '123',
+      text: 'una cita',
+      createdAt: '2026-08-11T00:00:00Z',
+      author: { id: '1', username: 'ana', displayName: 'Ana', avatarUrl: null, isVerified: false },
+      entities: [],
+      media: [],
+      conversationId: '123',
+      inReplyToId: null,
+      counters: { likes: 0, reposts: 0, replies: 0, quotes: 0, views: 0 },
+      quotedPost: inner,
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.success && result.data.quotedPost?.text).toBe('post original')
+  })
+
+  it('strips a second level of nesting instead of failing the parse — the wire contract stays one level deep no matter what a caller hands it', () => {
+    const innerWithSpuriousNesting = {
+      id: '456',
+      text: 'post original',
+      createdAt: '2026-08-11T00:00:00Z',
+      author: { id: '2', username: 'bob', displayName: 'Bob', avatarUrl: null, isVerified: false },
+      entities: [],
+      media: [],
+      conversationId: '456',
+      inReplyToId: null,
+      counters: { likes: 0, reposts: 0, replies: 0, quotes: 1, views: 0 },
+      // Not part of the embedded schema — must be dropped by Zod's default
+      // strip-unknown-keys behavior on parse, not rejected outright: this is
+      // what actually keeps the *serialized* response bounded to one level
+      // (fastify-type-provider-zod serializes `schema.safeParse(data).data`,
+      // not the raw handler return value — see posts.service.ts's toPostDto).
+      quotedPost: { id: '789', shouldNotSurvive: true },
+    }
+    const result = postSchema.safeParse({
+      id: '123',
+      text: 'una cita',
+      createdAt: '2026-08-11T00:00:00Z',
+      author: { id: '1', username: 'ana', displayName: 'Ana', avatarUrl: null, isVerified: false },
+      entities: [],
+      media: [],
+      conversationId: '123',
+      inReplyToId: null,
+      counters: { likes: 0, reposts: 0, replies: 0, quotes: 0, views: 0 },
+      quotedPost: innerWithSpuriousNesting,
+    })
+
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.data.quotedPost?.id).toBe('456')
+    expect(Object.keys(result.data.quotedPost ?? {})).not.toContain('quotedPost')
+  })
+
+  it('rejects a post missing the required quotedPost key', () => {
+    const result = postSchema.safeParse({
+      id: '123',
+      text: 'hola',
+      createdAt: '2026-08-11T00:00:00Z',
+      author: { id: '1', username: 'ana', displayName: 'Ana', avatarUrl: null, isVerified: false },
+      entities: [],
+      media: [],
+      conversationId: '123',
+      inReplyToId: null,
+      counters: { likes: 0, reposts: 0, replies: 0, quotes: 0, views: 0 },
+    })
+
+    expect(result.success).toBe(false)
   })
 })

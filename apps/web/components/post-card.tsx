@@ -1,10 +1,12 @@
 'use client'
 
 import { MediaGrid } from '@/components/media-grid'
+import { QuotedPostCard } from '@/components/quoted-post-card'
 import { RichText } from '@/components/rich-text'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { cn } from '@/lib/cn'
 import { formatCompactNumber, formatRelativeTime } from '@/lib/format'
+import { useQuoteComposerStore } from '@/lib/quote-composer-store'
 import { useBookmark, useLike, useRepost } from '@/lib/use-post-mutations'
 import type { Post } from '@x/contracts'
 import Link from 'next/link'
@@ -25,6 +27,7 @@ function PostCardComponent({ post }: PostCardProps) {
   const like = useLike()
   const repost = useRepost()
   const bookmark = useBookmark()
+  const openQuoteComposer = useQuoteComposerStore((state) => state.open)
 
   // Absent (not hydrated) reads as "not yet known" everywhere except here:
   // a button needs a concrete direction to toggle, and false is the only
@@ -68,6 +71,7 @@ function PostCardComponent({ post }: PostCardProps) {
             <MediaGrid media={post.media} />
           </div>
         )}
+        {post.quotedPost && <QuotedPostCard post={post.quotedPost} />}
         <div className="mt-1 flex max-w-md items-center justify-between">
           <ActionButton
             label="Responder"
@@ -83,6 +87,13 @@ function PostCardComponent({ post }: PostCardProps) {
             count={post.counters.reposts}
             pending={repost.isPending}
             onClick={() => repost.mutate({ postId: post.id, active: viewer.reposted })}
+          />
+          <ActionButton
+            label="Citar"
+            icon="quote"
+            active={false}
+            count={post.counters.quotes}
+            onClick={() => openQuoteComposer(post)}
           />
           <ActionButton
             label={viewer.liked ? 'Quitar me gusta' : 'Me gusta'}
@@ -107,7 +118,7 @@ function PostCardComponent({ post }: PostCardProps) {
 
 export const PostCard = memo(PostCardComponent)
 
-type ActionIconKind = 'reply' | 'repost' | 'like' | 'bookmark'
+type ActionIconKind = 'reply' | 'repost' | 'quote' | 'like' | 'bookmark'
 
 type ActionButtonProps = {
   label: string
@@ -121,6 +132,12 @@ type ActionButtonProps = {
 const ACTIVE_COLOR: Record<ActionIconKind, string> = {
   reply: '',
   repost: 'text-green-600 dark:text-green-500',
+  // Never actually toggled — ActionButton is always called with active={false}
+  // for "quote" (opening the composer isn't a state to reflect back), unlike
+  // like/repost/bookmark which mirror `viewer`. Kept in the record anyway so
+  // this stays a total function over ActionIconKind, not a partial one two
+  // call sites down that'd only fail at runtime.
+  quote: '',
   like: 'text-destructive',
   bookmark: 'text-primary',
 }
@@ -149,6 +166,8 @@ const ICON_PATHS: Record<ActionIconKind, string> = {
   reply:
     'M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z',
   repost: 'M17 1l4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 23l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3',
+  // Two quotation-mark blocks — ROADMAP.md 2.1 "Citas".
+  quote: 'M6 17h3l2-4V7H5v6h3zM15 17h3l2-4V7h-6v6h3z',
   like: 'M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z',
   bookmark: 'M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z',
 }

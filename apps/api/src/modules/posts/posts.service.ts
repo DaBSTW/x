@@ -127,6 +127,62 @@ export function createPostsService(
     ])
     return new Set([...blocked, ...protectedHidden])
   }
+
+  /**
+   * ROADMAP.md 2.1 "Citas": batch-hydrates the posts a page of quotes points
+   * to, keyed by id, so every read path can embed `quotedPost` for free the
+   * same way blocks and protected accounts already apply "for free" through
+   * findHiddenAuthorIds. Deliberately one level only — this never re-embeds
+   * *its own* result's quotedPostId, so a quote-of-a-quote's inner post
+   * always renders with `quotedPost: null`, matching every quoting-post UI's
+   * convention instead of a schema that's self-referential to unbounded
+   * depth. Missing, deleted, or (given `viewerId`) hidden-by-block/
+   * protection targets are silently absent from the map — same "a stale
+   * reference isn't an error" posture as getManyByIds below.
+   */
+  async function fetchQuotedPosts(
+    quotedPostIds: bigint[],
+    viewerId?: bigint,
+  ): Promise<Map<bigint, Post>> {
+    const ids = [...new Set(quotedPostIds)]
+    if (ids.length === 0) return new Map()
+
+    const [rows, countersRows, entityRows, mediaRows] = await Promise.all([
+      repository.findPostsByIds(ids),
+      repository.findCountersForPosts(ids),
+      repository.findEntitiesForPosts(ids),
+      repository.findMediaForPosts(ids),
+    ])
+    const authorIds = [...new Set(rows.map((row) => row.authorId))]
+    const [authors, hiddenAuthorIds] = await Promise.all([
+      repository.findAuthorsByIds(authorIds),
+      findHiddenAuthorIds(viewerId, authorIds),
+    ])
+    const authorsById = new Map(authors.map((author) => [author.id, author]))
+    const countersByPostId = new Map(countersRows.map((row) => [row.postId, row]))
+    const entitiesByPostId = groupBy(entityRows, (row) => row.postId)
+    const mediaByPostId = groupBy(mediaRows, (row) => row.postId)
+
+    const result = new Map<bigint, Post>()
+    for (const row of rows) {
+      const author = authorsById.get(row.authorId)
+      if (!author || hiddenAuthorIds.has(row.authorId)) continue
+      result.set(
+        row.id,
+        toPostDto(
+          row,
+          author,
+          countersByPostId.get(row.id) ?? emptyCounters(),
+          entitiesByPostId.get(row.id) ?? [],
+          mediaByPostId.get(row.id) ?? [],
+          mediaUrlConfig,
+          null,
+        ),
+      )
+    }
+    return result
+  }
+
   async function fetchBaseline(postId: bigint): Promise<CachedCounters> {
     const counters = await repository.findPostCounters(postId)
     if (!counters) return zeroCounters()
@@ -257,9 +313,12 @@ export function createPostsService(
       mediaIds,
     )
 
-    const [author, mediaRows] = await Promise.all([
+    const [author, mediaRows, quotedPostsById] = await Promise.all([
       repository.findAuthorById(authorId),
       repository.findMediaForPosts([id]),
+      input.quotedPostId
+        ? fetchQuotedPosts([input.quotedPostId], authorId)
+        : Promise.resolve(new Map<bigint, Post>()),
     ])
     if (!author) throw new NotFoundError('user', authorId.toString())
 
@@ -324,6 +383,7 @@ export function createPostsService(
       entityRows,
       mediaRows,
       mediaUrlConfig,
+      input.quotedPostId ? (quotedPostsById.get(input.quotedPostId) ?? null) : null,
     )
   }
 
@@ -343,15 +403,26 @@ export function createPostsService(
       throw new NotFoundError('post', id.toString())
     }
 
-    const [author, counters, entities, mediaRows] = await Promise.all([
+    const [author, counters, entities, mediaRows, quotedPostsById] = await Promise.all([
       repository.findAuthorById(post.authorId),
       repository.findPostCounters(id),
       repository.findPostEntities(id),
       repository.findMediaForPosts([id]),
+      post.quotedPostId
+        ? fetchQuotedPosts([post.quotedPostId], viewerId)
+        : Promise.resolve(new Map<bigint, Post>()),
     ])
     if (!author) throw new NotFoundError('user', post.authorId.toString())
 
-    return toPostDto(post, author, counters ?? emptyCounters(), entities, mediaRows, mediaUrlConfig)
+    return toPostDto(
+      post,
+      author,
+      counters ?? emptyCounters(),
+      entities,
+      mediaRows,
+      mediaUrlConfig,
+      post.quotedPostId ? (quotedPostsById.get(post.quotedPostId) ?? null) : null,
+    )
   }
 
   async function remove(postId: bigint, requesterId: bigint): Promise<void> {
@@ -462,11 +533,12 @@ export function createPostsService(
         : fullPage
 
     const postIds = page.map((row) => row.id)
-    const [authors, countersRows, entityRows, mediaRows] = await Promise.all([
+    const [authors, countersRows, entityRows, mediaRows, quotedPostsById] = await Promise.all([
       repository.findAuthorsByIds([...new Set(page.map((row) => row.authorId))]),
       repository.findCountersForPosts(postIds),
       repository.findEntitiesForPosts(postIds),
       repository.findMediaForPosts(postIds),
+      fetchQuotedPosts(collectQuotedIds(page), viewerId),
     ])
     const authorsById = new Map(authors.map((author) => [author.id, author]))
     const countersByPostId = new Map(countersRows.map((row) => [row.postId, row]))
@@ -483,6 +555,7 @@ export function createPostsService(
         entitiesByPostId.get(row.id) ?? [],
         mediaByPostId.get(row.id) ?? [],
         mediaUrlConfig,
+        row.quotedPostId ? (quotedPostsById.get(row.quotedPostId) ?? null) : null,
       )
     })
 
@@ -507,9 +580,10 @@ export function createPostsService(
       repository.findMediaForPosts(ids),
     ])
     const authorIds = [...new Set(rows.map((row) => row.authorId))]
-    const [authors, hiddenAuthorIds] = await Promise.all([
+    const [authors, hiddenAuthorIds, quotedPostsById] = await Promise.all([
       repository.findAuthorsByIds(authorIds),
       findHiddenAuthorIds(viewerId, authorIds),
+      fetchQuotedPosts(collectQuotedIds(rows), viewerId),
     ])
     const rowsById = new Map(rows.map((row) => [row.id, row]))
     const authorsById = new Map(authors.map((author) => [author.id, author]))
@@ -530,6 +604,7 @@ export function createPostsService(
           entitiesByPostId.get(id) ?? [],
           mediaByPostId.get(id) ?? [],
           mediaUrlConfig,
+          row.quotedPostId ? (quotedPostsById.get(row.quotedPostId) ?? null) : null,
         ),
       )
     }
@@ -635,6 +710,12 @@ function toPostDto(
   entities: Array<{ kind: number; value: string; startIndex: number; endIndex: number }>,
   mediaRows: PostMediaRow[],
   mediaUrlConfig: MediaUrlConfig,
+  // ROADMAP.md 2.1 "Citas" — already resolved by the caller (fetchQuotedPosts
+  // above), never derived from `post` here: the caller alone knows whether
+  // this DTO is itself the one-level-deep embed, in which case it always
+  // passes `null` to stop recursion. Defaults to `null` so every existing
+  // call site (a post that was never a quote) doesn't need to pass it.
+  quotedPost: Post | null = null,
 ): Post {
   return {
     id: post.id.toString(),
@@ -663,6 +744,7 @@ function toPostDto(
       quotes: counters.quotesCount,
       views: Number(counters.viewsCount),
     },
+    quotedPost,
   }
 }
 
@@ -701,4 +783,9 @@ function groupBy<T, K>(items: T[], key: (item: T) => K): Map<K, T[]> {
     }
   }
   return map
+}
+
+/** The distinct, non-null quotedPostIds a page of rows references — fetchQuotedPosts' input across listByUsername and getManyByIds. */
+function collectQuotedIds(rows: Array<{ quotedPostId: bigint | null }>): bigint[] {
+  return rows.flatMap((row) => (row.quotedPostId !== null ? [row.quotedPostId] : []))
 }

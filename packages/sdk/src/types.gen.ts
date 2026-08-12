@@ -1184,6 +1184,47 @@ export interface paths {
                                     quotes: number;
                                     views: number;
                                 };
+                                quotedPost: {
+                                    id: string;
+                                    text: string | null;
+                                    /** Format: date-time */
+                                    createdAt: string;
+                                    author: {
+                                        id: string;
+                                        username: string;
+                                        displayName: string;
+                                        /** Format: uri */
+                                        avatarUrl: string | null;
+                                        isVerified: boolean;
+                                    };
+                                    entities: {
+                                        /** @enum {string} */
+                                        kind: "mention" | "hashtag" | "url" | "cashtag";
+                                        value: string;
+                                        start: number;
+                                        end: number;
+                                    }[];
+                                    media: {
+                                        id: string;
+                                        /** @enum {string} */
+                                        kind: "image" | "gif" | "video";
+                                        /** Format: uri */
+                                        url: string;
+                                        width: number | null;
+                                        height: number | null;
+                                        blurhash: string | null;
+                                        altText: string | null;
+                                    }[];
+                                    conversationId: string;
+                                    inReplyToId: string | null;
+                                    counters: {
+                                        likes: number;
+                                        reposts: number;
+                                        replies: number;
+                                        quotes: number;
+                                        views: number;
+                                    };
+                                } | null;
                                 viewer?: {
                                     liked: boolean;
                                     reposted: boolean;
@@ -1342,6 +1383,47 @@ export interface paths {
                                     quotes: number;
                                     views: number;
                                 };
+                                quotedPost: {
+                                    id: string;
+                                    text: string | null;
+                                    /** Format: date-time */
+                                    createdAt: string;
+                                    author: {
+                                        id: string;
+                                        username: string;
+                                        displayName: string;
+                                        /** Format: uri */
+                                        avatarUrl: string | null;
+                                        isVerified: boolean;
+                                    };
+                                    entities: {
+                                        /** @enum {string} */
+                                        kind: "mention" | "hashtag" | "url" | "cashtag";
+                                        value: string;
+                                        start: number;
+                                        end: number;
+                                    }[];
+                                    media: {
+                                        id: string;
+                                        /** @enum {string} */
+                                        kind: "image" | "gif" | "video";
+                                        /** Format: uri */
+                                        url: string;
+                                        width: number | null;
+                                        height: number | null;
+                                        blurhash: string | null;
+                                        altText: string | null;
+                                    }[];
+                                    conversationId: string;
+                                    inReplyToId: string | null;
+                                    counters: {
+                                        likes: number;
+                                        reposts: number;
+                                        replies: number;
+                                        quotes: number;
+                                        views: number;
+                                    };
+                                } | null;
                                 viewer?: {
                                     liked: boolean;
                                     reposted: boolean;
@@ -1524,6 +1606,47 @@ export interface paths {
                                         quotes: number;
                                         views: number;
                                     };
+                                    quotedPost: {
+                                        id: string;
+                                        text: string | null;
+                                        /** Format: date-time */
+                                        createdAt: string;
+                                        author: {
+                                            id: string;
+                                            username: string;
+                                            displayName: string;
+                                            /** Format: uri */
+                                            avatarUrl: string | null;
+                                            isVerified: boolean;
+                                        };
+                                        entities: {
+                                            /** @enum {string} */
+                                            kind: "mention" | "hashtag" | "url" | "cashtag";
+                                            value: string;
+                                            start: number;
+                                            end: number;
+                                        }[];
+                                        media: {
+                                            id: string;
+                                            /** @enum {string} */
+                                            kind: "image" | "gif" | "video";
+                                            /** Format: uri */
+                                            url: string;
+                                            width: number | null;
+                                            height: number | null;
+                                            blurhash: string | null;
+                                            altText: string | null;
+                                        }[];
+                                        conversationId: string;
+                                        inReplyToId: string | null;
+                                        counters: {
+                                            likes: number;
+                                            reposts: number;
+                                            replies: number;
+                                            quotes: number;
+                                            views: number;
+                                        };
+                                    } | null;
                                     viewer?: {
                                         liked: boolean;
                                         reposted: boolean;
@@ -1570,6 +1693,47 @@ export interface paths {
                                         quotes: number;
                                         views: number;
                                     };
+                                    quotedPost: {
+                                        id: string;
+                                        text: string | null;
+                                        /** Format: date-time */
+                                        createdAt: string;
+                                        author: {
+                                            id: string;
+                                            username: string;
+                                            displayName: string;
+                                            /** Format: uri */
+                                            avatarUrl: string | null;
+                                            isVerified: boolean;
+                                        };
+                                        entities: {
+                                            /** @enum {string} */
+                                            kind: "mention" | "hashtag" | "url" | "cashtag";
+                                            value: string;
+                                            start: number;
+                                            end: number;
+                                        }[];
+                                        media: {
+                                            id: string;
+                                            /** @enum {string} */
+                                            kind: "image" | "gif" | "video";
+                                            /** Format: uri */
+                                            url: string;
+                                            width: number | null;
+                                            height: number | null;
+                                            blurhash: string | null;
+                                            altText: string | null;
+                                        }[];
+                                        conversationId: string;
+                                        inReplyToId: string | null;
+                                        counters: {
+                                            likes: number;
+                                            reposts: number;
+                                            replies: number;
+                                            quotes: number;
+                                            views: number;
+                                        };
+                                    } | null;
                                     viewer?: {
                                         liked: boolean;
                                         reposted: boolean;
@@ -1616,6 +1780,47 @@ export interface paths {
                                         quotes: number;
                                         views: number;
                                     };
+                                    quotedPost: {
+                                        id: string;
+                                        text: string | null;
+                                        /** Format: date-time */
+                                        createdAt: string;
+                                        author: {
+                                            id: string;
+                                            username: string;
+                                            displayName: string;
+                                            /** Format: uri */
+                                            avatarUrl: string | null;
+                                            isVerified: boolean;
+                                        };
+                                        entities: {
+                                            /** @enum {string} */
+                                            kind: "mention" | "hashtag" | "url" | "cashtag";
+                                            value: string;
+                                            start: number;
+                                            end: number;
+                                        }[];
+                                        media: {
+                                            id: string;
+                                            /** @enum {string} */
+                                            kind: "image" | "gif" | "video";
+                                            /** Format: uri */
+                                            url: string;
+                                            width: number | null;
+                                            height: number | null;
+                                            blurhash: string | null;
+                                            altText: string | null;
+                                        }[];
+                                        conversationId: string;
+                                        inReplyToId: string | null;
+                                        counters: {
+                                            likes: number;
+                                            reposts: number;
+                                            replies: number;
+                                            quotes: number;
+                                            views: number;
+                                        };
+                                    } | null;
                                     viewer?: {
                                         liked: boolean;
                                         reposted: boolean;
@@ -1726,6 +1931,47 @@ export interface paths {
                                     quotes: number;
                                     views: number;
                                 };
+                                quotedPost: {
+                                    id: string;
+                                    text: string | null;
+                                    /** Format: date-time */
+                                    createdAt: string;
+                                    author: {
+                                        id: string;
+                                        username: string;
+                                        displayName: string;
+                                        /** Format: uri */
+                                        avatarUrl: string | null;
+                                        isVerified: boolean;
+                                    };
+                                    entities: {
+                                        /** @enum {string} */
+                                        kind: "mention" | "hashtag" | "url" | "cashtag";
+                                        value: string;
+                                        start: number;
+                                        end: number;
+                                    }[];
+                                    media: {
+                                        id: string;
+                                        /** @enum {string} */
+                                        kind: "image" | "gif" | "video";
+                                        /** Format: uri */
+                                        url: string;
+                                        width: number | null;
+                                        height: number | null;
+                                        blurhash: string | null;
+                                        altText: string | null;
+                                    }[];
+                                    conversationId: string;
+                                    inReplyToId: string | null;
+                                    counters: {
+                                        likes: number;
+                                        reposts: number;
+                                        replies: number;
+                                        quotes: number;
+                                        views: number;
+                                    };
+                                } | null;
                                 viewer?: {
                                     liked: boolean;
                                     reposted: boolean;
@@ -1838,6 +2084,47 @@ export interface paths {
                                     quotes: number;
                                     views: number;
                                 };
+                                quotedPost: {
+                                    id: string;
+                                    text: string | null;
+                                    /** Format: date-time */
+                                    createdAt: string;
+                                    author: {
+                                        id: string;
+                                        username: string;
+                                        displayName: string;
+                                        /** Format: uri */
+                                        avatarUrl: string | null;
+                                        isVerified: boolean;
+                                    };
+                                    entities: {
+                                        /** @enum {string} */
+                                        kind: "mention" | "hashtag" | "url" | "cashtag";
+                                        value: string;
+                                        start: number;
+                                        end: number;
+                                    }[];
+                                    media: {
+                                        id: string;
+                                        /** @enum {string} */
+                                        kind: "image" | "gif" | "video";
+                                        /** Format: uri */
+                                        url: string;
+                                        width: number | null;
+                                        height: number | null;
+                                        blurhash: string | null;
+                                        altText: string | null;
+                                    }[];
+                                    conversationId: string;
+                                    inReplyToId: string | null;
+                                    counters: {
+                                        likes: number;
+                                        reposts: number;
+                                        replies: number;
+                                        quotes: number;
+                                        views: number;
+                                    };
+                                } | null;
                                 viewer?: {
                                     liked: boolean;
                                     reposted: boolean;
@@ -2805,6 +3092,47 @@ export interface paths {
                                     quotes: number;
                                     views: number;
                                 };
+                                quotedPost: {
+                                    id: string;
+                                    text: string | null;
+                                    /** Format: date-time */
+                                    createdAt: string;
+                                    author: {
+                                        id: string;
+                                        username: string;
+                                        displayName: string;
+                                        /** Format: uri */
+                                        avatarUrl: string | null;
+                                        isVerified: boolean;
+                                    };
+                                    entities: {
+                                        /** @enum {string} */
+                                        kind: "mention" | "hashtag" | "url" | "cashtag";
+                                        value: string;
+                                        start: number;
+                                        end: number;
+                                    }[];
+                                    media: {
+                                        id: string;
+                                        /** @enum {string} */
+                                        kind: "image" | "gif" | "video";
+                                        /** Format: uri */
+                                        url: string;
+                                        width: number | null;
+                                        height: number | null;
+                                        blurhash: string | null;
+                                        altText: string | null;
+                                    }[];
+                                    conversationId: string;
+                                    inReplyToId: string | null;
+                                    counters: {
+                                        likes: number;
+                                        reposts: number;
+                                        replies: number;
+                                        quotes: number;
+                                        views: number;
+                                    };
+                                } | null;
                                 viewer?: {
                                     liked: boolean;
                                     reposted: boolean;
@@ -2914,6 +3242,47 @@ export interface paths {
                                     quotes: number;
                                     views: number;
                                 };
+                                quotedPost: {
+                                    id: string;
+                                    text: string | null;
+                                    /** Format: date-time */
+                                    createdAt: string;
+                                    author: {
+                                        id: string;
+                                        username: string;
+                                        displayName: string;
+                                        /** Format: uri */
+                                        avatarUrl: string | null;
+                                        isVerified: boolean;
+                                    };
+                                    entities: {
+                                        /** @enum {string} */
+                                        kind: "mention" | "hashtag" | "url" | "cashtag";
+                                        value: string;
+                                        start: number;
+                                        end: number;
+                                    }[];
+                                    media: {
+                                        id: string;
+                                        /** @enum {string} */
+                                        kind: "image" | "gif" | "video";
+                                        /** Format: uri */
+                                        url: string;
+                                        width: number | null;
+                                        height: number | null;
+                                        blurhash: string | null;
+                                        altText: string | null;
+                                    }[];
+                                    conversationId: string;
+                                    inReplyToId: string | null;
+                                    counters: {
+                                        likes: number;
+                                        reposts: number;
+                                        replies: number;
+                                        quotes: number;
+                                        views: number;
+                                    };
+                                } | null;
                                 viewer?: {
                                     liked: boolean;
                                     reposted: boolean;
@@ -3311,6 +3680,47 @@ export interface paths {
                                     quotes: number;
                                     views: number;
                                 };
+                                quotedPost: {
+                                    id: string;
+                                    text: string | null;
+                                    /** Format: date-time */
+                                    createdAt: string;
+                                    author: {
+                                        id: string;
+                                        username: string;
+                                        displayName: string;
+                                        /** Format: uri */
+                                        avatarUrl: string | null;
+                                        isVerified: boolean;
+                                    };
+                                    entities: {
+                                        /** @enum {string} */
+                                        kind: "mention" | "hashtag" | "url" | "cashtag";
+                                        value: string;
+                                        start: number;
+                                        end: number;
+                                    }[];
+                                    media: {
+                                        id: string;
+                                        /** @enum {string} */
+                                        kind: "image" | "gif" | "video";
+                                        /** Format: uri */
+                                        url: string;
+                                        width: number | null;
+                                        height: number | null;
+                                        blurhash: string | null;
+                                        altText: string | null;
+                                    }[];
+                                    conversationId: string;
+                                    inReplyToId: string | null;
+                                    counters: {
+                                        likes: number;
+                                        reposts: number;
+                                        replies: number;
+                                        quotes: number;
+                                        views: number;
+                                    };
+                                } | null;
                                 viewer?: {
                                     liked: boolean;
                                     reposted: boolean;
@@ -5064,6 +5474,47 @@ export interface paths {
                                     quotes: number;
                                     views: number;
                                 };
+                                quotedPost: {
+                                    id: string;
+                                    text: string | null;
+                                    /** Format: date-time */
+                                    createdAt: string;
+                                    author: {
+                                        id: string;
+                                        username: string;
+                                        displayName: string;
+                                        /** Format: uri */
+                                        avatarUrl: string | null;
+                                        isVerified: boolean;
+                                    };
+                                    entities: {
+                                        /** @enum {string} */
+                                        kind: "mention" | "hashtag" | "url" | "cashtag";
+                                        value: string;
+                                        start: number;
+                                        end: number;
+                                    }[];
+                                    media: {
+                                        id: string;
+                                        /** @enum {string} */
+                                        kind: "image" | "gif" | "video";
+                                        /** Format: uri */
+                                        url: string;
+                                        width: number | null;
+                                        height: number | null;
+                                        blurhash: string | null;
+                                        altText: string | null;
+                                    }[];
+                                    conversationId: string;
+                                    inReplyToId: string | null;
+                                    counters: {
+                                        likes: number;
+                                        reposts: number;
+                                        replies: number;
+                                        quotes: number;
+                                        views: number;
+                                    };
+                                } | null;
                                 viewer?: {
                                     liked: boolean;
                                     reposted: boolean;

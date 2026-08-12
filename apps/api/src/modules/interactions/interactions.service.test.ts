@@ -166,6 +166,7 @@ describe('createInteractionsService', () => {
         conversationId: postId.toString(),
         inReplyToId: null,
         counters: { likes: 0, reposts: 0, replies: 0, quotes: 0, views: 0 },
+        quotedPost: null,
       }),
       unrepost: async () => true,
     }

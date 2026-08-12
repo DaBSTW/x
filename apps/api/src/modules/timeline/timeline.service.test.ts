@@ -20,6 +20,7 @@ function makePost(id: bigint, authorId = 1n): Post {
     conversationId: id.toString(),
     inReplyToId: null,
     counters: { likes: 0, reposts: 0, replies: 0, quotes: 0, views: 0 },
+    quotedPost: null,
   }
 }
 

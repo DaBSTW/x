@@ -447,6 +447,71 @@ describe('posts routes', () => {
     expect(body.meta.hasMoreReplies).toBe(false)
   })
 
+  it('embeds the quoted post one level deep, over the wire, everywhere a post is read (ROADMAP.md 2.1 "Citas")', async () => {
+    await app.inject({
+      method: 'POST',
+      url: '/v1/auth/register',
+      payload: {
+        username: 'citable',
+        email: 'citable@example.com',
+        password: 'a unique passphrase, citable 8p',
+        birthDate: '1990-01-01',
+      },
+    })
+    const citableLogin = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: 'citable@example.com', password: 'a unique passphrase, citable 8p' },
+    })
+    const citableToken = citableLogin.json().data.accessToken
+
+    const quoted = (
+      await app.inject({
+        method: 'POST',
+        url: '/v1/posts',
+        headers: { authorization: `Bearer ${citableToken}` },
+        payload: { text: 'post citable desde el test de integración' },
+      })
+    ).json().data
+
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/v1/posts',
+      headers: authHeader(),
+      payload: { text: 'una cita desde el test de integración', quotedPostId: quoted.id },
+    })
+    expect(createResponse.statusCode).toBe(201)
+    const quote = createResponse.json().data
+    expect(quote.quotedPost).toMatchObject({
+      id: quoted.id,
+      text: 'post citable desde el test de integración',
+      author: { username: 'citable' },
+    })
+
+    // GET /posts/:id — a second, independent read path resolves it too, not
+    // just the create response.
+    const getResponse = await app.inject({ method: 'GET', url: `/v1/posts/${quote.id}` })
+    expect(getResponse.json().data.quotedPost).toMatchObject({ id: quoted.id })
+
+    // GET /users/:username/posts — the batch-hydrated profile-page path.
+    const profileResponse = await app.inject({ method: 'GET', url: '/v1/users/poster/posts' })
+    const quoteOnProfile = profileResponse
+      .json()
+      .data.find((post: { id: string }) => post.id === quote.id)
+    expect(quoteOnProfile.quotedPost).toMatchObject({ id: quoted.id })
+
+    // Postgres, not Redis, backs every counters read in this module (SPECS.md
+    // §4.4) — the create above bumped Redis, but apps/workers' 5s flush to
+    // Postgres isn't running in this API-only test, so the embedded post's
+    // own counters.quotes still reads 0 here (same reasoning as
+    // interactions.integration.test.ts's "100 concurrent likes" test). Not a
+    // bug in the embed — it's reading through the same primitive
+    // (findCountersForPosts) every other post response already does.
+    expect(quoteOnProfile.quotedPost.counters.quotes).toBe(0)
+    // And the embed doesn't itself carry a further quotedPost key.
+    expect('quotedPost' in quoteOnProfile.quotedPost).toBe(false)
+  })
+
   it('GET /posts/:id/replies paginates a post’s direct replies by cursor', async () => {
     const root = (
       await app.inject({
