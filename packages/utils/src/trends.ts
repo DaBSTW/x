@@ -16,6 +16,12 @@ export const MIN_AUTHOR_POST_RATIO = 0.3
  * segmentation is built, only) scope a trend snapshot is computed for. */
 export const GLOBAL_TREND_SCOPE = 'global'
 
+// Not specified by SPECS.md §10.4 — a generous but bounded ceiling so the
+// 5-minute job doesn't retain an unbounded number of long-tail qualifying
+// hashtags per scope. GET /trends can ask for fewer per request; it can
+// never get more than this without a fresh compute-trends run.
+export const MAX_TRENDS_PER_SCOPE = 50
+
 export type TrendCandidateStats = {
   count1h: number
   baselineHourly: number

@@ -103,6 +103,7 @@ export {
 } from './realtime.js'
 export {
   GLOBAL_TREND_SCOPE,
+  MAX_TRENDS_PER_SCOPE,
   MIN_AUTHOR_POST_RATIO,
   MIN_UNIQUE_AUTHORS,
   computeTrendScore,

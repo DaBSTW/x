@@ -44,6 +44,14 @@ const envSchema = z.object({
   CLICKHOUSE_USER: z.string().default('x'),
   CLICKHOUSE_PASSWORD: z.string().default('x'),
   CLICKHOUSE_DATABASE: z.string().default('x_analytics'),
+
+  // scripts/compute-trends.ts (ROADMAP.md 2.4 / SPECS.md §10.4's antispam
+  // gate). Comma-separated, case-insensitive, matched without the leading
+  // '#'. An env var rather than a DB table with no UI to manage it
+  // (apps/admin is Phase 3) — this at least changes with a restart, not a
+  // redeploy, and a hand-edited DB row would need the same manual
+  // intervention anyway.
+  TRENDS_BLACKLIST_HASHTAGS: z.string().default(''),
 })
 
 export type Env = z.infer<typeof envSchema>

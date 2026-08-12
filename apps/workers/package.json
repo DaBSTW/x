@@ -12,6 +12,7 @@
     "test": "vitest run --coverage",
     "test:integration": "vitest run --coverage --config vitest.integration.config.ts",
     "reconcile-counters": "tsx scripts/reconcile-counters.ts",
+    "compute-trends": "tsx scripts/compute-trends.ts",
     "generate-vapid-keys": "tsx scripts/generate-vapid-keys.ts"
   },
   "dependencies": {
