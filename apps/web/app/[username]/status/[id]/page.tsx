@@ -1,4 +1,5 @@
 import { PostCard } from '@/components/post-card'
+import { ThreadReplies } from '@/components/thread-replies'
 import { ThreadReplyComposer } from '@/components/thread-reply-composer'
 import { serverApiClient } from '@/lib/server-api-client'
 import type { Metadata } from 'next'
@@ -46,32 +47,37 @@ export async function generateMetadata({ params }: PostPageProps): Promise<Metad
  * (SEO-friendly), the id is canonical: a post whose author since renamed
  * still resolves here rather than 404ing, real X's own convention.
  *
- * ⚪ The focused post isn't visually distinguished from its ancestors/replies
- * (real X renders it larger) — <PostCard> has no such variant yet, and this
- * ships the plain, honest version instead of inventing one under time
- * pressure. Same for the connecting lines SPECS.md's <ThreadView> mentions:
- * this is the information architecture (ancestors → focused post → replies)
- * without that visual layer yet.
+ * Ancestors → focused post → replies, with a connecting line down the
+ * ancestor chain into the focused post (the one relationship in a thread
+ * that's an unambiguous straight line — replies can branch to many
+ * unrelated people, so they don't get one) and the focused post rendered in
+ * <PostCard>'s 'focused' variant (bigger avatar/text, a full timestamp +
+ * view count instead of the feed's relative one).
  */
 export default async function PostPage({ params }: PostPageProps) {
   const { id } = await params
   const thread = await fetchThread(id)
   if (!thread) notFound()
 
+  // Remounts <ThreadReplies> (resetting whatever it loaded beyond this first
+  // page) whenever the server-rendered first page itself genuinely changes —
+  // e.g. after ThreadReplyComposer's router.refresh() lands a brand new
+  // reply — without needing an effect to re-sync props into state.
+  const repliesKey = `${thread.post.id}:${thread.replies.map((post) => post.id).join(',')}`
+
   return (
     <div className="mx-auto min-h-svh max-w-2xl border-x border-border">
       {thread.ancestors.map((post) => (
-        <PostCard key={post.id} post={post} />
+        <PostCard key={post.id} post={post} showConnectorBelow />
       ))}
-      <PostCard post={thread.post} />
+      <PostCard post={thread.post} variant="focused" />
       <ThreadReplyComposer postId={thread.post.id} />
-      {thread.replies.length > 0 && (
-        <div className="border-t-4 border-border">
-          {thread.replies.map((post) => (
-            <PostCard key={post.id} post={post} />
-          ))}
-        </div>
-      )}
+      <ThreadReplies
+        key={repliesKey}
+        postId={thread.post.id}
+        initialReplies={thread.replies}
+        initialCursor={thread.meta.nextCursor}
+      />
     </div>
   )
 }

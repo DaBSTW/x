@@ -2047,6 +2047,7 @@ export interface paths {
                                 }[];
                                 meta: {
                                     hasMoreReplies: boolean;
+                                    nextCursor: string | null;
                                 };
                             };
                         };

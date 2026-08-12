@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { formatCompactNumber, formatJoinDate, formatRelativeTime } from './format'
+import {
+  formatCompactNumber,
+  formatFullDateTime,
+  formatJoinDate,
+  formatRelativeTime,
+} from './format'
 
 describe('formatRelativeTime', () => {
   const now = new Date('2026-08-11T12:00:00.000Z')
@@ -51,5 +56,15 @@ describe('formatJoinDate', () => {
     // Mid-month UTC so no reasonable local timezone shifts it into a
     // different month.
     expect(formatJoinDate('2026-08-15T12:00:00.000Z')).toBe('agosto de 2026')
+  })
+})
+
+describe('formatFullDateTime', () => {
+  it('renders "time · date" in Spanish', () => {
+    // Assumes a UTC runtime (this repo's CI and every *.test.ts environment
+    // here run UTC, same implicit assumption formatJoinDate's own test
+    // above makes) — formatFullDateTime deliberately has no timeZone
+    // option, so it renders in whatever zone the browser itself is in.
+    expect(formatFullDateTime('2026-08-11T14:32:00.000Z')).toBe('14:32 · 11 ago 2026')
   })
 })

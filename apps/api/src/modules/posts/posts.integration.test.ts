@@ -566,6 +566,58 @@ describe('posts routes', () => {
     expect(body.post.id).toBe(leaf.id)
     expect(body.replies.map((post: { id: string }) => post.id)).toEqual([reply.id])
     expect(body.meta.hasMoreReplies).toBe(false)
+    expect(body.meta.nextCursor).toBeNull()
+  })
+
+  it('GET /posts/:id/thread\'s nextCursor feeds straight into GET /posts/:id/replies for <ThreadView>\'s "cargar más respuestas" (ROADMAP.md 2.1)', async () => {
+    const root = (
+      await app.inject({
+        method: 'POST',
+        url: '/v1/posts',
+        headers: authHeader(),
+        payload: { text: 'raíz con más respuestas que una página' },
+      })
+    ).json().data
+    const rootId = BigInt(root.id)
+
+    // 21 replies, bulk-inserted like the 50k-replies test above — one more
+    // than THREAD_REPLIES_PAGE_SIZE (20, posts.service.ts), so the thread's
+    // own first page is guaranteed to leave exactly one reply for "cargar
+    // más" to fetch.
+    const REPLY_COUNT = 21
+    const postRows: (typeof posts.$inferInsert)[] = []
+    const counterRows: (typeof postCounters.$inferInsert)[] = []
+    for (let i = 0; i < REPLY_COUNT; i++) {
+      const id = generateId()
+      postRows.push({
+        id,
+        authorId: BigInt(posterId),
+        kind: 'reply',
+        inReplyToId: rootId,
+        conversationId: rootId,
+      })
+      counterRows.push({ postId: id })
+    }
+    await app.db.insert(posts).values(postRows)
+    await app.db.insert(postCounters).values(counterRows)
+    // Newest-first, same ordering as every other list.
+    const oldestReplyId = postRows[0]?.id.toString()
+
+    const threadResponse = await app.inject({ method: 'GET', url: `/v1/posts/${root.id}/thread` })
+    const thread = threadResponse.json().data
+    expect(thread.replies).toHaveLength(20)
+    expect(thread.meta.hasMoreReplies).toBe(true)
+    expect(thread.meta.nextCursor).toBeTruthy()
+    // The oldest reply (first inserted, so it sorts last) isn't on this page.
+    expect(thread.replies.map((post: { id: string }) => post.id)).not.toContain(oldestReplyId)
+
+    const nextPage = await app.inject({
+      method: 'GET',
+      url: `/v1/posts/${root.id}/replies?cursor=${encodeURIComponent(thread.meta.nextCursor)}`,
+    })
+    expect(nextPage.statusCode).toBe(200)
+    // Exactly the one reply the thread's first page left behind.
+    expect(nextPage.json().data.map((post: { id: string }) => post.id)).toEqual([oldestReplyId])
   })
 
   it('embeds the quoted post one level deep, over the wire, everywhere a post is read (ROADMAP.md 2.1 "Citas")', async () => {

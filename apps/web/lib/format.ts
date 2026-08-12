@@ -1,6 +1,12 @@
 const relativeTimeFormatter = new Intl.RelativeTimeFormat('es', { numeric: 'auto', style: 'short' })
 const compactNumberFormatter = new Intl.NumberFormat('es', { notation: 'compact' })
 const joinDateFormatter = new Intl.DateTimeFormat('es', { month: 'long', year: 'numeric' })
+const fullTimeFormatter = new Intl.DateTimeFormat('es', { hour: 'numeric', minute: '2-digit' })
+const fullDateFormatter = new Intl.DateTimeFormat('es', {
+  day: 'numeric',
+  month: 'short',
+  year: 'numeric',
+})
 
 const UNITS: Array<{ unit: Intl.RelativeTimeFormatUnit; ms: number }> = [
   { unit: 'year', ms: 365 * 24 * 60 * 60 * 1000 },
@@ -29,4 +35,10 @@ export function formatCompactNumber(value: number): string {
 /** "agosto de 2026" — the profile header's "Se unió en" (SPECS.md §7.2). */
 export function formatJoinDate(iso: string): string {
   return joinDateFormatter.format(new Date(iso))
+}
+
+/** "14:32 · 11 ago 2026" — <ThreadView>'s focused post (ROADMAP.md 2.1), where a relative "hace 3 h" reads worse than an anchor everyone can cross-check. Same time · date order as every other timestamp affordance in the app, just spelled out instead of relative. */
+export function formatFullDateTime(iso: string): string {
+  const date = new Date(iso)
+  return `${fullTimeFormatter.format(date)} · ${fullDateFormatter.format(date)}`
 }

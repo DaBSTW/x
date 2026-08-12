@@ -5,7 +5,7 @@ import { QuotedPostCard } from '@/components/quoted-post-card'
 import { RichText } from '@/components/rich-text'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { cn } from '@/lib/cn'
-import { formatCompactNumber, formatRelativeTime } from '@/lib/format'
+import { formatCompactNumber, formatFullDateTime, formatRelativeTime } from '@/lib/format'
 import { useQuoteComposerStore } from '@/lib/quote-composer-store'
 import { useBookmark, useLike, useRepost } from '@/lib/use-post-mutations'
 import type { Post } from '@x/contracts'
@@ -15,6 +15,21 @@ import { memo } from 'react'
 
 type PostCardProps = {
   post: Post
+  /**
+   * ROADMAP.md 2.1 <ThreadView>: 'focused' is the post `/[username]/status/[id]`
+   * centers on — bigger avatar/text, and the header's relative "hace 3 h"
+   * becomes a full, cross-checkable timestamp (+ view count) below the body
+   * instead, the same swap real X makes on a post's own page.
+   */
+  variant?: 'default' | 'focused'
+  /**
+   * ROADMAP.md 2.1 <ThreadView>'s connecting lines: draws a vertical bar
+   * from this card's avatar down into the next one, signaling "same
+   * lineage". Only ever set on ancestors — the chain up to the focused post
+   * is the one relationship in a thread that's an unambiguous straight
+   * line; replies can branch to many unrelated people, so they don't get one.
+   */
+  showConnectorBelow?: boolean
 }
 
 /**
@@ -22,12 +37,17 @@ type PostCardProps = {
  * action row have fixed dimensions regardless of loading state, so only the
  * post's own (naturally variable) text height differs between posts.
  */
-function PostCardComponent({ post }: PostCardProps) {
+function PostCardComponent({
+  post,
+  variant = 'default',
+  showConnectorBelow = false,
+}: PostCardProps) {
   const router = useRouter()
   const like = useLike()
   const repost = useRepost()
   const bookmark = useBookmark()
   const openQuoteComposer = useQuoteComposerStore((state) => state.open)
+  const isFocused = variant === 'focused'
 
   // Absent (not hydrated) reads as "not yet known" everywhere except here:
   // a button needs a concrete direction to toggle, and false is the only
@@ -39,12 +59,19 @@ function PostCardComponent({ post }: PostCardProps) {
       className="flex gap-3 border-b border-border p-4"
       aria-label={`Post de ${post.author.displayName}`}
     >
-      <Link href={`/${post.author.username}`} aria-label={post.author.displayName}>
-        <Avatar>
-          <AvatarImage src={post.author.avatarUrl ?? undefined} alt="" />
-          <AvatarFallback>{post.author.displayName.slice(0, 1).toUpperCase()}</AvatarFallback>
-        </Avatar>
-      </Link>
+      <div className="flex shrink-0 flex-col items-center">
+        <Link href={`/${post.author.username}`} aria-label={post.author.displayName}>
+          <Avatar className={isFocused ? 'h-12 w-12' : undefined}>
+            <AvatarImage src={post.author.avatarUrl ?? undefined} alt="" />
+            <AvatarFallback>{post.author.displayName.slice(0, 1).toUpperCase()}</AvatarFallback>
+          </Avatar>
+        </Link>
+        {/* Fills whatever height the row's flex-stretch gives this column
+            beyond the avatar itself — the content column next to it is
+            almost always taller, which is exactly what makes the bar reach
+            down to the next card instead of stopping short. */}
+        {showConnectorBelow && <div aria-hidden="true" className="mt-1 w-0.5 flex-1 bg-border" />}
+      </div>
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <div className="flex flex-wrap items-center gap-x-1 text-sm">
           <Link href={`/${post.author.username}`} className="font-semibold hover:underline">
@@ -52,17 +79,21 @@ function PostCardComponent({ post }: PostCardProps) {
           </Link>
           {post.author.isVerified && <span aria-label="cuenta verificada">✓</span>}
           <span className="text-muted-foreground">@{post.author.username}</span>
-          <span className="text-muted-foreground" aria-hidden="true">
-            ·
-          </span>
-          <Link href={`/${post.author.username}/status/${post.id}`} className="hover:underline">
-            <time dateTime={post.createdAt} className="text-muted-foreground">
-              {formatRelativeTime(post.createdAt)}
-            </time>
-          </Link>
+          {!isFocused && (
+            <>
+              <span className="text-muted-foreground" aria-hidden="true">
+                ·
+              </span>
+              <Link href={`/${post.author.username}/status/${post.id}`} className="hover:underline">
+                <time dateTime={post.createdAt} className="text-muted-foreground">
+                  {formatRelativeTime(post.createdAt)}
+                </time>
+              </Link>
+            </>
+          )}
         </div>
         {post.text !== null && (
-          <p className="whitespace-pre-wrap text-sm">
+          <p className={cn('whitespace-pre-wrap', isFocused ? 'text-xl' : 'text-sm')}>
             <RichText text={post.text} entities={post.entities} />
           </p>
         )}
@@ -72,6 +103,20 @@ function PostCardComponent({ post }: PostCardProps) {
           </div>
         )}
         {post.quotedPost && <QuotedPostCard post={post.quotedPost} />}
+        {isFocused && (
+          <div className="border-b border-border pb-3 text-sm text-muted-foreground">
+            <time dateTime={post.createdAt}>{formatFullDateTime(post.createdAt)}</time>
+            {post.counters.views > 0 && (
+              <>
+                {' · '}
+                <span className="font-semibold text-foreground">
+                  {formatCompactNumber(post.counters.views)}
+                </span>{' '}
+                Vistas
+              </>
+            )}
+          </div>
+        )}
         <div className="mt-1 flex max-w-md items-center justify-between">
           <ActionButton
             label="Responder"

@@ -5259,10 +5259,15 @@
                           "properties": {
                             "hasMoreReplies": {
                               "type": "boolean"
+                            },
+                            "nextCursor": {
+                              "type": "string",
+                              "nullable": true
                             }
                           },
                           "required": [
-                            "hasMoreReplies"
+                            "hasMoreReplies",
+                            "nextCursor"
                           ],
                           "additionalProperties": false
                         }

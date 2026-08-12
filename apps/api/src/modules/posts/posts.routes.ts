@@ -156,12 +156,15 @@ export async function registerPostsRoutes(app: FastifyInstance, options: PostsRo
     },
     async (request, reply) => {
       const thread = await postsService.getThread(BigInt(request.params.id), request.user?.id)
+      const lastReply = thread.replies.at(-1)
+      const nextCursor =
+        thread.hasMoreReplies && lastReply ? encodeCursor(BigInt(lastReply.id)) : null
       return reply.send({
         data: {
           ancestors: thread.ancestors,
           post: thread.post,
           replies: thread.replies,
-          meta: { hasMoreReplies: thread.hasMoreReplies },
+          meta: { hasMoreReplies: thread.hasMoreReplies, nextCursor },
         },
       })
     },
