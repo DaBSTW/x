@@ -100,6 +100,7 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
     tokenService,
     mailer,
     logger: app.log,
+    redis: app.redis,
     accessTtlMinutes: env.JWT_ACCESS_TTL_MINUTES,
     refreshTokenTtlDays: env.REFRESH_TOKEN_TTL_DAYS,
   })

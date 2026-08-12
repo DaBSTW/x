@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { generateOpaqueToken, sha256Hex } from './tokens.js'
+import { generateOpaqueToken, generateRecoveryCode, sha256Hex } from './tokens.js'
 
 describe('generateOpaqueToken', () => {
   it('generates distinct tokens on each call', () => {
@@ -25,5 +25,15 @@ describe('sha256Hex', () => {
 
   it('produces different digests for different inputs', () => {
     expect(sha256Hex('a')).not.toBe(sha256Hex('b'))
+  })
+})
+
+describe('generateRecoveryCode', () => {
+  it('generates distinct codes on each call', () => {
+    expect(generateRecoveryCode()).not.toBe(generateRecoveryCode())
+  })
+
+  it('formats as two hyphenated 10-character hex groups', () => {
+    expect(generateRecoveryCode()).toMatch(/^[0-9a-f]{10}-[0-9a-f]{10}$/)
   })
 })

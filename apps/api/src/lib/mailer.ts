@@ -1,6 +1,6 @@
 import nodemailer, { type Transporter } from 'nodemailer'
 
-export type SecurityAlertKind = 'new_login' | 'password_changed'
+export type SecurityAlertKind = 'new_login' | 'password_changed' | 'two_factor_enabled'
 
 export type Mailer = {
   sendVerificationEmail: (to: string, token: string) => Promise<void>
@@ -39,6 +39,10 @@ const SECURITY_ALERT_COPY: Record<SecurityAlertKind, { subject: string; heading:
   password_changed: {
     subject: 'Se cambió la contraseña de tu cuenta de X',
     heading: 'Contraseña actualizada',
+  },
+  two_factor_enabled: {
+    subject: 'Activaste la verificación en dos pasos en tu cuenta de X',
+    heading: 'Verificación en dos pasos activada',
   },
 }
 

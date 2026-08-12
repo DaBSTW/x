@@ -6,13 +6,24 @@ import {
   ValidationError,
   generateId,
   generateOpaqueToken,
+  generateRecoveryCode,
+  generateTotpSecret,
   hashPassword,
   isPasswordPwned,
   needsRehash,
   sha256Hex,
+  totpKeyUri,
   verifyPassword,
+  verifyTotp,
 } from '@x/utils'
+import type { Redis } from 'ioredis'
+import QRCode from 'qrcode'
 import type { Mailer, MailerLogger } from '../../lib/mailer.js'
+import {
+  assertLoginNotBackedOff,
+  clearLoginFailures,
+  recordLoginFailure,
+} from '../../lib/rate-limit.js'
 import type { TokenService } from '../../plugins/tokens.js'
 import type { AuthRepository } from './auth.repository.js'
 
@@ -39,11 +50,20 @@ export type TokenPair = {
   refreshToken: string
 }
 
+// POST /auth/login (ROADMAP.md 2.6): 'authenticated' is a normal login,
+// unchanged from before 2FA existed; 'requires_two_factor' is as far as a
+// correct password gets on an account with it on — see loginResponseSchema
+// in @x/contracts for why this is a tagged union rather than an optional field.
+export type LoginResult =
+  | ({ status: 'authenticated' } & TokenPair)
+  | { status: 'requires_two_factor'; challengeToken: string }
+
 export type CreateAuthServiceOptions = {
   repository: AuthRepository
   tokenService: TokenService
   mailer: Mailer
   logger: MailerLogger
+  redis: Redis
   accessTtlMinutes: number
   refreshTokenTtlDays: number
   /** Injectable for tests — defaults to the real HIBP k-anonymity check. */
@@ -59,6 +79,12 @@ const PASSWORD_RESET_TTL_HOURS = 1
 // SPECS.md §11.3 "enumeración de cuentas".
 const dummyPasswordHashPromise = hashPassword('correct horse battery staple placeholder')
 
+// Long enough to type in a 6-digit code from an authenticator app, short
+// enough that a challengeToken left in browser history/logs is worthless
+// shortly after (it's also single-use either way).
+const TWO_FACTOR_CHALLENGE_TTL_MINUTES = 5
+const RECOVERY_CODE_COUNT = 10
+
 export type AuthService = ReturnType<typeof createAuthService>
 
 export function createAuthService(options: CreateAuthServiceOptions) {
@@ -67,6 +93,7 @@ export function createAuthService(options: CreateAuthServiceOptions) {
     tokenService,
     mailer,
     logger,
+    redis,
     accessTtlMinutes,
     refreshTokenTtlDays,
     checkPasswordPwned = isPasswordPwned,
@@ -211,7 +238,7 @@ export function createAuthService(options: CreateAuthServiceOptions) {
     await mailer.sendSecurityAlertEmail(user.email, 'password_changed', meta)
   }
 
-  async function login(input: LoginInput, meta: RequestMeta): Promise<TokenPair> {
+  async function login(input: LoginInput, meta: RequestMeta): Promise<LoginResult> {
     const user = await repository.findUserByEmail(input.email)
 
     if (!user?.passwordHash) {
@@ -228,12 +255,151 @@ export function createAuthService(options: CreateAuthServiceOptions) {
       await repository.updatePasswordHash(user.id, await hashPassword(input.password))
     }
 
+    // A correct password on a 2FA account doesn't get a session yet — a
+    // real one only comes out of loginWithTwoFactor below, once the code
+    // checks out too.
+    if (await repository.isTwoFactorEnabled(user.id)) {
+      return {
+        status: 'requires_two_factor',
+        challengeToken: await issueTwoFactorChallenge(user.id),
+      }
+    }
+
     const tokens = await issueTokenPair(user.id, meta)
     // SPECS.md §13.2: a security email, not a notification — never gated by
     // a preference, since there's no per-type/channel check to gate against
     // here in the first place (no self-follow of that pattern to break).
     await mailer.sendSecurityAlertEmail(user.email, 'new_login', meta)
+    return { status: 'authenticated', ...tokens }
+  }
+
+  async function issueTwoFactorChallenge(userId: bigint): Promise<string> {
+    const rawToken = generateOpaqueToken()
+    await repository.insertTwoFactorChallenge({
+      tokenHash: sha256Hex(rawToken),
+      userId,
+      expiresAt: new Date(Date.now() + TWO_FACTOR_CHALLENGE_TTL_MINUTES * 60 * 1000),
+    })
+    return rawToken
+  }
+
+  /**
+   * POST /auth/2fa/login (ROADMAP.md 2.6): the second half of signing in to
+   * a 2FA-protected account — `code` may be a live TOTP or one of the
+   * recovery codes issued by verifyTwoFactor. Backed off per-account like a
+   * password guess (SPECS.md §11.3): a stolen password alone shouldn't let
+   * an attacker brute-force 6 digits at will just because they cleared the
+   * first hurdle.
+   */
+  async function loginWithTwoFactor(
+    rawChallengeToken: string,
+    code: string,
+    meta: RequestMeta,
+  ): Promise<TokenPair> {
+    const challengeTokenHash = sha256Hex(rawChallengeToken)
+    const challenge = await repository.findTwoFactorChallenge(challengeTokenHash)
+    if (!challenge || challenge.usedAt || challenge.expiresAt < new Date()) {
+      throw new UnauthenticatedError('invalid or expired two-factor challenge')
+    }
+
+    const accountKey = `2fa:${challenge.userId}`
+    await assertLoginNotBackedOff(redis, accountKey)
+
+    const matched = await verifyTwoFactorCode(challenge.userId, code)
+    if (!matched) {
+      await recordLoginFailure(redis, accountKey)
+      throw new UnauthenticatedError('invalid verification code')
+    }
+    await clearLoginFailures(redis, accountKey)
+    await repository.markTwoFactorChallengeUsed(challengeTokenHash)
+
+    const user = await repository.findUserById(challenge.userId)
+    const tokens = await issueTokenPair(challenge.userId, meta)
+    if (user) {
+      await mailer.sendSecurityAlertEmail(user.email, 'new_login', meta)
+    }
     return tokens
+  }
+
+  /** A live TOTP code first (cheap, in-memory), a recovery code second (a DB round trip) — either one, once, proves the same thing. */
+  async function verifyTwoFactorCode(userId: bigint, code: string): Promise<boolean> {
+    const secretRow = await repository.findConfirmedTwoFactorSecret(userId)
+    if (!secretRow) return false
+
+    // A recovery code is never 6 digits (it's two 10-char hex groups joined
+    // by a hyphen) — skip straight to that check instead of handing an
+    // obviously-wrong shape to verifyTotp, whose underlying library throws
+    // on a token that isn't exactly 6 digits rather than just failing it.
+    if (/^\d{6}$/.test(code)) {
+      const totpResult = await verifyTotp(
+        secretRow.secret,
+        code,
+        secretRow.lastUsedTimeStep ?? undefined,
+      )
+      if (totpResult.valid) {
+        await repository.markTotpTimeStepUsed(userId, totpResult.timeStep)
+        return true
+      }
+    }
+
+    return repository.consumeRecoveryCode(userId, sha256Hex(code))
+  }
+
+  /** POST /auth/2fa/setup (ROADMAP.md 2.6): a fresh secret awaiting confirmation via verifyTwoFactor below. */
+  async function setupTwoFactor(
+    userId: bigint,
+  ): Promise<{ secret: string; otpauthUrl: string; qrCodeDataUrl: string }> {
+    const user = await repository.findUserById(userId)
+    if (!user) throw new NotFoundError('user', userId.toString())
+
+    const secret = generateTotpSecret()
+    await repository.upsertTwoFactorSecret(userId, secret)
+    const otpauthUrl = totpKeyUri(user.username, secret)
+    const qrCodeDataUrl = await QRCode.toDataURL(otpauthUrl)
+    return { secret, otpauthUrl, qrCodeDataUrl }
+  }
+
+  /** POST /auth/2fa/verify: proves the account holder actually added the pending secret to an authenticator app before it starts gating login. */
+  async function verifyTwoFactor(
+    userId: bigint,
+    code: string,
+    meta: RequestMeta,
+  ): Promise<string[]> {
+    const pending = await repository.findTwoFactorSecret(userId)
+    if (!pending) {
+      throw new UnprocessableError('no two-factor setup in progress')
+    }
+
+    const result = await verifyTotp(pending.secret, code)
+    if (!result.valid) {
+      throw new UnauthenticatedError('invalid verification code')
+    }
+
+    const recoveryCodes = Array.from({ length: RECOVERY_CODE_COUNT }, generateRecoveryCode)
+    await repository.confirmTwoFactor(userId, recoveryCodes.map(sha256Hex))
+
+    const user = await repository.findUserById(userId)
+    if (user) {
+      await mailer.sendSecurityAlertEmail(user.email, 'two_factor_enabled', meta)
+    }
+    return recoveryCodes
+  }
+
+  async function getTwoFactorStatus(userId: bigint): Promise<boolean> {
+    return repository.isTwoFactorEnabled(userId)
+  }
+
+  async function disableTwoFactor(userId: bigint, currentPassword: string): Promise<void> {
+    const user = await repository.findUserById(userId)
+    if (!user?.passwordHash) {
+      throw new UnauthenticatedError('current password is incorrect')
+    }
+    const isCurrentValid = await verifyPassword(user.passwordHash, currentPassword)
+    if (!isCurrentValid) {
+      throw new UnauthenticatedError('current password is incorrect')
+    }
+
+    await repository.deleteTwoFactor(userId)
   }
 
   async function issueTokenPair(userId: bigint, meta: RequestMeta): Promise<TokenPair> {
@@ -331,6 +497,11 @@ export function createAuthService(options: CreateAuthServiceOptions) {
     resetPassword,
     changePassword,
     login,
+    loginWithTwoFactor,
+    setupTwoFactor,
+    verifyTwoFactor,
+    getTwoFactorStatus,
+    disableTwoFactor,
     refresh,
     logout,
     logoutAll,

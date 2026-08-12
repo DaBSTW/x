@@ -1,10 +1,15 @@
 import type { User } from '@x/db'
-import { hashPassword } from '@x/utils'
+import { generateTotp, hashPassword } from '@x/utils'
+import type { Redis } from 'ioredis'
 import { describe, expect, it } from 'vitest'
 import type { Mailer, SecurityAlertKind } from '../../lib/mailer.js'
 import type { AccessTokenClaims, TokenService } from '../../plugins/tokens.js'
 import type { AuthRepository } from './auth.repository.js'
-import { type CreateAuthServiceOptions, createAuthService } from './auth.service.js'
+import {
+  type CreateAuthServiceOptions,
+  type LoginResult,
+  createAuthService,
+} from './auth.service.js'
 
 const META = { ipAddress: '127.0.0.1', userAgent: 'vitest' }
 
@@ -60,6 +65,22 @@ function createFakeRepository() {
     { tokenHash: string; userId: bigint; createdAt: Date; expiresAt: Date; usedAt: Date | null }
   >()
   const resetTokens = new Map<
+    string,
+    { tokenHash: string; userId: bigint; createdAt: Date; expiresAt: Date; usedAt: Date | null }
+  >()
+  type FakeTwoFactorSecret = {
+    userId: bigint
+    secret: string
+    createdAt: Date
+    confirmedAt: Date | null
+    lastUsedTimeStep: number | null
+  }
+  const twoFactorSecretsByUser = new Map<bigint, FakeTwoFactorSecret>()
+  const recoveryCodesByHash = new Map<
+    string,
+    { codeHash: string; userId: bigint; usedAt: Date | null }
+  >()
+  const twoFactorChallengesByHash = new Map<
     string,
     { tokenHash: string; userId: bigint; createdAt: Date; expiresAt: Date; usedAt: Date | null }
   >()
@@ -173,9 +194,97 @@ function createFakeRepository() {
         (token) => token.userId === userId && !token.revokedAt && token.expiresAt > new Date(),
       )
     },
+    async upsertTwoFactorSecret(userId, secret) {
+      twoFactorSecretsByUser.set(userId, {
+        userId,
+        secret,
+        createdAt: new Date(),
+        confirmedAt: null,
+        lastUsedTimeStep: null,
+      })
+    },
+    async findTwoFactorSecret(userId) {
+      return twoFactorSecretsByUser.get(userId) ?? null
+    },
+    async findConfirmedTwoFactorSecret(userId) {
+      const row = twoFactorSecretsByUser.get(userId)
+      return row?.confirmedAt ? row : null
+    },
+    async isTwoFactorEnabled(userId) {
+      return twoFactorSecretsByUser.get(userId)?.confirmedAt != null
+    },
+    async confirmTwoFactor(userId, recoveryCodeHashes) {
+      const row = twoFactorSecretsByUser.get(userId)
+      if (row) row.confirmedAt = new Date()
+      for (const [hash, code] of recoveryCodesByHash) {
+        if (code.userId === userId) recoveryCodesByHash.delete(hash)
+      }
+      for (const codeHash of recoveryCodeHashes) {
+        recoveryCodesByHash.set(codeHash, { codeHash, userId, usedAt: null })
+      }
+    },
+    async markTotpTimeStepUsed(userId, timeStep) {
+      const row = twoFactorSecretsByUser.get(userId)
+      if (row) row.lastUsedTimeStep = timeStep
+    },
+    async consumeRecoveryCode(userId, codeHash) {
+      const code = recoveryCodesByHash.get(codeHash)
+      if (!code || code.userId !== userId || code.usedAt) return false
+      code.usedAt = new Date()
+      return true
+    },
+    async deleteTwoFactor(userId) {
+      twoFactorSecretsByUser.delete(userId)
+      for (const [hash, code] of recoveryCodesByHash) {
+        if (code.userId === userId) recoveryCodesByHash.delete(hash)
+      }
+    },
+    async insertTwoFactorChallenge(row) {
+      twoFactorChallengesByHash.set(row.tokenHash, {
+        ...row,
+        createdAt: new Date(),
+        usedAt: row.usedAt ?? null,
+      })
+    },
+    async findTwoFactorChallenge(tokenHash) {
+      return twoFactorChallengesByHash.get(tokenHash) ?? null
+    },
+    async markTwoFactorChallengeUsed(tokenHash) {
+      const row = twoFactorChallengesByHash.get(tokenHash)
+      if (row) row.usedAt = new Date()
+    },
   }
 
   return repository
+}
+
+/** get/set/incr/expire/del only — the subset lib/rate-limit.ts's login-backoff functions actually call, same narrow-fake posture as this file's other collaborators. */
+function createFakeRedis(): Redis {
+  const store = new Map<string, string>()
+  return {
+    async get(key: string) {
+      return store.get(key) ?? null
+    },
+    async set(key: string, value: string) {
+      store.set(key, value)
+      return 'OK'
+    },
+    async incr(key: string) {
+      const next = Number(store.get(key) ?? '0') + 1
+      store.set(key, String(next))
+      return next
+    },
+    async expire() {
+      return 1
+    },
+    async del(...keys: string[]) {
+      let count = 0
+      for (const key of keys) {
+        if (store.delete(key)) count++
+      }
+      return count
+    },
+  } as unknown as Redis
 }
 
 function createFakeTokenService(): TokenService {
@@ -231,6 +340,7 @@ function createService(overrides: Partial<CreateAuthServiceOptions> = {}) {
   const repository = overrides.repository ?? createFakeRepository()
   const tokenService = overrides.tokenService ?? createFakeTokenService()
   const mailer = overrides.mailer ?? createFakeMailer()
+  const redis = overrides.redis ?? createFakeRedis()
   // Real HIBP check hits the network — stub it out so unit tests stay hermetic;
   // isPasswordPwned itself is covered directly in packages/utils/src/hibp.test.ts.
   const checkPasswordPwned = overrides.checkPasswordPwned ?? (async () => false)
@@ -242,6 +352,7 @@ function createService(overrides: Partial<CreateAuthServiceOptions> = {}) {
       logger: { warn: () => {} },
       checkPasswordPwned,
       mailer,
+      redis,
       accessTtlMinutes: 15,
       refreshTokenTtlDays: 30,
       ...overrides,
@@ -249,7 +360,18 @@ function createService(overrides: Partial<CreateAuthServiceOptions> = {}) {
     repository,
     tokenService,
     mailer,
+    redis,
   }
+}
+
+/** Narrows a LoginResult to its 'authenticated' branch — every existing test logs into an account with 2FA off, where login() always takes this branch; the 2FA-specific describe blocks below test 'requires_two_factor' directly instead of through this helper. */
+function expectAuthenticated(
+  result: LoginResult,
+): Extract<LoginResult, { status: 'authenticated' }> {
+  if (result.status !== 'authenticated') {
+    throw new Error(`expected an authenticated login, got status: ${result.status}`)
+  }
+  return result
 }
 
 describe('createAuthService', () => {
@@ -346,9 +468,8 @@ describe('createAuthService', () => {
         }),
       )
 
-      const tokens = await service.login(
-        { email: 'ana@example.com', password: 'the real password' },
-        META,
+      const tokens = expectAuthenticated(
+        await service.login({ email: 'ana@example.com', password: 'the real password' }, META),
       )
 
       expect(tokens.accessToken).toBeTruthy()
@@ -379,9 +500,8 @@ describe('createAuthService', () => {
       await repository.insertUserWithCounters(
         makeUser({ email: 'ana@example.com', passwordHash: await hashPassword('password123456') }),
       )
-      const { refreshToken } = await service.login(
-        { email: 'ana@example.com', password: 'password123456' },
-        META,
+      const { refreshToken } = expectAuthenticated(
+        await service.login({ email: 'ana@example.com', password: 'password123456' }, META),
       )
 
       const rotated = await service.refresh(refreshToken, META)
@@ -394,9 +514,8 @@ describe('createAuthService', () => {
       await repository.insertUserWithCounters(
         makeUser({ email: 'ana@example.com', passwordHash: await hashPassword('password123456') }),
       )
-      const { refreshToken } = await service.login(
-        { email: 'ana@example.com', password: 'password123456' },
-        META,
+      const { refreshToken } = expectAuthenticated(
+        await service.login({ email: 'ana@example.com', password: 'password123456' }, META),
       )
 
       const rotated = await service.refresh(refreshToken, META)
@@ -499,9 +618,8 @@ describe('createAuthService', () => {
       await repository.insertUserWithCounters(
         makeUser({ email: 'ana@example.com', passwordHash: await hashPassword('old password') }),
       )
-      const { accessToken: _accessToken, refreshToken } = await service.login(
-        { email: 'ana@example.com', password: 'old password' },
-        META,
+      const { refreshToken } = expectAuthenticated(
+        await service.login({ email: 'ana@example.com', password: 'old password' }, META),
       )
       await service.forgotPassword('ana@example.com')
       const rawToken = (mailer as FakeMailer).resetTokensSent.at(-1)
@@ -589,13 +707,11 @@ describe('createAuthService', () => {
           passwordHash: await hashPassword('old password'),
         }),
       )
-      const currentSession = await service.login(
-        { email: 'ana@example.com', password: 'old password' },
-        META,
+      const currentSession = expectAuthenticated(
+        await service.login({ email: 'ana@example.com', password: 'old password' }, META),
       )
-      const otherSession = await service.login(
-        { email: 'ana@example.com', password: 'old password' },
-        META,
+      const otherSession = expectAuthenticated(
+        await service.login({ email: 'ana@example.com', password: 'old password' }, META),
       )
       const { sid } = await tokenService.verifyAccessToken(currentSession.accessToken)
 
@@ -619,13 +735,11 @@ describe('createAuthService', () => {
       await repository.insertUserWithCounters(
         makeUser({ email: 'ana@example.com', passwordHash: await hashPassword('password123456') }),
       )
-      const tokensA = await service.login(
-        { email: 'ana@example.com', password: 'password123456' },
-        META,
+      const tokensA = expectAuthenticated(
+        await service.login({ email: 'ana@example.com', password: 'password123456' }, META),
       )
-      const tokensB = await service.login(
-        { email: 'ana@example.com', password: 'password123456' },
-        META,
+      const tokensB = expectAuthenticated(
+        await service.login({ email: 'ana@example.com', password: 'password123456' }, META),
       )
 
       await service.logout(tokensA.refreshToken)
@@ -645,13 +759,11 @@ describe('createAuthService', () => {
           passwordHash: await hashPassword('password123456'),
         }),
       )
-      const tokensA = await service.login(
-        { email: 'ana@example.com', password: 'password123456' },
-        META,
+      const tokensA = expectAuthenticated(
+        await service.login({ email: 'ana@example.com', password: 'password123456' }, META),
       )
-      const tokensB = await service.login(
-        { email: 'ana@example.com', password: 'password123456' },
-        META,
+      const tokensB = expectAuthenticated(
+        await service.login({ email: 'ana@example.com', password: 'password123456' }, META),
       )
 
       await service.logoutAll(42n)
@@ -675,9 +787,8 @@ describe('createAuthService', () => {
           passwordHash: await hashPassword('password123456'),
         }),
       )
-      const tokens = await service.login(
-        { email: 'ana@example.com', password: 'password123456' },
-        META,
+      const tokens = expectAuthenticated(
+        await service.login({ email: 'ana@example.com', password: 'password123456' }, META),
       )
       const claims = await tokenService.verifyAccessToken(tokens.accessToken)
 
@@ -698,13 +809,11 @@ describe('createAuthService', () => {
           passwordHash: await hashPassword('password123456'),
         }),
       )
-      const sessionA = await service.login(
-        { email: 'ana@example.com', password: 'password123456' },
-        META,
+      const sessionA = expectAuthenticated(
+        await service.login({ email: 'ana@example.com', password: 'password123456' }, META),
       )
-      const sessionB = await service.login(
-        { email: 'ana@example.com', password: 'password123456' },
-        META,
+      const sessionB = expectAuthenticated(
+        await service.login({ email: 'ana@example.com', password: 'password123456' }, META),
       )
       const { sid } = await tokenService.verifyAccessToken(sessionA.accessToken)
 
@@ -734,9 +843,8 @@ describe('createAuthService', () => {
           passwordHash: await hashPassword('password123456'),
         }),
       )
-      const bobSession = await service.login(
-        { email: 'bob@example.com', password: 'password123456' },
-        META,
+      const bobSession = expectAuthenticated(
+        await service.login({ email: 'bob@example.com', password: 'password123456' }, META),
       )
       const { sid } = await tokenService.verifyAccessToken(bobSession.accessToken)
 
@@ -753,6 +861,264 @@ describe('createAuthService', () => {
 
       await expect(service.revokeSession(1n, 999999n)).rejects.toMatchObject({
         code: 'NOT_FOUND',
+      })
+    })
+  })
+
+  describe('two-factor authentication (ROADMAP.md 2.6)', () => {
+    describe('setupTwoFactor', () => {
+      it('returns a secret, an otpauth URI carrying it, and a QR code data URL', async () => {
+        const { service, repository } = createService()
+        await repository.insertUserWithCounters(makeUser({ id: 1n }))
+
+        const setup = await service.setupTwoFactor(1n)
+
+        expect(setup.secret).toBeTruthy()
+        expect(setup.otpauthUrl).toContain(setup.secret)
+        expect(setup.qrCodeDataUrl).toMatch(/^data:image\/png;base64,/)
+      })
+
+      it("doesn't enable 2FA on its own — login still succeeds with no code", async () => {
+        const { service, repository } = createService()
+        await repository.insertUserWithCounters(
+          makeUser({
+            id: 1n,
+            email: 'ana@example.com',
+            passwordHash: await hashPassword('password123456'),
+          }),
+        )
+
+        await service.setupTwoFactor(1n)
+        const result = await service.login(
+          { email: 'ana@example.com', password: 'password123456' },
+          META,
+        )
+
+        expect(result.status).toBe('authenticated')
+      })
+    })
+
+    describe('verifyTwoFactor', () => {
+      it('confirms 2FA and returns 10 recovery codes for a correct code', async () => {
+        const { service, repository } = createService()
+        await repository.insertUserWithCounters(makeUser({ id: 1n }))
+        const setup = await service.setupTwoFactor(1n)
+
+        const recoveryCodes = await service.verifyTwoFactor(
+          1n,
+          await generateTotp(setup.secret),
+          META,
+        )
+
+        expect(recoveryCodes).toHaveLength(10)
+        expect(await service.getTwoFactorStatus(1n)).toBe(true)
+      })
+
+      it('sends a "two_factor_enabled" security alert', async () => {
+        const { service, repository, mailer } = createService()
+        await repository.insertUserWithCounters(makeUser({ id: 1n, email: 'ana@example.com' }))
+        const setup = await service.setupTwoFactor(1n)
+
+        await service.verifyTwoFactor(1n, await generateTotp(setup.secret), META)
+
+        expect((mailer as FakeMailer).securityAlerts).toContainEqual({
+          to: 'ana@example.com',
+          kind: 'two_factor_enabled',
+        })
+      })
+
+      it('rejects an incorrect code without enabling 2FA', async () => {
+        const { service, repository } = createService()
+        await repository.insertUserWithCounters(makeUser({ id: 1n }))
+        await service.setupTwoFactor(1n)
+
+        await expect(service.verifyTwoFactor(1n, '000000', META)).rejects.toMatchObject({
+          code: 'UNAUTHENTICATED',
+        })
+        expect(await service.getTwoFactorStatus(1n)).toBe(false)
+      })
+
+      it('rejects verifying with no setup in progress', async () => {
+        const { service, repository } = createService()
+        await repository.insertUserWithCounters(makeUser({ id: 1n }))
+
+        await expect(service.verifyTwoFactor(1n, '123456', META)).rejects.toMatchObject({
+          code: 'UNPROCESSABLE',
+        })
+      })
+    })
+
+    describe('login with 2FA enabled', () => {
+      it('returns requires_two_factor with a challenge token instead of a session', async () => {
+        const { service, repository } = createService()
+        await repository.insertUserWithCounters(
+          makeUser({
+            id: 1n,
+            email: 'ana@example.com',
+            passwordHash: await hashPassword('password123456'),
+          }),
+        )
+        const setup = await service.setupTwoFactor(1n)
+        await service.verifyTwoFactor(1n, await generateTotp(setup.secret), META)
+
+        const result = await service.login(
+          { email: 'ana@example.com', password: 'password123456' },
+          META,
+        )
+
+        expect(result.status).toBe('requires_two_factor')
+        if (result.status !== 'requires_two_factor') throw new Error('unreachable')
+        expect(result.challengeToken).toBeTruthy()
+      })
+    })
+
+    describe('loginWithTwoFactor', () => {
+      async function loginToChallenge(
+        service: ReturnType<typeof createService>['service'],
+        repository: AuthRepository,
+      ) {
+        await repository.insertUserWithCounters(
+          makeUser({
+            id: 1n,
+            email: 'ana@example.com',
+            passwordHash: await hashPassword('password123456'),
+          }),
+        )
+        const setup = await service.setupTwoFactor(1n)
+        const recoveryCodes = await service.verifyTwoFactor(
+          1n,
+          await generateTotp(setup.secret),
+          META,
+        )
+        const result = await service.login(
+          { email: 'ana@example.com', password: 'password123456' },
+          META,
+        )
+        if (result.status !== 'requires_two_factor') throw new Error('expected requires_two_factor')
+        return { secret: setup.secret, recoveryCodes, challengeToken: result.challengeToken }
+      }
+
+      it('completes login with a correct TOTP code', async () => {
+        const { service, repository } = createService()
+        const { secret, challengeToken } = await loginToChallenge(service, repository)
+
+        const tokens = await service.loginWithTwoFactor(
+          challengeToken,
+          await generateTotp(secret),
+          META,
+        )
+
+        expect(tokens.accessToken).toBeTruthy()
+      })
+
+      it('completes login with a recovery code, consuming it', async () => {
+        const { service, repository } = createService()
+        const { recoveryCodes, challengeToken } = await loginToChallenge(service, repository)
+        const recoveryCode = recoveryCodes[0]
+        if (!recoveryCode) throw new Error('expected at least one recovery code')
+
+        await service.loginWithTwoFactor(challengeToken, recoveryCode, META)
+
+        // The same recovery code can't complete a second login.
+        const secondResult = await service.login(
+          { email: 'ana@example.com', password: 'password123456' },
+          META,
+        )
+        if (secondResult.status !== 'requires_two_factor') {
+          throw new Error('expected requires_two_factor')
+        }
+        await expect(
+          service.loginWithTwoFactor(secondResult.challengeToken, recoveryCode, META),
+        ).rejects.toMatchObject({ code: 'UNAUTHENTICATED' })
+      })
+
+      it('sends a "new login" security alert once 2FA completes, not at the password step', async () => {
+        const { service, repository, mailer } = createService()
+        const { secret, challengeToken } = await loginToChallenge(service, repository)
+        const mailerDouble = mailer as FakeMailer
+        mailerDouble.securityAlerts.length = 0 // drop the "two_factor_enabled" alert from setup
+
+        await service.loginWithTwoFactor(challengeToken, await generateTotp(secret), META)
+
+        expect(mailerDouble.securityAlerts).toEqual([{ to: 'ana@example.com', kind: 'new_login' }])
+      })
+
+      it('rejects an incorrect code', async () => {
+        const { service, repository } = createService()
+        const { challengeToken } = await loginToChallenge(service, repository)
+
+        await expect(
+          service.loginWithTwoFactor(challengeToken, '000000', META),
+        ).rejects.toMatchObject({ code: 'UNAUTHENTICATED' })
+      })
+
+      it('rejects reusing an already-completed challenge token', async () => {
+        const { service, repository } = createService()
+        const { secret, challengeToken } = await loginToChallenge(service, repository)
+        await service.loginWithTwoFactor(challengeToken, await generateTotp(secret), META)
+
+        await expect(
+          service.loginWithTwoFactor(challengeToken, await generateTotp(secret), META),
+        ).rejects.toMatchObject({ code: 'UNAUTHENTICATED' })
+      })
+
+      it('rejects an unknown challenge token', async () => {
+        const { service } = createService()
+
+        await expect(
+          service.loginWithTwoFactor('not-a-real-challenge', '123456', META),
+        ).rejects.toMatchObject({ code: 'UNAUTHENTICATED' })
+      })
+    })
+
+    describe('getTwoFactorStatus', () => {
+      it('is false for an account that never set up 2FA', async () => {
+        const { service, repository } = createService()
+        await repository.insertUserWithCounters(makeUser({ id: 1n }))
+
+        expect(await service.getTwoFactorStatus(1n)).toBe(false)
+      })
+    })
+
+    describe('disableTwoFactor', () => {
+      it('removes 2FA so login stops requiring a code', async () => {
+        const { service, repository } = createService()
+        await repository.insertUserWithCounters(
+          makeUser({
+            id: 1n,
+            email: 'ana@example.com',
+            passwordHash: await hashPassword('password123456'),
+          }),
+        )
+        const setup = await service.setupTwoFactor(1n)
+        await service.verifyTwoFactor(1n, await generateTotp(setup.secret), META)
+
+        await service.disableTwoFactor(1n, 'password123456')
+
+        expect(await service.getTwoFactorStatus(1n)).toBe(false)
+        const result = await service.login(
+          { email: 'ana@example.com', password: 'password123456' },
+          META,
+        )
+        expect(result.status).toBe('authenticated')
+      })
+
+      it('rejects an incorrect current password, leaving 2FA enabled', async () => {
+        const { service, repository } = createService()
+        await repository.insertUserWithCounters(
+          makeUser({
+            id: 1n,
+            email: 'ana@example.com',
+            passwordHash: await hashPassword('password123456'),
+          }),
+        )
+        const setup = await service.setupTwoFactor(1n)
+        await service.verifyTwoFactor(1n, await generateTotp(setup.secret), META)
+
+        await expect(service.disableTwoFactor(1n, 'wrong password')).rejects.toMatchObject({
+          code: 'UNAUTHENTICATED',
+        })
+        expect(await service.getTwoFactorStatus(1n)).toBe(true)
       })
     })
   })

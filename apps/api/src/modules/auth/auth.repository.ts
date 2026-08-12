@@ -3,14 +3,18 @@ import {
   type NewEmailVerificationToken,
   type NewPasswordResetToken,
   type NewRefreshToken,
+  type NewTwoFactorChallenge,
   type NewUser,
   emailVerificationTokens,
   passwordResetTokens,
   refreshTokens,
+  twoFactorChallenges,
+  twoFactorRecoveryCodes,
+  twoFactorSecrets,
   userCounters,
   users,
 } from '@x/db'
-import { and, desc, eq, gt, isNull, ne } from 'drizzle-orm'
+import { and, desc, eq, gt, isNotNull, isNull, ne } from 'drizzle-orm'
 
 export type AuthRepository = ReturnType<typeof createAuthRepository>
 
@@ -208,6 +212,123 @@ export function createAuthRepository(db: Database) {
           ),
         )
         .orderBy(refreshTokens.sessionId, desc(refreshTokens.createdAt))
+    },
+
+    /** POST /auth/2fa/setup (ROADMAP.md 2.6): upsert so re-running setup before ever confirming just replaces the pending secret, resetting confirmedAt/lastUsedTimeStep — the same "starting over is always safe" posture as re-requesting a password reset link. */
+    async upsertTwoFactorSecret(userId: bigint, secret: string): Promise<void> {
+      await db
+        .insert(twoFactorSecrets)
+        .values({ userId, secret })
+        .onConflictDoUpdate({
+          target: twoFactorSecrets.userId,
+          set: { secret, confirmedAt: null, lastUsedTimeStep: null },
+        })
+    },
+
+    async findTwoFactorSecret(userId: bigint) {
+      const [row] = await db
+        .select()
+        .from(twoFactorSecrets)
+        .where(eq(twoFactorSecrets.userId, userId))
+        .limit(1)
+      return row ?? null
+    },
+
+    /** Login only ever consults a *confirmed* secret — an in-progress, unverified setup() never gates a sign-in. */
+    async findConfirmedTwoFactorSecret(userId: bigint) {
+      const [row] = await db
+        .select()
+        .from(twoFactorSecrets)
+        .where(and(eq(twoFactorSecrets.userId, userId), isNotNull(twoFactorSecrets.confirmedAt)))
+        .limit(1)
+      return row ?? null
+    },
+
+    async isTwoFactorEnabled(userId: bigint): Promise<boolean> {
+      const [row] = await db
+        .select({ userId: twoFactorSecrets.userId })
+        .from(twoFactorSecrets)
+        .where(and(eq(twoFactorSecrets.userId, userId), isNotNull(twoFactorSecrets.confirmedAt)))
+        .limit(1)
+      return row !== undefined
+    },
+
+    /**
+     * POST /auth/2fa/verify succeeding: confirms the pending secret and
+     * replaces any previous batch of recovery codes with a fresh one —
+     * codes are only ever shown once, at this exact moment.
+     *
+     * Deliberately leaves `lastUsedTimeStep` at null rather than recording
+     * the code that just confirmed setup: that code proved possession
+     * while already authenticated, not a login, and this account's first
+     * *real* login (loginWithTwoFactor) could land in the same 30-second
+     * window — replay protection should guard reuse across logins, not
+     * treat a legitimate first login as a replay of setup's confirmation.
+     */
+    async confirmTwoFactor(userId: bigint, recoveryCodeHashes: string[]): Promise<void> {
+      await db.transaction(async (tx) => {
+        await tx
+          .update(twoFactorSecrets)
+          .set({ confirmedAt: new Date() })
+          .where(eq(twoFactorSecrets.userId, userId))
+        await tx.delete(twoFactorRecoveryCodes).where(eq(twoFactorRecoveryCodes.userId, userId))
+        if (recoveryCodeHashes.length > 0) {
+          await tx
+            .insert(twoFactorRecoveryCodes)
+            .values(recoveryCodeHashes.map((codeHash) => ({ codeHash, userId })))
+        }
+      })
+    },
+
+    async markTotpTimeStepUsed(userId: bigint, timeStep: number): Promise<void> {
+      await db
+        .update(twoFactorSecrets)
+        .set({ lastUsedTimeStep: timeStep })
+        .where(eq(twoFactorSecrets.userId, userId))
+    },
+
+    /** Atomic single-use spend, same `UPDATE ... RETURNING` shape as revokeSessionForUser: `true` only if this exact code existed for this user and hadn't already been spent. */
+    async consumeRecoveryCode(userId: bigint, codeHash: string): Promise<boolean> {
+      const updated = await db
+        .update(twoFactorRecoveryCodes)
+        .set({ usedAt: new Date() })
+        .where(
+          and(
+            eq(twoFactorRecoveryCodes.codeHash, codeHash),
+            eq(twoFactorRecoveryCodes.userId, userId),
+            isNull(twoFactorRecoveryCodes.usedAt),
+          ),
+        )
+        .returning({ codeHash: twoFactorRecoveryCodes.codeHash })
+      return updated.length > 0
+    },
+
+    /** Disabling 2FA (requires the current password — auth.service.ts) drops both the secret and every recovery code together; neither is useful without the other. */
+    async deleteTwoFactor(userId: bigint): Promise<void> {
+      await db.transaction(async (tx) => {
+        await tx.delete(twoFactorSecrets).where(eq(twoFactorSecrets.userId, userId))
+        await tx.delete(twoFactorRecoveryCodes).where(eq(twoFactorRecoveryCodes.userId, userId))
+      })
+    },
+
+    async insertTwoFactorChallenge(row: NewTwoFactorChallenge): Promise<void> {
+      await db.insert(twoFactorChallenges).values(row)
+    },
+
+    async findTwoFactorChallenge(tokenHash: string) {
+      const [row] = await db
+        .select()
+        .from(twoFactorChallenges)
+        .where(eq(twoFactorChallenges.tokenHash, tokenHash))
+        .limit(1)
+      return row ?? null
+    },
+
+    async markTwoFactorChallengeUsed(tokenHash: string): Promise<void> {
+      await db
+        .update(twoFactorChallenges)
+        .set({ usedAt: new Date() })
+        .where(eq(twoFactorChallenges.tokenHash, tokenHash))
     },
   }
 }

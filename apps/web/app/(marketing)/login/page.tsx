@@ -2,17 +2,25 @@
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { useLogin } from '@/lib/use-auth-mutations'
+import { useLogin, useTwoFactorLogin } from '@/lib/use-auth-mutations'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { type LoginRequest, loginRequestSchema } from '@x/contracts'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { toast } from 'sonner'
 
 export default function LoginPage() {
   const router = useRouter()
   const login = useLogin()
+  const twoFactorLogin = useTwoFactorLogin()
+  // Set only once useLogin() comes back 'requires_two_factor' (ROADMAP.md
+  // 2.6) — its presence, not a separate step flag, is what switches the
+  // password form below for the code form.
+  const [challengeToken, setChallengeToken] = useState<string | null>(null)
+  const [code, setCode] = useState('')
+
   const {
     register,
     handleSubmit,
@@ -21,12 +29,64 @@ export default function LoginPage() {
 
   const onSubmit = handleSubmit((values) => {
     login.mutate(values, {
-      onSuccess: () => router.push('/home'),
+      onSuccess: (result) => {
+        if (result.status === 'authenticated') {
+          router.push('/home')
+        } else {
+          setChallengeToken(result.challengeToken)
+        }
+      },
       onError: (error) => {
         toast.error(error instanceof Error ? error.message : 'No se pudo iniciar sesión.')
       },
     })
   })
+
+  function onSubmitCode(event: React.FormEvent) {
+    event.preventDefault()
+    if (!challengeToken) return
+    twoFactorLogin.mutate(
+      { challengeToken, code },
+      {
+        onSuccess: () => router.push('/home'),
+        onError: (error) => {
+          toast.error(error instanceof Error ? error.message : 'Código incorrecto.')
+        },
+      },
+    )
+  }
+
+  if (challengeToken) {
+    return (
+      <main className="mx-auto flex min-h-svh max-w-sm flex-col justify-center gap-6 p-6">
+        <h1 className="text-2xl font-semibold">Verificación en dos pasos</h1>
+        <form onSubmit={onSubmitCode} className="flex flex-col gap-4" noValidate>
+          <div className="flex flex-col gap-1">
+            <label htmlFor="code" className="text-sm font-medium">
+              Código de tu app de autenticación o un código de recuperación
+            </label>
+            <Input
+              id="code"
+              autoComplete="one-time-code"
+              autoFocus
+              value={code}
+              onChange={(event) => setCode(event.target.value)}
+            />
+          </div>
+          <Button type="submit" disabled={twoFactorLogin.isPending || code.length === 0}>
+            {twoFactorLogin.isPending ? 'Verificando…' : 'Verificar'}
+          </Button>
+          <button
+            type="button"
+            className="text-sm text-muted-foreground underline"
+            onClick={() => setChallengeToken(null)}
+          >
+            Volver
+          </button>
+        </form>
+      </main>
+    )
+  }
 
   return (
     <main className="mx-auto flex min-h-svh max-w-sm flex-col justify-center gap-6 p-6">

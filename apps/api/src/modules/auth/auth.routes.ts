@@ -1,15 +1,22 @@
 import {
   changePasswordRequestSchema,
+  disableTwoFactorRequestSchema,
   errorResponseSchema,
   forgotPasswordRequestSchema,
   listSessionsResponseSchema,
   loginRequestSchema,
+  loginResponseSchema,
   registerRequestSchema,
   registerResponseSchema,
   resetPasswordRequestSchema,
+  setupTwoFactorResponseSchema,
   snowflakeIdSchema,
   tokenPairResponseSchema,
+  twoFactorLoginRequestSchema,
+  twoFactorStatusResponseSchema,
   verifyEmailRequestSchema,
+  verifyTwoFactorRequestSchema,
+  verifyTwoFactorResponseSchema,
 } from '@x/contracts'
 import { UnauthenticatedError } from '@x/utils'
 import type { FastifyInstance, FastifyReply } from 'fastify'
@@ -168,7 +175,7 @@ export async function registerAuthRoutes(app: FastifyInstance, options: AuthRout
       schema: {
         body: loginRequestSchema,
         response: {
-          200: tokenPairResponseSchema,
+          200: loginResponseSchema,
           401: errorResponseSchema,
           429: errorResponseSchema,
         },
@@ -183,12 +190,112 @@ export async function registerAuthRoutes(app: FastifyInstance, options: AuthRout
       )
 
       const meta = { ipAddress: request.ip, userAgent: request.headers['user-agent'] ?? null }
-      const tokens = await authService.login(request.body, meta)
+      const result = await authService.login(request.body, meta)
+
+      if (result.status === 'requires_two_factor') {
+        return reply.send({ data: result })
+      }
+
+      setRefreshCookie(reply, result.refreshToken)
+      return reply.send({
+        data: {
+          status: 'authenticated',
+          accessToken: result.accessToken,
+          expiresInSeconds: result.expiresInSeconds,
+        },
+      })
+    },
+  )
+
+  server.post(
+    '/2fa/login',
+    {
+      schema: {
+        body: twoFactorLoginRequestSchema,
+        response: {
+          200: tokenPairResponseSchema,
+          401: errorResponseSchema,
+          429: errorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const meta = { ipAddress: request.ip, userAgent: request.headers['user-agent'] ?? null }
+      const tokens = await authService.loginWithTwoFactor(
+        request.body.challengeToken,
+        request.body.code,
+        meta,
+      )
 
       setRefreshCookie(reply, tokens.refreshToken)
       return reply.send({
         data: { accessToken: tokens.accessToken, expiresInSeconds: tokens.expiresInSeconds },
       })
+    },
+  )
+
+  server.get(
+    '/2fa',
+    {
+      schema: { response: { 200: twoFactorStatusResponseSchema, 401: errorResponseSchema } },
+      preHandler: [requireAuth],
+    },
+    async (request, reply) => {
+      const user = getAuthenticatedUser(request)
+      const enabled = await authService.getTwoFactorStatus(user.id)
+      return reply.send({ data: { enabled } })
+    },
+  )
+
+  server.post(
+    '/2fa/setup',
+    {
+      schema: {
+        response: { 200: setupTwoFactorResponseSchema, 401: errorResponseSchema },
+      },
+      preHandler: [requireAuth],
+    },
+    async (request, reply) => {
+      const user = getAuthenticatedUser(request)
+      const setup = await authService.setupTwoFactor(user.id)
+      return reply.send({ data: setup })
+    },
+  )
+
+  server.post(
+    '/2fa/verify',
+    {
+      schema: {
+        body: verifyTwoFactorRequestSchema,
+        response: {
+          200: verifyTwoFactorResponseSchema,
+          401: errorResponseSchema,
+          422: errorResponseSchema,
+        },
+      },
+      preHandler: [requireAuth],
+    },
+    async (request, reply) => {
+      const user = getAuthenticatedUser(request)
+      const meta = { ipAddress: request.ip, userAgent: request.headers['user-agent'] ?? null }
+      const recoveryCodes = await authService.verifyTwoFactor(user.id, request.body.code, meta)
+      return reply.send({ data: { recoveryCodes } })
+    },
+  )
+
+  server.delete(
+    '/2fa',
+    {
+      schema: {
+        body: disableTwoFactorRequestSchema,
+        response: { 204: z.null(), 401: errorResponseSchema },
+      },
+      preHandler: [requireAuth],
+    },
+    async (request, reply) => {
+      const user = getAuthenticatedUser(request)
+      await authService.disableTwoFactor(user.id, request.body.currentPassword)
+      return reply.status(204).send(null)
     },
   )
 

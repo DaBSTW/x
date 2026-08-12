@@ -427,6 +427,97 @@ export interface paths {
                     content: {
                         "application/json": {
                             data: {
+                                /** @enum {string} */
+                                status: "authenticated";
+                                accessToken: string;
+                                expiresInSeconds: number;
+                            } | {
+                                /** @enum {string} */
+                                status: "requires_two_factor";
+                                challengeToken: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /** @enum {string} */
+                                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "BLOCKED_BY_USER" | "NOT_FOUND" | "CONFLICT" | "UNPROCESSABLE" | "RATE_LIMIT_EXCEEDED" | "INTERNAL_ERROR" | "SERVICE_UNAVAILABLE";
+                                message: string;
+                                details?: {
+                                    [key: string]: unknown;
+                                };
+                                requestId: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /** @enum {string} */
+                                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "BLOCKED_BY_USER" | "NOT_FOUND" | "CONFLICT" | "UNPROCESSABLE" | "RATE_LIMIT_EXCEEDED" | "INTERNAL_ERROR" | "SERVICE_UNAVAILABLE";
+                                message: string;
+                                details?: {
+                                    [key: string]: unknown;
+                                };
+                                requestId: string;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/2fa/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        challengeToken: string;
+                        code: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
                                 accessToken: string;
                                 expiresInSeconds: number;
                             };
@@ -454,6 +545,251 @@ export interface paths {
                 };
                 /** @description Default Response */
                 429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /** @enum {string} */
+                                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "BLOCKED_BY_USER" | "NOT_FOUND" | "CONFLICT" | "UNPROCESSABLE" | "RATE_LIMIT_EXCEEDED" | "INTERNAL_ERROR" | "SERVICE_UNAVAILABLE";
+                                message: string;
+                                details?: {
+                                    [key: string]: unknown;
+                                };
+                                requestId: string;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/2fa": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                enabled: boolean;
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /** @enum {string} */
+                                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "BLOCKED_BY_USER" | "NOT_FOUND" | "CONFLICT" | "UNPROCESSABLE" | "RATE_LIMIT_EXCEEDED" | "INTERNAL_ERROR" | "SERVICE_UNAVAILABLE";
+                                message: string;
+                                details?: {
+                                    [key: string]: unknown;
+                                };
+                                requestId: string;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        currentPassword: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": "null" | null;
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /** @enum {string} */
+                                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "BLOCKED_BY_USER" | "NOT_FOUND" | "CONFLICT" | "UNPROCESSABLE" | "RATE_LIMIT_EXCEEDED" | "INTERNAL_ERROR" | "SERVICE_UNAVAILABLE";
+                                message: string;
+                                details?: {
+                                    [key: string]: unknown;
+                                };
+                                requestId: string;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/2fa/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                secret: string;
+                                otpauthUrl: string;
+                                qrCodeDataUrl: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /** @enum {string} */
+                                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "BLOCKED_BY_USER" | "NOT_FOUND" | "CONFLICT" | "UNPROCESSABLE" | "RATE_LIMIT_EXCEEDED" | "INTERNAL_ERROR" | "SERVICE_UNAVAILABLE";
+                                message: string;
+                                details?: {
+                                    [key: string]: unknown;
+                                };
+                                requestId: string;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/2fa/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        code: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                recoveryCodes: string[];
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /** @enum {string} */
+                                code: "VALIDATION_ERROR" | "UNAUTHENTICATED" | "FORBIDDEN" | "BLOCKED_BY_USER" | "NOT_FOUND" | "CONFLICT" | "UNPROCESSABLE" | "RATE_LIMIT_EXCEEDED" | "INTERNAL_ERROR" | "SERVICE_UNAVAILABLE";
+                                message: string;
+                                details?: {
+                                    [key: string]: unknown;
+                                };
+                                requestId: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                422: {
                     headers: {
                         [name: string]: unknown;
                     };

@@ -3,9 +3,12 @@ import {
   changePasswordRequestSchema,
   forgotPasswordRequestSchema,
   loginRequestSchema,
+  loginResponseSchema,
   registerRequestSchema,
   resetPasswordRequestSchema,
+  twoFactorLoginRequestSchema,
   verifyEmailRequestSchema,
+  verifyTwoFactorRequestSchema,
 } from './auth.js'
 
 describe('registerRequestSchema', () => {
@@ -86,6 +89,62 @@ describe('changePasswordRequestSchema', () => {
       currentPassword: '',
       newPassword: 'correct horse battery staple',
     })
+    expect(result.success).toBe(false)
+  })
+})
+
+describe('loginResponseSchema', () => {
+  it('accepts an authenticated payload', () => {
+    const result = loginResponseSchema.safeParse({
+      data: { status: 'authenticated', accessToken: 'a', expiresInSeconds: 900 },
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it('accepts a requires_two_factor payload', () => {
+    const result = loginResponseSchema.safeParse({
+      data: { status: 'requires_two_factor', challengeToken: 't' },
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it('rejects an authenticated payload carrying a challengeToken instead of tokens', () => {
+    const result = loginResponseSchema.safeParse({
+      data: { status: 'authenticated', challengeToken: 't' },
+    })
+    expect(result.success).toBe(false)
+  })
+})
+
+describe('verifyTwoFactorRequestSchema', () => {
+  it('accepts a 6-digit code', () => {
+    expect(verifyTwoFactorRequestSchema.safeParse({ code: '123456' }).success).toBe(true)
+  })
+
+  it.each([
+    ['too short', '123'],
+    ['non-numeric', 'abcdef'],
+    ['a recovery code', 'a'.repeat(21)],
+  ])('rejects %s', (_label, code) => {
+    expect(verifyTwoFactorRequestSchema.safeParse({ code }).success).toBe(false)
+  })
+})
+
+describe('twoFactorLoginRequestSchema', () => {
+  it('accepts a challengeToken with either a TOTP or a recovery code', () => {
+    expect(
+      twoFactorLoginRequestSchema.safeParse({ challengeToken: 't', code: '123456' }).success,
+    ).toBe(true)
+    expect(
+      twoFactorLoginRequestSchema.safeParse({
+        challengeToken: 't',
+        code: '0123456789-0123456789',
+      }).success,
+    ).toBe(true)
+  })
+
+  it('rejects an empty challengeToken', () => {
+    const result = twoFactorLoginRequestSchema.safeParse({ challengeToken: '', code: '123456' })
     expect(result.success).toBe(false)
   })
 })

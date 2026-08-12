@@ -13,3 +13,14 @@ export function generateOpaqueToken(byteLength = 32): string {
 export function sha256Hex(value: string): string {
   return createHash('sha256').update(value).digest('hex')
 }
+
+/**
+ * A single 2FA recovery code (ROADMAP.md 2.6) — hex rather than
+ * {@link generateOpaqueToken}'s base64url so there's no mixed case or
+ * `-`/`_` to mistype when copying it down by hand. Hyphenated in the middle
+ * purely for readability; the 80 bits of entropy is what actually matters.
+ */
+export function generateRecoveryCode(): string {
+  const raw = randomBytes(10).toString('hex')
+  return `${raw.slice(0, 10)}-${raw.slice(10)}`
+}

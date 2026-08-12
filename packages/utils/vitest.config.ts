@@ -37,6 +37,7 @@ export default defineConfig({
         'src/text/index.ts',
         'src/timeline-constants.ts',
         'src/tokens.ts',
+        'src/totp.ts',
       ],
       thresholds: { lines: 80, statements: 80, branches: 80, functions: 80 },
     },

@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url'
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql'
 import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis'
 import { createDatabase, migrationsFolderUrl } from '@x/db'
+import { generateTotp } from '@x/utils'
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
 import type { FastifyInstance } from 'fastify'
 import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers'
@@ -487,6 +488,180 @@ describe('auth end-to-end cycle', () => {
       headers: { authorization: `Bearer ${accessTokenA}` },
     })
     expect(repeat.statusCode).toBe(404)
+  })
+
+  it('sets up, enables, and requires 2FA at login — a recovery code works too, and disabling it turns the requirement back off (ROADMAP.md 2.6)', async () => {
+    await app.inject({
+      method: 'POST',
+      url: '/v1/auth/register',
+      payload: {
+        username: 'twofactor',
+        email: 'twofactor@example.com',
+        password: 'vX7qk-unique-test-passphrase-42',
+        birthDate: '1990-01-01',
+      },
+    })
+    const verificationToken = await waitForVerificationToken(mailpitApiUrl, 'twofactor@example.com')
+    await app.inject({
+      method: 'POST',
+      url: '/v1/auth/verify-email',
+      payload: { token: verificationToken },
+    })
+    const loginResponse = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: 'twofactor@example.com', password: 'vX7qk-unique-test-passphrase-42' },
+    })
+    expect(loginResponse.json().data.status).toBe('authenticated')
+    const accessToken = loginResponse.json().data.accessToken
+
+    // Not yet enabled.
+    const statusBefore = await app.inject({
+      method: 'GET',
+      url: '/v1/auth/2fa',
+      headers: { authorization: `Bearer ${accessToken}` },
+    })
+    expect(statusBefore.json().data).toEqual({ enabled: false })
+
+    // Setup: a secret + QR, but doesn't gate login on its own yet.
+    const setupResponse = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/2fa/setup',
+      headers: { authorization: `Bearer ${accessToken}` },
+    })
+    expect(setupResponse.statusCode).toBe(200)
+    const { secret, qrCodeDataUrl } = setupResponse.json().data
+    expect(qrCodeDataUrl).toMatch(/^data:image\/png;base64,/)
+
+    // A wrong code doesn't confirm it.
+    const badVerify = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/2fa/verify',
+      headers: { authorization: `Bearer ${accessToken}` },
+      payload: { code: '000000' },
+    })
+    expect(badVerify.statusCode).toBe(401)
+
+    // Confirming with the real code activates it and hands back recovery codes.
+    const verifyResponse = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/2fa/verify',
+      headers: { authorization: `Bearer ${accessToken}` },
+      payload: { code: await generateTotp(secret) },
+    })
+    expect(verifyResponse.statusCode).toBe(200)
+    const recoveryCodes: string[] = verifyResponse.json().data.recoveryCodes
+    expect(recoveryCodes).toHaveLength(10)
+    expect(
+      await waitForEmail(
+        mailpitApiUrl,
+        'Activaste la verificación en dos pasos',
+        'twofactor@example.com',
+      ),
+    ).toBe(true)
+
+    const statusAfter = await app.inject({
+      method: 'GET',
+      url: '/v1/auth/2fa',
+      headers: { authorization: `Bearer ${accessToken}` },
+    })
+    expect(statusAfter.json().data).toEqual({ enabled: true })
+
+    // A correct password alone no longer signs the account in.
+    const gatedLogin = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: 'twofactor@example.com', password: 'vX7qk-unique-test-passphrase-42' },
+    })
+    expect(gatedLogin.statusCode).toBe(200)
+    expect(gatedLogin.json().data.status).toBe('requires_two_factor')
+    const { challengeToken } = gatedLogin.json().data
+    expect(getCookie(gatedLogin, 'refresh_token')).toBeUndefined()
+
+    // A wrong code at this step is rejected without completing the login.
+    const badChallenge = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/2fa/login',
+      payload: { challengeToken, code: '000000' },
+    })
+    expect(badChallenge.statusCode).toBe(401)
+
+    // That failure just armed the same per-account backoff a bad password
+    // does (lib/rate-limit.ts) — the very next attempt, even a correct one,
+    // is 429ed until its 1s window passes.
+    await new Promise((resolve) => setTimeout(resolve, 1100))
+
+    // The real TOTP code finishes it — a normal token pair, cookie included.
+    const completedLogin = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/2fa/login',
+      payload: { challengeToken, code: await generateTotp(secret) },
+    })
+    expect(completedLogin.statusCode).toBe(200)
+    expect(typeof completedLogin.json().data.accessToken).toBe('string')
+    expect(getCookie(completedLogin, 'refresh_token')).toBeTruthy()
+
+    // A used-up challenge token doesn't work a second time.
+    const reusedChallenge = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/2fa/login',
+      payload: { challengeToken, code: await generateTotp(secret) },
+    })
+    expect(reusedChallenge.statusCode).toBe(401)
+
+    // A lost-device scenario: a fresh login, completed with a recovery code instead of the app.
+    const secondLogin = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: 'twofactor@example.com', password: 'vX7qk-unique-test-passphrase-42' },
+    })
+    const secondChallengeToken = secondLogin.json().data.challengeToken
+    const recoveryCode = recoveryCodes[0] as string
+    const recoveryLogin = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/2fa/login',
+      payload: { challengeToken: secondChallengeToken, code: recoveryCode },
+    })
+    expect(recoveryLogin.statusCode).toBe(200)
+
+    // That recovery code is now spent — a fresh login can't reuse it.
+    const thirdLogin = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: 'twofactor@example.com', password: 'vX7qk-unique-test-passphrase-42' },
+    })
+    const thirdChallengeToken = thirdLogin.json().data.challengeToken
+    const spentRecoveryLogin = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/2fa/login',
+      payload: { challengeToken: thirdChallengeToken, code: recoveryCode },
+    })
+    expect(spentRecoveryLogin.statusCode).toBe(401)
+
+    // Disabling requires the current password.
+    const badDisable = await app.inject({
+      method: 'DELETE',
+      url: '/v1/auth/2fa',
+      headers: { authorization: `Bearer ${accessToken}` },
+      payload: { currentPassword: 'the wrong password' },
+    })
+    expect(badDisable.statusCode).toBe(401)
+
+    const disableResponse = await app.inject({
+      method: 'DELETE',
+      url: '/v1/auth/2fa',
+      headers: { authorization: `Bearer ${accessToken}` },
+      payload: { currentPassword: 'vX7qk-unique-test-passphrase-42' },
+    })
+    expect(disableResponse.statusCode).toBe(204)
+
+    // Login is back to a single step.
+    const loginAfterDisable = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: 'twofactor@example.com', password: 'vX7qk-unique-test-passphrase-42' },
+    })
+    expect(loginAfterDisable.json().data.status).toBe('authenticated')
   })
 })
 

@@ -17,7 +17,8 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.716.0",
     "@aws-sdk/s3-request-presigner": "^3.716.0",
-    "@node-rs/argon2": "^2.0.2"
+    "@node-rs/argon2": "^2.0.2",
+    "otplib": "^13.4.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
