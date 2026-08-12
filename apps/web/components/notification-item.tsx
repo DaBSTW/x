@@ -7,10 +7,13 @@ import Link from 'next/link'
 
 type NotificationItemProps = {
   notification: Notification
+  /** This item's position within <NotificationsList>'s role="feed" — WAI-ARIA expects a feed's direct children to carry these, same as <PostCard> already does via post-feed-list.tsx/profile-post-list.tsx. */
+  posinset: number
+  setsize: number
 }
 
 /** One row in <NotificationsList> — unread ones get a tinted background, same visual language as an unread email (ROADMAP.md 1.7, SPECS.md §7.2). */
-export function NotificationItem({ notification }: NotificationItemProps) {
+export function NotificationItem({ notification, posinset, setsize }: NotificationItemProps) {
   const href = notificationHref(notification)
 
   const body = (
@@ -35,5 +38,9 @@ export function NotificationItem({ notification }: NotificationItemProps) {
     </div>
   )
 
-  return href ? <Link href={href}>{body}</Link> : body
+  return (
+    <article aria-posinset={posinset} aria-setsize={setsize}>
+      {href ? <Link href={href}>{body}</Link> : body}
+    </article>
+  )
 }

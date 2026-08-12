@@ -3,7 +3,7 @@
 import { PostCard } from '@/components/post-card'
 import { TimelineSkeleton } from '@/components/timeline-skeleton'
 import { type ProfilePostsFilter, useProfilePosts } from '@/lib/use-profile-posts'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 const EMPTY_MESSAGES: Record<ProfilePostsFilter, string> = {
   posts: 'Todavía no hay posts.',
@@ -38,6 +38,17 @@ export function ProfilePostList({ username, filter }: ProfilePostListProps) {
     return () => observer.disconnect()
   }, [hasNextPage, isFetchingNextPage, fetchNextPage])
 
+  // Same aria-live announcement as post-feed-list.tsx / notifications-list.tsx.
+  const [announcement, setAnnouncement] = useState('')
+  const previousCountRef = useRef(posts.length)
+  useEffect(() => {
+    const added = posts.length - previousCountRef.current
+    if (added > 0 && previousCountRef.current > 0) {
+      setAnnouncement(`Se cargaron ${added} posts más.`)
+    }
+    previousCountRef.current = posts.length
+  }, [posts.length])
+
   // `!data`, not just isLoading: use-profile-posts.ts's query starts
   // disabled (until the session bootstrap settles), and TanStack v5's
   // isLoading is `isPending && isFetching` — false while disabled, which
@@ -69,6 +80,9 @@ export function ProfilePostList({ username, filter }: ProfilePostListProps) {
       {isFetchingNextPage && (
         <p className="p-4 text-center text-sm text-muted-foreground">Cargando más…</p>
       )}
+      <p aria-live="polite" className="sr-only">
+        {announcement}
+      </p>
     </div>
   )
 }

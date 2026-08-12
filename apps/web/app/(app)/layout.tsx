@@ -1,7 +1,9 @@
 'use client'
 
+import { KeyboardShortcutsDialog } from '@/components/keyboard-shortcuts-dialog'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { useCurrentUser } from '@/lib/use-current-user'
+import { useGlobalKeyboardShortcuts } from '@/lib/use-global-keyboard-shortcuts'
 import { useSession } from '@/lib/use-session'
 import { useUnreadCount } from '@/lib/use-unread-count'
 import Link from 'next/link'
@@ -13,6 +15,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { isLoading, isAuthenticated } = useSession()
   const { data: me } = useCurrentUser()
   const { data: unreadCount } = useUnreadCount()
+  useGlobalKeyboardShortcuts()
 
   // Route protection is a navigation side-effect, not a data fetch — the
   // data fetch itself (the session query) already went through TanStack
@@ -61,6 +64,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
       <main className="flex-1 p-6">{children}</main>
+      <KeyboardShortcutsDialog />
     </div>
   )
 }

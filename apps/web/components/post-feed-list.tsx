@@ -1,6 +1,7 @@
 'use client'
 
 import { PostCard } from '@/components/post-card'
+import { usePostFeedKeyboardNav } from '@/lib/use-post-feed-keyboard-nav'
 import { useWindowVirtualizer } from '@tanstack/react-virtual'
 import type { Post } from '@x/contracts'
 import { useEffect, useRef, useState } from 'react'
@@ -54,6 +55,37 @@ export function PostFeedList({
     }
   }, [lastIndex, posts.length, hasNextPage, isFetchingNextPage, fetchNextPage])
 
+  usePostFeedKeyboardNav(containerRef, virtualizer, posts.length)
+
+  // SPECS.md §7.5 / ROADMAP.md 2.10: announces each page as it loads — the
+  // same "DOM plumbing reacting to already-fetched data" category as the
+  // effect above, not a fetch of its own. A screen reader user scrolling
+  // this list otherwise gets no signal that more content just appeared.
+  // Growth at the *front* (first post's id changed) is use-create-post.ts
+  // prepending the caller's own new post, not a pagination page landing at
+  // the back — worth a different, more specific announcement than "N more
+  // posts loaded" for something the screen reader user just typed themselves.
+  const [announcement, setAnnouncement] = useState('')
+  const postCount = posts.length
+  const firstPostId = posts[0]?.id
+  const previousCountRef = useRef(postCount)
+  const previousFirstIdRef = useRef(firstPostId)
+  useEffect(() => {
+    const added = postCount - previousCountRef.current
+    if (added > 0 && previousCountRef.current > 0) {
+      const isOwnPostPrepended = firstPostId !== previousFirstIdRef.current
+      setAnnouncement(
+        isOwnPostPrepended ? 'Se publicó tu post.' : `Se cargaron ${added} posts más.`,
+      )
+    }
+    previousCountRef.current = postCount
+    previousFirstIdRef.current = firstPostId
+    // Primitives only (postCount, firstPostId), not `posts` itself — the
+    // array gets a new identity on nearly every render (posts is a fresh
+    // .flatMap() each time), which would fire this far more often than
+    // "the feed actually grew."
+  }, [postCount, firstPostId])
+
   return (
     <div role="feed" aria-busy={isFetchingNextPage} aria-label={ariaLabel}>
       <div ref={containerRef} style={{ position: 'relative', height: virtualizer.getTotalSize() }}>
@@ -65,8 +97,16 @@ export function PostFeedList({
               key={post.id}
               data-index={virtualItem.index}
               ref={virtualizer.measureElement}
+              tabIndex={-1}
               aria-posinset={virtualItem.index + 1}
               aria-setsize={hasNextPage ? -1 : posts.length}
+              // Plain focus:, not focus-visible: — this div is excluded
+              // from the normal Tab order (tabIndex={-1}), so the only way
+              // it ever receives DOM focus is use-post-feed-keyboard-nav.ts's
+              // deliberate .focus() call, and that ring should always show
+              // then rather than depend on the browser's focus-visible
+              // heuristic for a programmatic call correctly guessing intent.
+              className="focus:outline-none focus:ring-2 focus:ring-inset focus:ring-primary"
               style={{
                 position: 'absolute',
                 top: 0,
@@ -83,6 +123,9 @@ export function PostFeedList({
       {isFetchingNextPage && (
         <p className="p-4 text-center text-sm text-muted-foreground">Cargando más…</p>
       )}
+      <p aria-live="polite" className="sr-only">
+        {announcement}
+      </p>
     </div>
   )
 }

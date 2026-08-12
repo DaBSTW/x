@@ -79,7 +79,7 @@ export function Composer({
           placeholder={placeholder}
           aria-label="Redactar un post"
           rows={3}
-          className="w-full resize-none bg-transparent text-lg placeholder:text-muted-foreground focus-visible:outline-none"
+          className="w-full resize-none rounded-md bg-transparent text-lg placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
         />
         {attachments.length > 0 && (
           <div className="flex flex-wrap gap-2">

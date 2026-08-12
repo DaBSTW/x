@@ -10,7 +10,12 @@
   --color-primary-foreground: oklch(98% 0 0);
   --color-muted: oklch(96% 0.005 264);
   --color-muted-foreground: oklch(45% 0.01 264);
-  --color-border: oklch(90% 0.005 264);
+  /* 62%, not the original 90% — ROADMAP.md 2.10's contrast audit found the
+     lighter value at 1.35:1 against --color-background, well under WCAG
+     2.2's 3:1 floor for non-text UI (SC 1.4.11), which matters here since
+     this token also draws Input's and outline-Button's boundary, not just
+     decorative dividers. 62% clears 3:1 against both background and muted. */
+  --color-border: oklch(62% 0.01 264);
   --color-destructive: oklch(58% 0.22 27);
   --color-destructive-foreground: oklch(98% 0 0);
 
@@ -25,7 +30,7 @@
     --color-primary-foreground: oklch(15% 0.01 264);
     --color-muted: oklch(22% 0.01 264);
     --color-muted-foreground: oklch(68% 0.01 264);
-    --color-border: oklch(28% 0.01 264);
+    --color-border: oklch(53% 0.01 264);
     --color-destructive: oklch(65% 0.2 27);
     --color-destructive-foreground: oklch(15% 0.01 264);
   }
@@ -38,7 +43,7 @@
   --color-primary-foreground: oklch(15% 0.01 264);
   --color-muted: oklch(22% 0.01 264);
   --color-muted-foreground: oklch(68% 0.01 264);
-  --color-border: oklch(28% 0.01 264);
+  --color-border: oklch(53% 0.01 264);
   --color-destructive: oklch(65% 0.2 27);
   --color-destructive-foreground: oklch(15% 0.01 264);
 }

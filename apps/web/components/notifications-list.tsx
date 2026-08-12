@@ -3,7 +3,7 @@
 import { NotificationItem } from '@/components/notification-item'
 import { TimelineSkeleton } from '@/components/timeline-skeleton'
 import { useNotifications } from '@/lib/use-notifications'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 /** Same useInfiniteQuery + IntersectionObserver-sentinel shape as <ProfilePostList> (ROADMAP.md 1.7). */
 export function NotificationsList() {
@@ -25,6 +25,19 @@ export function NotificationsList() {
     return () => observer.disconnect()
   }, [hasNextPage, isFetchingNextPage, fetchNextPage])
 
+  // Same aria-live announcement as post-feed-list.tsx, and the same reason
+  // it's not a data-fetching effect: reacting to already-fetched data for a
+  // screen-reader-only side effect (CODESTYLE.md §11).
+  const [announcement, setAnnouncement] = useState('')
+  const previousCountRef = useRef(notifications.length)
+  useEffect(() => {
+    const added = notifications.length - previousCountRef.current
+    if (added > 0 && previousCountRef.current > 0) {
+      setAnnouncement(`Se cargaron ${added} notificaciones más.`)
+    }
+    previousCountRef.current = notifications.length
+  }, [notifications.length])
+
   if (isLoading) return <TimelineSkeleton />
   if (isError) {
     return (
@@ -43,13 +56,21 @@ export function NotificationsList() {
 
   return (
     <div role="feed" aria-busy={isFetchingNextPage} aria-label="Notificaciones">
-      {notifications.map((notification) => (
-        <NotificationItem key={notification.id} notification={notification} />
+      {notifications.map((notification, index) => (
+        <NotificationItem
+          key={notification.id}
+          notification={notification}
+          posinset={index + 1}
+          setsize={hasNextPage ? -1 : notifications.length}
+        />
       ))}
       <div ref={sentinelRef} />
       {isFetchingNextPage && (
         <p className="p-4 text-center text-sm text-muted-foreground">Cargando más…</p>
       )}
+      <p aria-live="polite" className="sr-only">
+        {announcement}
+      </p>
     </div>
   )
 }

@@ -326,13 +326,13 @@ Efecto secundario corregido en el mismo checkpoint: crear una respuesta o una ci
 
 ### 2.10 Accesibilidad e i18n 🟡
 
-- [ ] Atajos de teclado completos (`j`/`k`/`l`/`r`/`t`/`n`/`/`/`?`)
-- [ ] Timeline con rol `feed` + `aria-posinset` / `aria-setsize`
-- [ ] `aria-live="polite"` en nuevos posts y notificaciones
-- [ ] **axe-core en CI**: cualquier violación WCAG 2.2 AA bloquea el merge
+- [x] **Atajos de teclado**: `j`/`k` mueven el foco real del DOM (no sólo un resaltado visual) entre los `<div data-index>` que ya renderiza `<PostFeedList>` (timeline y guardados), llamando primero al `scrollToIndex` del virtualizador por si el siguiente post cae fuera de la ventana de overscan — `use-post-feed-keyboard-nav.ts`. `l`/`t`/`r` actúan sobre el post enfocado haciendo `.click()` en su botón de acción existente (mismo camino que un clic real, una sola implementación de "dar like" en vez de dos que puedan desincronizarse); `r` reutiliza así la navegación a `/status/:id` que ya hacía "Responder". `n` enfoca el composer si hay uno en pantalla; `?` abre un diálogo de ayuda (`use-global-keyboard-shortcuts.ts`, global). ⚪ `/` queda fuera: es el atajo para buscar y la búsqueda (2.3) todavía no existe — no hay a qué enfocar
+- [x] Rol `feed` + `aria-posinset`/`aria-setsize` — ya estaba en `<PostFeedList>` y `<ProfilePostList>` desde 1.6/2.8; el hueco real era `<NotificationsList>`, cuyo `role="feed"` no pasaba esos atributos a cada `<NotificationItem>` (ahora envuelto en `<article>`, igual que `<PostCard>`)
+- [x] `aria-live="polite"` al terminar de cargar una página nueva (scroll infinito) en las tres listas (`PostFeedList`, `ProfilePostList`, `NotificationsList`) y al publicar el propio post (distingue "se publicó tu post" de "se cargaron N más" comparando el id del primer elemento). ⚪ No cubre posts o notificaciones de *otras* cuentas apareciendo en vivo — sin 2.2 (tiempo real) no hay ningún mecanismo que los traiga mientras la pantalla está abierta, así que no hay nada que anunciar todavía en ese caso
+- [x] **axe-core en CI**: `apps/web/e2e/accessibility.spec.ts` corre `@axe-core/playwright` contra `wcag2a`+`wcag2aa`+`wcag21a`+`wcag21aa`+`wcag22aa` (el conjunto que en conjunto es "WCAG 2.2 AA") en las páginas públicas (login, signup) y en las principales autenticadas (home, notificaciones, guardados, listas, solicitudes, mensajes, configuración, perfil) — sin job nuevo: `testDir` de Playwright recoge cualquier `*.spec.ts` bajo `e2e/`, así que ya corre dentro del job `e2e` existente de `ci.yml`, que bloquea `build`/`docker` (y por tanto el merge) igual que cualquier otra prueba e2e
 - [ ] `next-intl` con catálogos ICU; español e inglés al lanzamiento
 - [ ] Soporte RTL con propiedades lógicas de CSS
-- [ ] Auditoría de contraste 4.5:1 en ambos temas
+- [x] Auditoría de contraste — los 9 tokens oklch (`app/globals.css`) recalculados a mano (OKLCH → sRGB lineal → luminancia relativa) pasaban 4.5:1 en texto en ambos temas, pero `--color-border` daba 1.35:1 contra el fondo en los dos — muy por debajo del suelo de 3:1 que WCAG 2.2 exige para límites de UI no textuales (SC 1.4.11), y ese token dibuja el borde real de `<Input>` y del `Button` `variant="outline"`, no sólo separadores decorativos. Subido a 62%/53% de luminosidad (claro/oscuro): ≥3.5:1 contra el fondo y ≥3:1 contra `--color-muted` en ambos. De paso, `composer.tsx` tenía `focus-visible:outline-none` sin anillo de reemplazo — el foco desaparecía al tabular hasta el textarea; arreglado con el mismo `focus-visible:ring-primary` que ya usan `Button`/`Input`
 
 ### ✅ Criterio de aceptación de la fase 2
 
