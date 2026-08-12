@@ -4,8 +4,16 @@ import { CreateBucketCommand } from '@aws-sdk/client-s3'
 import { MinioContainer, type StartedMinioContainer } from '@testcontainers/minio'
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql'
 import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis'
-import { createDatabase, media, migrationsFolderUrl } from '@x/db'
+import {
+  createDatabase,
+  media,
+  migrationsFolderUrl,
+  postCounters,
+  posts,
+  userCounters,
+} from '@x/db'
 import { MEDIA_STATUS, createS3Client, generateId } from '@x/utils'
+import { and, eq, isNull, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
 import type { FastifyInstance } from 'fastify'
 import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers'
@@ -831,5 +839,94 @@ describe('posts routes', () => {
       headers: { authorization: `Bearer ${authorToken}` },
     })
     expect(getByIdAsAuthor.statusCode).toBe(200)
+  })
+
+  it('deleting a post with 50,000 replies is O(1) and leaves no orphans or inconsistent counters (SPECS.md §17.3)', async () => {
+    const root = (
+      await app.inject({
+        method: 'POST',
+        url: '/v1/posts',
+        headers: authHeader(),
+        payload: { text: 'raíz con 50 000 respuestas' },
+      })
+    ).json().data
+    const rootId = BigInt(root.id)
+
+    // Bulk-inserted directly against Postgres, not via 50,000 individual
+    // POST /posts calls — this test is about softDeletePost's own behavior
+    // at scale, not about re-proving posts.service.ts's create() path (that's
+    // covered elsewhere). Chunked at 5,000 rows/statement to stay well under
+    // Postgres's 65535-parameter limit per statement.
+    const REPLY_COUNT = 50_000
+    const BATCH_SIZE = 5_000
+    let firstReplyId: bigint | undefined
+    for (let inserted = 0; inserted < REPLY_COUNT; inserted += BATCH_SIZE) {
+      const postRows: (typeof posts.$inferInsert)[] = []
+      const counterRows: (typeof postCounters.$inferInsert)[] = []
+      for (let i = 0; i < BATCH_SIZE; i++) {
+        const id = generateId()
+        firstReplyId ??= id
+        postRows.push({
+          id,
+          authorId: BigInt(posterId),
+          kind: 'reply',
+          inReplyToId: rootId,
+          conversationId: rootId,
+        })
+        counterRows.push({ postId: id })
+      }
+      await app.db.insert(posts).values(postRows)
+      await app.db.insert(postCounters).values(counterRows)
+    }
+
+    // The bulk insert above never went through insertPost's `postsCount + 1`
+    // update, so this is whatever the shared `poster` account already
+    // accumulated from every earlier test in this file — the assertion below
+    // checks the *delta* the delete produces, not this absolute number.
+    const [before] = await app.db
+      .select({ postsCount: userCounters.postsCount })
+      .from(userCounters)
+      .where(eq(userCounters.userId, BigInt(posterId)))
+
+    const startedAt = Date.now()
+    const deleteResponse = await app.inject({
+      method: 'DELETE',
+      url: `/v1/posts/${root.id}`,
+      headers: authHeader(),
+    })
+    const elapsedMs = Date.now() - startedAt
+
+    expect(deleteResponse.statusCode).toBe(204)
+    // O(1): softDeletePost touches exactly the root row and one userCounters
+    // row, never the replies — a regression to an O(n) cascade would take
+    // seconds against 50,000 rows, not milliseconds, even on a modest
+    // Testcontainers instance.
+    expect(elapsedMs).toBeLessThan(5_000)
+
+    // The root itself is gone...
+    const getRoot = await app.inject({ method: 'GET', url: `/v1/posts/${root.id}` })
+    expect(getRoot.statusCode).toBe(404)
+
+    // ...but none of the 50,000 replies were touched: no orphans, still
+    // exactly 50,000 non-deleted rows pointing at the now-gone root.
+    const survivingReplies = await app.db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(posts)
+      .where(and(eq(posts.inReplyToId, rootId), isNull(posts.deletedAt)))
+    expect(survivingReplies[0]?.count).toBe(REPLY_COUNT)
+
+    // Spot check: an individual reply is still independently readable.
+    if (firstReplyId !== undefined) {
+      const getReply = await app.inject({ method: 'GET', url: `/v1/posts/${firstReplyId}` })
+      expect(getReply.statusCode).toBe(200)
+    }
+
+    // The author's postsCount decremented by exactly 1 for the root — not by
+    // 50,001, and not left inconsistent either.
+    const [after] = await app.db
+      .select({ postsCount: userCounters.postsCount })
+      .from(userCounters)
+      .where(eq(userCounters.userId, BigInt(posterId)))
+    expect(after?.postsCount).toBe((before?.postsCount ?? 0) - 1)
   })
 })
