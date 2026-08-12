@@ -306,6 +306,34 @@ function pairKey(a: bigint, b: bigint): string {
   return [a, b].sort((x, y) => (x > y ? 1 : x < y ? -1 : 0)).join(':')
 }
 
+// Mirrors createFakeBlockLookup — a protected-author set plus an approved-
+// follower set is enough to fake ProtectionLookup's one method, standing in
+// for social-graph.repository.ts's real users.is_protected + follows join.
+function createFakeProtectionLookup() {
+  const protectedAuthorIds = new Set<string>()
+  const approvedFollowers = new Set<string>() // `${viewerId}:${authorId}`
+  return {
+    protectionLookup: {
+      async findProtectedHiddenAuthorIds(viewerId: bigint | undefined, authorIds: bigint[]) {
+        return new Set(
+          authorIds.filter((id) => {
+            if (!protectedAuthorIds.has(id.toString())) return false
+            if (viewerId === id) return false
+            if (viewerId !== undefined && approvedFollowers.has(`${viewerId}:${id}`)) return false
+            return true
+          }),
+        )
+      },
+    },
+    makeProtected(authorId: bigint) {
+      protectedAuthorIds.add(authorId.toString())
+    },
+    approve(viewerId: bigint, authorId: bigint) {
+      approvedFollowers.add(`${viewerId}:${authorId}`)
+    },
+  }
+}
+
 describe('createPostsService', () => {
   let repository: PostRepository
   let authorsById: Map<bigint, AuthorRow>
@@ -1044,6 +1072,153 @@ describe('createPostsService', () => {
       await expect(service.listReplies(BigInt(root.id), 20, null, viewer)).rejects.toMatchObject({
         code: 'NOT_FOUND',
       })
+    })
+  })
+
+  // Same 8-arg shape as "block visibility" above, protectionLookup (arg 8)
+  // populated instead of blockLookup (arg 7).
+  describe('protected account visibility (ROADMAP.md 2.6)', () => {
+    it("getById 404s a protected author's post for a viewer who isn't an approved follower", async () => {
+      const { protectionLookup, makeProtected } = createFakeProtectionLookup()
+      const service = createPostsService(
+        repository,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        protectionLookup,
+      )
+      makeProtected(author.id)
+      const post = await service.create(author.id, {
+        text: 'hola',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      await expect(service.getById(BigInt(post.id), generateId())).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      })
+    })
+
+    it('getById 404s the same post for an anonymous (no viewerId) visitor', async () => {
+      const { protectionLookup, makeProtected } = createFakeProtectionLookup()
+      const service = createPostsService(
+        repository,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        protectionLookup,
+      )
+      makeProtected(author.id)
+      const post = await service.create(author.id, {
+        text: 'hola',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      await expect(service.getById(BigInt(post.id))).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    })
+
+    it('getById still resolves for the protected author themself', async () => {
+      const { protectionLookup, makeProtected } = createFakeProtectionLookup()
+      const service = createPostsService(
+        repository,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        protectionLookup,
+      )
+      makeProtected(author.id)
+      const post = await service.create(author.id, {
+        text: 'hola',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      await expect(service.getById(BigInt(post.id), author.id)).resolves.toMatchObject({
+        id: post.id,
+      })
+    })
+
+    it('getById resolves for an approved follower', async () => {
+      const { protectionLookup, makeProtected, approve } = createFakeProtectionLookup()
+      const service = createPostsService(
+        repository,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        protectionLookup,
+      )
+      makeProtected(author.id)
+      const viewer = generateId()
+      approve(viewer, author.id)
+      const post = await service.create(author.id, {
+        text: 'hola',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      await expect(service.getById(BigInt(post.id), viewer)).resolves.toMatchObject({ id: post.id })
+    })
+
+    it('listByUsername returns an empty page for a protected profile the viewer does not follow', async () => {
+      const { protectionLookup, makeProtected } = createFakeProtectionLookup()
+      const service = createPostsService(
+        repository,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        protectionLookup,
+      )
+      makeProtected(author.id)
+      await service.create(author.id, { text: 'hola', replyPolicy: 'everyone', isSensitive: false })
+
+      const page = await service.listByUsername(
+        author.username.toLowerCase(),
+        20,
+        null,
+        'posts',
+        generateId(),
+      )
+
+      expect(page).toEqual({ items: [], hasMore: false })
+    })
+
+    it('getManyByIds silently drops a post from a protected author the viewer does not follow', async () => {
+      const { protectionLookup, makeProtected } = createFakeProtectionLookup()
+      const service = createPostsService(
+        repository,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        protectionLookup,
+      )
+      makeProtected(author.id)
+      const viewer = generateId()
+      const post = await service.create(author.id, {
+        text: 'hola',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      expect(await service.getManyByIds([BigInt(post.id)], viewer)).toEqual([])
     })
   })
 

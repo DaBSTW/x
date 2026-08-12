@@ -134,8 +134,9 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
       isFollowing: (followerId, followeeId) =>
         socialGraphRepository.findFollow(followerId, followeeId).then(Boolean),
     },
-    // Structurally identical to BlockLookup already — no adapter needed,
-    // unlike isFollowing above.
+    // Structurally identical to BlockLookup and ProtectionLookup already —
+    // no adapter needed for either, unlike isFollowing above.
+    socialGraphRepository,
     socialGraphRepository,
   )
 

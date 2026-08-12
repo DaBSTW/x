@@ -1,5 +1,6 @@
 import { ChangePasswordForm } from '@/components/change-password-form'
 import { NotificationPreferencesForm } from '@/components/notification-preferences-form'
+import { ProtectedAccountToggle } from '@/components/protected-account-toggle'
 import { PushNotificationsToggle } from '@/components/push-notifications-toggle'
 import { SessionsList } from '@/components/sessions-list'
 
@@ -7,6 +8,10 @@ export default function SettingsPage() {
   return (
     <div className="flex flex-col gap-8 p-4">
       <h1 className="border-b border-border pb-4 text-xl font-bold">Configuración</h1>
+      <section className="flex flex-col gap-3">
+        <h2 className="text-lg font-semibold">Privacidad</h2>
+        <ProtectedAccountToggle />
+      </section>
       <section className="flex flex-col gap-2">
         <h2 className="text-lg font-semibold">Contraseña</h2>
         <ChangePasswordForm />

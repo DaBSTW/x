@@ -42,7 +42,7 @@ describe('timeline routes', () => {
       url: `/v1/users/${targetUserId}/follow`,
       headers: { authorization: `Bearer ${accessToken}` },
     })
-    expect(response.statusCode).toBe(204)
+    expect(response.statusCode).toBe(200)
   }
 
   async function createPost(accessToken: string, text: string) {

@@ -38,7 +38,13 @@ export function ProfilePostList({ username, filter }: ProfilePostListProps) {
     return () => observer.disconnect()
   }, [hasNextPage, isFetchingNextPage, fetchNextPage])
 
-  if (isLoading) return <TimelineSkeleton />
+  // `!data`, not just isLoading: use-profile-posts.ts's query starts
+  // disabled (until the session bootstrap settles), and TanStack v5's
+  // isLoading is `isPending && isFetching` — false while disabled, which
+  // would otherwise flash the empty-state message before the real fetch
+  // ever runs. Same combined check as protected-account-toggle.tsx /
+  // sessions-list.tsx for the same reason.
+  if (isLoading || !data) return <TimelineSkeleton />
   if (isError) {
     return (
       <p role="alert" className="p-6 text-sm text-destructive">

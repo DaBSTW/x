@@ -39,16 +39,19 @@ type FakeUser = {
   displayName: string
   avatarUrl: string | null
   isVerified: boolean
+  isProtected: boolean
 }
 type FakeFollow = { followerId: bigint; followeeId: bigint; createdAt: Date }
 type FakeBlock = { blockerId: bigint; blockedId: bigint; createdAt: Date }
 type FakeMute = { muterId: bigint; mutedId: bigint; createdAt: Date }
+type FakeFollowRequest = { requesterId: bigint; targetId: bigint; createdAt: Date }
 
 function createFakeRepository() {
   const users = new Map<bigint, FakeUser>()
   const followsList: FakeFollow[] = []
   const blocksList: FakeBlock[] = []
   const mutesList: FakeMute[] = []
+  const followRequestsList: FakeFollowRequest[] = []
 
   const repository: SocialGraphRepository = {
     async findFollow(followerId, followeeId) {
@@ -123,6 +126,58 @@ function createFakeRepository() {
     async userExists(id) {
       return users.has(id)
     },
+    async findUserProtectionStatus(id) {
+      return users.get(id)?.isProtected ?? null
+    },
+    async findFollowRequest(requesterId, targetId) {
+      return (
+        followRequestsList.find((r) => r.requesterId === requesterId && r.targetId === targetId) ??
+        null
+      )
+    },
+    async insertFollowRequest(requesterId, targetId) {
+      followRequestsList.push({ requesterId, targetId, createdAt: new Date() })
+    },
+    async deleteFollowRequest(requesterId, targetId) {
+      const index = followRequestsList.findIndex(
+        (r) => r.requesterId === requesterId && r.targetId === targetId,
+      )
+      if (index < 0) return false
+      followRequestsList.splice(index, 1)
+      return true
+    },
+    async acceptFollowRequest(requesterId, targetId) {
+      const index = followRequestsList.findIndex(
+        (r) => r.requesterId === requesterId && r.targetId === targetId,
+      )
+      if (index < 0) return false
+      followRequestsList.splice(index, 1)
+      followsList.push({ followerId: requesterId, followeeId: targetId, createdAt: new Date() })
+      return true
+    },
+    async listFollowRequestsForTarget(targetId, limit) {
+      return followRequestsList
+        .filter((r) => r.targetId === targetId)
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        .slice(0, limit)
+        .map((r) => {
+          const user = users.get(r.requesterId)
+          if (!user) throw new Error('missing fake user')
+          return { ...user, followedAt: r.createdAt }
+        })
+    },
+    async findProtectedHiddenAuthorIds(viewerId, authorIds) {
+      const ids = new Set(authorIds)
+      const result = new Set<bigint>()
+      for (const user of users.values()) {
+        if (!ids.has(user.id) || !user.isProtected || user.id === viewerId) continue
+        const isApprovedFollower =
+          viewerId !== undefined &&
+          followsList.some((f) => f.followerId === viewerId && f.followeeId === user.id)
+        if (!isApprovedFollower) result.add(user.id)
+      }
+      return result
+    },
     async listFollowers(followeeId, limit) {
       return followsList
         .filter((f) => f.followeeId === followeeId)
@@ -172,6 +227,7 @@ function createFakeRepository() {
       displayName: 'User',
       avatarUrl: null,
       isVerified: false,
+      isProtected: false,
       ...overrides,
     }
     users.set(user.id, user)
@@ -270,6 +326,67 @@ describe('createSocialGraphService', () => {
         },
       ])
     })
+
+    it('reports {status: "following"} for a normal account', async () => {
+      const service = createSocialGraphService(repository, redis)
+      const alice = addUser({ username: 'alice' })
+      const bob = addUser({ username: 'bob' })
+
+      await expect(service.follow(alice.id, bob.id)).resolves.toEqual({ status: 'following' })
+    })
+
+    describe('a protected target (ROADMAP.md 2.6)', () => {
+      it('creates a pending request instead of an immediate follow', async () => {
+        const service = createSocialGraphService(repository, redis)
+        const alice = addUser({ username: 'alice' })
+        const bob = addUser({ username: 'bob', isProtected: true })
+
+        const result = await service.follow(alice.id, bob.id)
+
+        expect(result).toEqual({ status: 'requested' })
+        const page = await service.listFollowing('alice', 20, null)
+        expect(page.items).toHaveLength(0) // not a follow yet
+      })
+
+      it('rejects a second request while one is already pending', async () => {
+        const service = createSocialGraphService(repository, redis)
+        const alice = addUser({ username: 'alice' })
+        const bob = addUser({ username: 'bob', isProtected: true })
+        await service.follow(alice.id, bob.id)
+
+        await expect(service.follow(alice.id, bob.id)).rejects.toMatchObject({ code: 'CONFLICT' })
+      })
+
+      it('publishes a follow_request notification, not a follow one', async () => {
+        const published: unknown[] = []
+        const service = createSocialGraphService(repository, redis, async (data) => {
+          published.push(data)
+        })
+        const alice = addUser({ username: 'alice' })
+        const bob = addUser({ username: 'bob', isProtected: true })
+
+        await service.follow(alice.id, bob.id)
+
+        expect(published).toEqual([
+          {
+            userId: bob.id.toString(),
+            kind: 'follow_request',
+            actorId: alice.id.toString(),
+            postId: null,
+            groupKey: null,
+          },
+        ])
+      })
+
+      it('still rejects a request across an active block', async () => {
+        const service = createSocialGraphService(repository, redis)
+        const alice = addUser({ username: 'alice' })
+        const bob = addUser({ username: 'bob', isProtected: true })
+        await service.block(bob.id, alice.id)
+
+        await expect(service.follow(alice.id, bob.id)).rejects.toMatchObject({ code: 'FORBIDDEN' })
+      })
+    })
   })
 
   describe('unfollow', () => {
@@ -283,6 +400,80 @@ describe('createSocialGraphService', () => {
 
       const page = await service.listFollowing('alice', 20, null)
       expect(page.items).toHaveLength(0)
+    })
+
+    it('cancels a pending request to a protected account (ROADMAP.md 2.6)', async () => {
+      const service = createSocialGraphService(repository, redis)
+      const alice = addUser({ username: 'alice' })
+      const bob = addUser({ username: 'bob', isProtected: true })
+      await service.follow(alice.id, bob.id)
+
+      await service.unfollow(alice.id, bob.id)
+
+      const requests = await service.listFollowRequests(bob.id, 20, null)
+      expect(requests.items).toHaveLength(0)
+    })
+  })
+
+  describe('follow requests (ROADMAP.md 2.6)', () => {
+    it('acceptFollowRequest turns a pending request into a real follow', async () => {
+      const service = createSocialGraphService(repository, redis)
+      const alice = addUser({ username: 'alice' })
+      const bob = addUser({ username: 'bob', isProtected: true })
+      await service.follow(alice.id, bob.id)
+
+      await service.acceptFollowRequest(bob.id, alice.id)
+
+      const following = await service.listFollowing('alice', 20, null)
+      expect(following.items.map((i) => i.username)).toEqual(['bob'])
+      const requests = await service.listFollowRequests(bob.id, 20, null)
+      expect(requests.items).toHaveLength(0)
+    })
+
+    it('acceptFollowRequest throws NotFoundError for a request that does not exist', async () => {
+      const service = createSocialGraphService(repository, redis)
+      const alice = addUser({ username: 'alice' })
+      const bob = addUser({ username: 'bob', isProtected: true })
+
+      await expect(service.acceptFollowRequest(bob.id, alice.id)).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      })
+    })
+
+    it('rejectFollowRequest deletes it without creating a follow', async () => {
+      const service = createSocialGraphService(repository, redis)
+      const alice = addUser({ username: 'alice' })
+      const bob = addUser({ username: 'bob', isProtected: true })
+      await service.follow(alice.id, bob.id)
+
+      await service.rejectFollowRequest(bob.id, alice.id)
+
+      const following = await service.listFollowing('alice', 20, null)
+      expect(following.items).toHaveLength(0)
+      const requests = await service.listFollowRequests(bob.id, 20, null)
+      expect(requests.items).toHaveLength(0)
+    })
+
+    it('rejectFollowRequest throws NotFoundError for a request that does not exist', async () => {
+      const service = createSocialGraphService(repository, redis)
+      const alice = addUser({ username: 'alice' })
+      const bob = addUser({ username: 'bob', isProtected: true })
+
+      await expect(service.rejectFollowRequest(bob.id, alice.id)).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      })
+    })
+
+    it('listFollowRequests only lists requests targeting that account', async () => {
+      const service = createSocialGraphService(repository, redis)
+      const alice = addUser({ username: 'alice' })
+      const bob = addUser({ username: 'bob', isProtected: true })
+      const carol = addUser({ username: 'carol', isProtected: true })
+      await service.follow(alice.id, bob.id)
+      await service.follow(alice.id, carol.id)
+
+      const bobRequests = await service.listFollowRequests(bob.id, 20, null)
+      expect(bobRequests.items.map((i) => i.username)).toEqual(['alice'])
     })
   })
 

@@ -16,6 +16,7 @@ describe('social graph routes', () => {
   let app: FastifyInstance
   let aliceToken: string
   let aliceId: string
+  let bobToken: string
   let bobId: string
 
   async function registerAndLogin(username: string, email: string) {
@@ -70,6 +71,11 @@ describe('social graph routes', () => {
       S3_ACCESS_KEY_ID: 'x-minio',
       S3_SECRET_ACCESS_KEY: 'x-minio-secret',
       S3_FORCE_PATH_STYLE: true,
+      // Every test here registers its own fresh user(s) — SPECS.md §11.3's
+      // production ceiling (10/15min per IP) is sized for one real client,
+      // not this whole file's worth of `it` blocks sharing one IP (see
+      // auth.integration.test.ts for the same reasoning).
+      LOGIN_RATE_LIMIT_MAX: 100,
     }
     app = await buildApp(env)
 
@@ -77,6 +83,7 @@ describe('social graph routes', () => {
     aliceToken = alice.accessToken
 
     const bob = await registerAndLogin('bob', 'bob@example.com')
+    bobToken = bob.accessToken
     const bobPost = await app.inject({
       method: 'POST',
       url: '/v1/posts',
@@ -104,7 +111,8 @@ describe('social graph routes', () => {
       url: `/v1/users/${bobId}/follow`,
       headers: { authorization: `Bearer ${aliceToken}` },
     })
-    expect(followResponse.statusCode).toBe(204)
+    expect(followResponse.statusCode).toBe(200)
+    expect(followResponse.json().data).toEqual({ status: 'following' })
 
     const duplicateFollow = await app.inject({
       method: 'POST',
@@ -135,6 +143,144 @@ describe('social graph routes', () => {
     expect(followingAfter.json().data.map((u: { username: string }) => u.username)).not.toContain(
       'bob',
     )
+  })
+
+  it('requests, lists, accepts, and rejects follow requests for a protected account (ROADMAP.md 2.6)', async () => {
+    const carol = await registerAndLogin('carol', 'carol@example.com')
+    const protect = await app.inject({
+      method: 'PATCH',
+      url: '/v1/users/me',
+      headers: { authorization: `Bearer ${carol.accessToken}` },
+      payload: { isProtected: true },
+    })
+    expect(protect.statusCode).toBe(200)
+    expect(protect.json().data.isProtected).toBe(true)
+    const carolId = protect.json().data.id as string
+
+    // Following a protected account creates a request, not an immediate follow.
+    const followAttempt = await app.inject({
+      method: 'POST',
+      url: `/v1/users/${carolId}/follow`,
+      headers: { authorization: `Bearer ${aliceToken}` },
+    })
+    expect(followAttempt.statusCode).toBe(200)
+    expect(followAttempt.json().data).toEqual({ status: 'requested' })
+
+    const carolFollowersBeforeAccept = await app.inject({
+      method: 'GET',
+      url: '/v1/users/carol/followers',
+    })
+    expect(
+      carolFollowersBeforeAccept.json().data.map((u: { username: string }) => u.username),
+    ).not.toContain('alice')
+
+    // A second request while one is pending is a conflict, not a duplicate row.
+    const duplicateRequest = await app.inject({
+      method: 'POST',
+      url: `/v1/users/${carolId}/follow`,
+      headers: { authorization: `Bearer ${aliceToken}` },
+    })
+    expect(duplicateRequest.statusCode).toBe(409)
+
+    const pendingRequests = await app.inject({
+      method: 'GET',
+      url: '/v1/users/me/follow-requests',
+      headers: { authorization: `Bearer ${carol.accessToken}` },
+    })
+    expect(pendingRequests.statusCode).toBe(200)
+    expect(pendingRequests.json().data.map((u: { username: string }) => u.username)).toEqual([
+      'alice',
+    ])
+
+    const accept = await app.inject({
+      method: 'POST',
+      url: `/v1/users/me/follow-requests/${aliceId}/accept`,
+      headers: { authorization: `Bearer ${carol.accessToken}` },
+    })
+    expect(accept.statusCode).toBe(204)
+
+    const carolFollowersAfterAccept = await app.inject({
+      method: 'GET',
+      url: '/v1/users/carol/followers',
+    })
+    expect(
+      carolFollowersAfterAccept.json().data.map((u: { username: string }) => u.username),
+    ).toContain('alice')
+    const pendingAfterAccept = await app.inject({
+      method: 'GET',
+      url: '/v1/users/me/follow-requests',
+      headers: { authorization: `Bearer ${carol.accessToken}` },
+    })
+    expect(pendingAfterAccept.json().data).toEqual([])
+
+    // Accepting twice — nothing pending the second time — 404s.
+    const acceptAgain = await app.inject({
+      method: 'POST',
+      url: `/v1/users/me/follow-requests/${aliceId}/accept`,
+      headers: { authorization: `Bearer ${carol.accessToken}` },
+    })
+    expect(acceptAgain.statusCode).toBe(404)
+
+    // Bob requests too, but carol rejects this one.
+    const bobRequest = await app.inject({
+      method: 'POST',
+      url: `/v1/users/${carolId}/follow`,
+      headers: { authorization: `Bearer ${bobToken}` },
+    })
+    expect(bobRequest.statusCode).toBe(200)
+    expect(bobRequest.json().data).toEqual({ status: 'requested' })
+
+    const reject = await app.inject({
+      method: 'DELETE',
+      url: `/v1/users/me/follow-requests/${bobId}`,
+      headers: { authorization: `Bearer ${carol.accessToken}` },
+    })
+    expect(reject.statusCode).toBe(204)
+
+    const carolFollowersAfterReject = await app.inject({
+      method: 'GET',
+      url: '/v1/users/carol/followers',
+    })
+    expect(
+      carolFollowersAfterReject.json().data.map((u: { username: string }) => u.username),
+    ).not.toContain('bob')
+  })
+
+  it('lets the requester cancel their own pending request by unfollowing', async () => {
+    const dave = await registerAndLogin('dave', 'dave@example.com')
+    const eve = await registerAndLogin('eve', 'eve@example.com')
+    await app.inject({
+      method: 'PATCH',
+      url: '/v1/users/me',
+      headers: { authorization: `Bearer ${eve.accessToken}` },
+      payload: { isProtected: true },
+    })
+    const evePost = await app.inject({
+      method: 'GET',
+      url: '/v1/users/eve',
+    })
+    const eveId = evePost.json().data.id as string
+
+    const request = await app.inject({
+      method: 'POST',
+      url: `/v1/users/${eveId}/follow`,
+      headers: { authorization: `Bearer ${dave.accessToken}` },
+    })
+    expect(request.json().data).toEqual({ status: 'requested' })
+
+    const cancel = await app.inject({
+      method: 'DELETE',
+      url: `/v1/users/${eveId}/follow`,
+      headers: { authorization: `Bearer ${dave.accessToken}` },
+    })
+    expect(cancel.statusCode).toBe(204)
+
+    const eveRequests = await app.inject({
+      method: 'GET',
+      url: '/v1/users/me/follow-requests',
+      headers: { authorization: `Bearer ${eve.accessToken}` },
+    })
+    expect(eveRequests.json().data).toEqual([])
   })
 
   it('rejects following yourself', async () => {

@@ -201,7 +201,7 @@ describe('notifications routes', () => {
       url: `/v1/users/${aliceId}/follow`,
       headers: { authorization: `Bearer ${bobToken}` },
     })
-    expect(response.statusCode).toBe(204)
+    expect(response.statusCode).toBe(200)
 
     const after = await queue.getJobCountByTypes('waiting', 'completed')
     expect(after).toBeGreaterThan(before)

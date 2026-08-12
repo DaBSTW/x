@@ -24,6 +24,32 @@ export const follows = pgTable(
 export type Follow = typeof follows.$inferSelect
 export type NewFollow = typeof follows.$inferInsert
 
+// ROADMAP.md 2.6 "cuentas protegidas" — a pending request to follow a
+// `users.is_protected` account. Accepting one deletes this row and inserts
+// into `follows`; rejecting just deletes it. No FK to `follows`: the two
+// are mutually exclusive states for a given (requester, target) pair, not
+// a lifecycle within one table.
+export const followRequests = pgTable(
+  'follow_requests',
+  {
+    requesterId: bigint('requester_id', { mode: 'bigint' })
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    targetId: bigint('target_id', { mode: 'bigint' })
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.requesterId, table.targetId] }),
+    check('no_self_follow_request', sql`${table.requesterId} <> ${table.targetId}`),
+    // "pending requests targeting me" — GET /users/me/follow-requests.
+    index('idx_follow_requests_target').on(table.targetId, table.createdAt.desc()),
+  ],
+)
+export type FollowRequest = typeof followRequests.$inferSelect
+export type NewFollowRequest = typeof followRequests.$inferInsert
+
 // Table + endpoints from ROADMAP.md 1.2; posts.service.ts, timeline.service.ts
 // and apps/workers' notifications worker apply it to reads (ROADMAP.md 2.6).
 export const blocks = pgTable(

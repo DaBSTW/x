@@ -1,5 +1,5 @@
 import type { Database } from '@x/db'
-import { blocks, follows, mutes, userCounters, users } from '@x/db'
+import { blocks, followRequests, follows, mutes, userCounters, users } from '@x/db'
 import { and, desc, eq, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm'
 
 export type SocialGraphRepository = ReturnType<typeof createSocialGraphRepository>
@@ -47,6 +47,87 @@ export function createSocialGraphRepository(db: Database) {
           .set({ followersCount: sql`greatest(${userCounters.followersCount} - 1, 0)` })
           .where(eq(userCounters.userId, followeeId))
       })
+    },
+
+    /** `null` when the user doesn't exist — replaces a separate userExists lookup in follow(), which needs this same row anyway. */
+    async findUserProtectionStatus(id: bigint): Promise<boolean | null> {
+      const [row] = await db
+        .select({ isProtected: users.isProtected })
+        .from(users)
+        .where(eq(users.id, id))
+        .limit(1)
+      return row ? row.isProtected : null
+    },
+
+    async findFollowRequest(requesterId: bigint, targetId: bigint) {
+      const [row] = await db
+        .select()
+        .from(followRequests)
+        .where(
+          and(eq(followRequests.requesterId, requesterId), eq(followRequests.targetId, targetId)),
+        )
+        .limit(1)
+      return row ?? null
+    },
+
+    async insertFollowRequest(requesterId: bigint, targetId: bigint): Promise<void> {
+      await db.insert(followRequests).values({ requesterId, targetId })
+    },
+
+    /** Cancelling your own pending request and the target rejecting it are the same operation on the same row — `true` iff a row actually existed to delete. */
+    async deleteFollowRequest(requesterId: bigint, targetId: bigint): Promise<boolean> {
+      const deleted = await db
+        .delete(followRequests)
+        .where(
+          and(eq(followRequests.requesterId, requesterId), eq(followRequests.targetId, targetId)),
+        )
+        .returning({ requesterId: followRequests.requesterId })
+      return deleted.length > 0
+    },
+
+    /** Accepting: the pending row becomes a real follow, atomically — `false` when there was nothing pending to accept. */
+    async acceptFollowRequest(requesterId: bigint, targetId: bigint): Promise<boolean> {
+      return db.transaction(async (tx) => {
+        const deleted = await tx
+          .delete(followRequests)
+          .where(
+            and(eq(followRequests.requesterId, requesterId), eq(followRequests.targetId, targetId)),
+          )
+          .returning({ requesterId: followRequests.requesterId })
+        if (deleted.length === 0) return false
+
+        await tx.insert(follows).values({ followerId: requesterId, followeeId: targetId })
+        await tx
+          .update(userCounters)
+          .set({ followingCount: sql`${userCounters.followingCount} + 1` })
+          .where(eq(userCounters.userId, requesterId))
+        await tx
+          .update(userCounters)
+          .set({ followersCount: sql`${userCounters.followersCount} + 1` })
+          .where(eq(userCounters.userId, targetId))
+        return true
+      })
+    },
+
+    /** Cursor pagination on `created_at`, same shape as listFollowers (CODESTYLE.md §13) — the row's `followedAt` field name (not "requestedAt") is deliberate: it lets social-graph.service.ts's toPage/FollowRow do the pagination math unmodified, the same cursor-shaped output either way. */
+    async listFollowRequestsForTarget(targetId: bigint, limit: number, cursor: Date | null) {
+      const conditions = [eq(followRequests.targetId, targetId)]
+      if (cursor) conditions.push(lt(followRequests.createdAt, cursor))
+
+      return db
+        .select({
+          id: users.id,
+          username: users.username,
+          displayName: users.displayName,
+          avatarUrl: users.avatarUrl,
+          isVerified: users.isVerified,
+          followedAt: followRequests.createdAt,
+        })
+        .from(followRequests)
+        .innerJoin(users, eq(users.id, followRequests.requesterId))
+        .where(and(...conditions))
+        .orderBy(desc(followRequests.createdAt))
+        .limit(limit)
     },
 
     async findBlock(blockerId: bigint, blockedId: bigint) {
@@ -146,6 +227,38 @@ export function createSocialGraphRepository(db: Database) {
         .from(mutes)
         .where(and(eq(mutes.muterId, viewerId), inArray(mutes.mutedId, authorIds)))
       return new Set(rows.map((row) => row.mutedId))
+    },
+
+    /**
+     * Which of `authorIds` are protected accounts whose posts should be
+     * hidden from `viewerId` (ROADMAP.md 2.6) — the author's own posts are
+     * never hidden from themself, an approved follower's aren't either.
+     * `undefined` `viewerId` (anonymous) hides every protected author in the
+     * list outright: there's no possible follow relationship to check.
+     */
+    async findProtectedHiddenAuthorIds(
+      viewerId: bigint | undefined,
+      authorIds: bigint[],
+    ): Promise<Set<bigint>> {
+      if (authorIds.length === 0) return new Set()
+      const conditions = [
+        inArray(users.id, authorIds),
+        eq(users.isProtected, true),
+        isNull(follows.followerId),
+      ]
+      if (viewerId !== undefined) conditions.push(ne(users.id, viewerId))
+
+      const rows = await db
+        .select({ id: users.id })
+        .from(users)
+        .leftJoin(
+          follows,
+          viewerId !== undefined
+            ? and(eq(follows.followeeId, users.id), eq(follows.followerId, viewerId))
+            : sql`false`,
+        )
+        .where(and(...conditions))
+      return new Set(rows.map((row) => row.id))
     },
 
     async findUserIdByUsername(usernameLower: string): Promise<bigint | null> {

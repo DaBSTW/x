@@ -199,7 +199,7 @@ describe('conversations routes', () => {
       url: `/v1/users/${alice.userId}/follow`,
       headers: { authorization: `Bearer ${bob.accessToken}` },
     })
-    expect(follow.statusCode).toBe(204)
+    expect(follow.statusCode).toBe(200)
 
     const allowed = await app.inject({
       method: 'POST',

@@ -1,6 +1,8 @@
 import {
   errorResponseSchema,
   followListResponseSchema,
+  followRequestListResponseSchema,
+  followResponseSchema,
   paginationQuerySchema,
   snowflakeIdSchema,
   suggestionsResponseSchema,
@@ -32,7 +34,9 @@ export async function registerSocialGraphRoutes(
       schema: {
         params: z.object({ id: snowflakeIdSchema }),
         response: {
-          204: z.null(),
+          // ROADMAP.md 2.6: a protected target creates a request instead of
+          // an immediate follow — the caller needs to know which happened.
+          200: followResponseSchema,
           401: errorResponseSchema,
           403: errorResponseSchema,
           404: errorResponseSchema,
@@ -43,8 +47,8 @@ export async function registerSocialGraphRoutes(
     },
     async (request, reply) => {
       const user = getAuthenticatedUser(request)
-      await socialGraphService.follow(user.id, BigInt(request.params.id))
-      return reply.status(204).send(null)
+      const result = await socialGraphService.follow(user.id, BigInt(request.params.id))
+      return reply.send({ data: result })
     },
   )
 
@@ -215,6 +219,66 @@ export async function registerSocialGraphRoutes(
         data: page.items,
         meta: { nextCursor, prevCursor: null, hasMore: page.hasMore },
       })
+    },
+  )
+
+  // ROADMAP.md 2.6 "cuentas protegidas" — static `/users/me/...` segment,
+  // same routing precedent as /users/me and /users/suggestions above.
+  server.get(
+    '/users/me/follow-requests',
+    {
+      schema: {
+        querystring: paginationQuerySchema,
+        response: { 200: followRequestListResponseSchema, 401: errorResponseSchema },
+      },
+      preHandler: [requireAuth],
+    },
+    async (request, reply) => {
+      const user = getAuthenticatedUser(request)
+      const cursor = request.query.cursor
+        ? new Date(Number(decodeCursor(request.query.cursor)))
+        : null
+      const page = await socialGraphService.listFollowRequests(user.id, request.query.limit, cursor)
+      const nextCursor =
+        page.hasMore && page.lastCreatedAt
+          ? encodeCursor(BigInt(page.lastCreatedAt.getTime()))
+          : null
+      return reply.send({
+        data: page.items,
+        meta: { nextCursor, prevCursor: null, hasMore: page.hasMore },
+      })
+    },
+  )
+
+  server.post(
+    '/users/me/follow-requests/:id/accept',
+    {
+      schema: {
+        params: z.object({ id: snowflakeIdSchema }),
+        response: { 204: z.null(), 401: errorResponseSchema, 404: errorResponseSchema },
+      },
+      preHandler: [requireAuth],
+    },
+    async (request, reply) => {
+      const user = getAuthenticatedUser(request)
+      await socialGraphService.acceptFollowRequest(user.id, BigInt(request.params.id))
+      return reply.status(204).send(null)
+    },
+  )
+
+  server.delete(
+    '/users/me/follow-requests/:id',
+    {
+      schema: {
+        params: z.object({ id: snowflakeIdSchema }),
+        response: { 204: z.null(), 401: errorResponseSchema, 404: errorResponseSchema },
+      },
+      preHandler: [requireAuth],
+    },
+    async (request, reply) => {
+      const user = getAuthenticatedUser(request)
+      await socialGraphService.rejectFollowRequest(user.id, BigInt(request.params.id))
+      return reply.status(204).send(null)
     },
   )
 }

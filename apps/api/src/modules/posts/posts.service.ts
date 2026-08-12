@@ -27,6 +27,14 @@ export type BlockLookup = {
   findBlockedAuthorIds(viewerId: bigint, authorIds: bigint[]): Promise<Set<bigint>>
 }
 
+/** Backs the protected-account visibility guard (ROADMAP.md 2.6 "cuentas protegidas") — same narrowing reasoning as BlockLookup, and `SocialGraphRepository.findProtectedHiddenAuthorIds` already matches this shape too. Unlike BlockLookup, `viewerId` can be `undefined` here on purpose: an anonymous viewer must still have protected authors hidden, whereas "no viewer" trivially has no blocks to check. */
+export type ProtectionLookup = {
+  findProtectedHiddenAuthorIds(
+    viewerId: bigint | undefined,
+    authorIds: bigint[],
+  ): Promise<Set<bigint>>
+}
+
 const MAX_MENTIONS = 10
 const MAX_HASHTAGS = 5
 // GET /posts/:id/thread's first page of replies — ROADMAP.md 2.1. "Load
@@ -91,14 +99,33 @@ export function createPostsService(
   // "no blockLookup" and "no blocks exist" are observationally identical
   // for them.
   blockLookup?: BlockLookup,
+  // Also optional, same posture again: unset means protected-account
+  // filtering is skipped, not that no accounts are protected.
+  protectionLookup?: ProtectionLookup,
 ) {
-  /** `undefined` when there's no viewer (anonymous) or nothing wired up — both mean "don't filter". */
-  async function findBlockedAuthorIds(
+  /**
+   * `undefined` when there's no viewer (anonymous) or nothing wired up —
+   * both mean "don't filter" for blocks specifically. Protection filtering
+   * runs regardless of whether there's a viewer (an anonymous visitor must
+   * still have protected authors hidden) — only "no protectionLookup wired
+   * up" skips it. Combines both reasons a post can be unreachable for a
+   * given viewer into one Set, so every call site below only has to ask
+   * "is this authorId in it," the same single question either reason answers.
+   */
+  async function findHiddenAuthorIds(
     viewerId: bigint | undefined,
     authorIds: bigint[],
   ): Promise<Set<bigint>> {
-    if (!viewerId || !blockLookup || authorIds.length === 0) return new Set()
-    return blockLookup.findBlockedAuthorIds(viewerId, authorIds)
+    if (authorIds.length === 0) return new Set()
+    const [blocked, protectedHidden] = await Promise.all([
+      viewerId && blockLookup
+        ? blockLookup.findBlockedAuthorIds(viewerId, authorIds)
+        : new Set<bigint>(),
+      protectionLookup
+        ? protectionLookup.findProtectedHiddenAuthorIds(viewerId, authorIds)
+        : new Set<bigint>(),
+    ])
+    return new Set([...blocked, ...protectedHidden])
   }
   async function fetchBaseline(postId: bigint): Promise<CachedCounters> {
     const counters = await repository.findPostCounters(postId)
@@ -303,14 +330,16 @@ export function createPostsService(
   /**
    * `viewerId` is optional — this backs a public route (SPECS.md §4.3: "ver
    * posts de" is a service-level rule, not a DB one). A block in either
-   * direction 404s exactly like a missing post, never a distinct "blocked"
-   * error: leaking *why* a post is unreachable would tell a blocked viewer
-   * that a block exists (ROADMAP.md 2.6).
+   * direction, or the author being a protected account the viewer isn't an
+   * approved follower of, 404s exactly like a missing post, never a
+   * distinct error: leaking *why* a post is unreachable would tell a
+   * blocked viewer that a block exists, or a stranger that an account is
+   * protected specifically because of them (ROADMAP.md 2.6).
    */
   async function getById(id: bigint, viewerId?: bigint): Promise<Post> {
     const post = await repository.findPostById(id)
     if (!post) throw new NotFoundError('post', id.toString())
-    if ((await findBlockedAuthorIds(viewerId, [post.authorId])).size > 0) {
+    if ((await findHiddenAuthorIds(viewerId, [post.authorId])).size > 0) {
       throw new NotFoundError('post', id.toString())
     }
 
@@ -406,11 +435,13 @@ export function createPostsService(
     const authorId = await repository.findUserIdByUsername(usernameLower)
     if (!authorId) throw new NotFoundError('user', usernameLower)
 
-    // A block with the profile owner hides every tab, not just their own
-    // posts — the "likes" tab still surfaces *other* authors below, each
-    // checked on their own (ROADMAP.md 2.6). Empty page, not NotFoundError:
-    // the profile itself (bio, header) still renders, it just has no posts.
-    if ((await findBlockedAuthorIds(viewerId, [authorId])).size > 0) {
+    // A block with the profile owner, or the profile being a protected
+    // account the viewer isn't an approved follower of, hides every tab,
+    // not just their own posts — the "likes" tab still surfaces *other*
+    // authors below, each checked on their own (ROADMAP.md 2.6). Empty
+    // page, not NotFoundError: the profile itself (bio, header) still
+    // renders, it just has no posts.
+    if ((await findHiddenAuthorIds(viewerId, [authorId])).size > 0) {
       return { items: [], hasMore: false }
     }
 
@@ -421,13 +452,13 @@ export function createPostsService(
     const hasMore = rows.length > limit
     const fullPage = hasMore ? rows.slice(0, limit) : rows
 
-    const blockedLikedAuthorIds =
+    const hiddenLikedAuthorIds =
       filter === 'likes'
-        ? await findBlockedAuthorIds(viewerId, [...new Set(fullPage.map((row) => row.authorId))])
+        ? await findHiddenAuthorIds(viewerId, [...new Set(fullPage.map((row) => row.authorId))])
         : new Set<bigint>()
     const page =
-      blockedLikedAuthorIds.size > 0
-        ? fullPage.filter((row) => !blockedLikedAuthorIds.has(row.authorId))
+      hiddenLikedAuthorIds.size > 0
+        ? fullPage.filter((row) => !hiddenLikedAuthorIds.has(row.authorId))
         : fullPage
 
     const postIds = page.map((row) => row.id)
@@ -476,9 +507,9 @@ export function createPostsService(
       repository.findMediaForPosts(ids),
     ])
     const authorIds = [...new Set(rows.map((row) => row.authorId))]
-    const [authors, blockedAuthorIds] = await Promise.all([
+    const [authors, hiddenAuthorIds] = await Promise.all([
       repository.findAuthorsByIds(authorIds),
-      findBlockedAuthorIds(viewerId, authorIds),
+      findHiddenAuthorIds(viewerId, authorIds),
     ])
     const rowsById = new Map(rows.map((row) => [row.id, row]))
     const authorsById = new Map(authors.map((author) => [author.id, author]))
@@ -490,7 +521,7 @@ export function createPostsService(
     for (const id of ids) {
       const row = rowsById.get(id)
       const author = row && authorsById.get(row.authorId)
-      if (!row || !author || blockedAuthorIds.has(row.authorId)) continue
+      if (!row || !author || hiddenAuthorIds.has(row.authorId)) continue
       items.push(
         toPostDto(
           row,
@@ -514,11 +545,12 @@ export function createPostsService(
   ): Promise<{ items: Post[]; hasMore: boolean }> {
     const parent = await repository.findPostById(postId)
     if (!parent) throw new NotFoundError('post', postId.toString())
-    // A block with the *thread root's* author hides the whole reply list —
-    // ROADMAP.md 2.6, mirrors getById's "404, not a distinct error" posture.
-    // Replies from an unrelated blocked third party are filtered instead,
-    // individually, by the getManyByIds call below.
-    if ((await findBlockedAuthorIds(viewerId, [parent.authorId])).size > 0) {
+    // A block with the *thread root's* author, or the root being a
+    // protected account's post the viewer can't see, hides the whole reply
+    // list — ROADMAP.md 2.6, mirrors getById's "404, not a distinct error"
+    // posture. Replies from an unrelated hidden third party are filtered
+    // instead, individually, by the getManyByIds call below.
+    if ((await findHiddenAuthorIds(viewerId, [parent.authorId])).size > 0) {
       throw new NotFoundError('post', postId.toString())
     }
     const rows = await repository.findDirectReplies(postId, limit + 1, cursor)

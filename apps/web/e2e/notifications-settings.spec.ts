@@ -19,7 +19,9 @@ test('shows push as unconfigured and persists a per-kind preference toggle (ROAD
   ).toBeVisible()
 
   const likeToggle = page.getByLabel('Me gusta')
-  const followToggle = page.getByLabel('Nuevos seguidores')
+  // exact: true — substring match would also catch protected-account-toggle.tsx's
+  // "Privacidad" section above, whose description mentions "nuevos seguidores" too.
+  const followToggle = page.getByLabel('Nuevos seguidores', { exact: true })
   await expect(likeToggle).not.toBeChecked() // default: off for high-volume kinds
   await expect(followToggle).toBeChecked() // default: on (SPECS.md §13.2)
 
@@ -28,5 +30,5 @@ test('shows push as unconfigured and persists a per-kind preference toggle (ROAD
 
   await page.reload()
   await expect(page.getByLabel('Me gusta')).toBeChecked()
-  await expect(page.getByLabel('Nuevos seguidores')).toBeChecked()
+  await expect(page.getByLabel('Nuevos seguidores', { exact: true })).toBeChecked()
 })

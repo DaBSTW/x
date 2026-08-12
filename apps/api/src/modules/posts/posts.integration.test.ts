@@ -67,6 +67,11 @@ describe('posts routes', () => {
       S3_ACCESS_KEY_ID: minioContainer.getUsername(),
       S3_SECRET_ACCESS_KEY: minioContainer.getPassword(),
       S3_FORCE_PATH_STYLE: true,
+      // This file's tests each register their own user(s) — SPECS.md
+      // §11.3's production ceiling (10/15min per IP) is sized for one real
+      // client, not this whole file's worth of `it` blocks sharing one IP
+      // (see auth.integration.test.ts for the same reasoning).
+      LOGIN_RATE_LIMIT_MAX: 100,
     }
     app = await buildApp(env)
 
@@ -538,7 +543,7 @@ describe('posts routes', () => {
       url: `/v1/users/${strangerId}/follow`,
       headers: { authorization: `Bearer ${ownerToken}` },
     })
-    expect(follow.statusCode).toBe(204)
+    expect(follow.statusCode).toBe(200)
 
     const allowed = await app.inject({
       method: 'POST',
@@ -627,5 +632,139 @@ describe('posts routes', () => {
     // parties keep seeing the post normally.
     const getByIdAnonymous = await app.inject({ method: 'GET', url: `/v1/posts/${post.id}` })
     expect(getByIdAnonymous.statusCode).toBe(200)
+  })
+
+  it("hides a protected account's posts from anyone but themself and an approved follower (ROADMAP.md 2.6)", async () => {
+    await app.inject({
+      method: 'POST',
+      url: '/v1/auth/register',
+      payload: {
+        username: 'protectedauthor',
+        email: 'protectedauthor@example.com',
+        password: 'a unique passphrase, prot author',
+        birthDate: '1990-01-01',
+      },
+    })
+    const authorLogin = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: {
+        email: 'protectedauthor@example.com',
+        password: 'a unique passphrase, prot author',
+      },
+    })
+    const authorToken = authorLogin.json().data.accessToken
+
+    const protect = await app.inject({
+      method: 'PATCH',
+      url: '/v1/users/me',
+      headers: { authorization: `Bearer ${authorToken}` },
+      payload: { isProtected: true },
+    })
+    const authorId = protect.json().data.id
+
+    await app.inject({
+      method: 'POST',
+      url: '/v1/auth/register',
+      payload: {
+        username: 'protstranger',
+        email: 'protstranger@example.com',
+        password: 'a unique passphrase, prot stranger',
+        birthDate: '1990-01-01',
+      },
+    })
+    const strangerLogin = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: {
+        email: 'protstranger@example.com',
+        password: 'a unique passphrase, prot stranger',
+      },
+    })
+    const strangerToken = strangerLogin.json().data.accessToken
+
+    const followerRegister = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/register',
+      payload: {
+        username: 'protfollower',
+        email: 'protfollower@example.com',
+        password: 'a unique passphrase, prot follower',
+        birthDate: '1990-01-01',
+      },
+    })
+    const followerId = followerRegister.json().data.id
+    const followerLogin = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: {
+        email: 'protfollower@example.com',
+        password: 'a unique passphrase, prot follower',
+      },
+    })
+    const followerToken = followerLogin.json().data.accessToken
+
+    const post = (
+      await app.inject({
+        method: 'POST',
+        url: '/v1/posts',
+        headers: { authorization: `Bearer ${authorToken}` },
+        payload: { text: 'un post protegido' },
+      })
+    ).json().data
+
+    // A request, then acceptance, makes the follower approved.
+    await app.inject({
+      method: 'POST',
+      url: `/v1/users/${authorId}/follow`,
+      headers: { authorization: `Bearer ${followerToken}` },
+    })
+    const accept = await app.inject({
+      method: 'POST',
+      url: `/v1/users/me/follow-requests/${followerId}/accept`,
+      headers: { authorization: `Bearer ${authorToken}` },
+    })
+    expect(accept.statusCode).toBe(204)
+
+    const getByIdAsStranger = await app.inject({
+      method: 'GET',
+      url: `/v1/posts/${post.id}`,
+      headers: { authorization: `Bearer ${strangerToken}` },
+    })
+    expect(getByIdAsStranger.statusCode).toBe(404)
+
+    const getByIdAnonymous = await app.inject({ method: 'GET', url: `/v1/posts/${post.id}` })
+    expect(getByIdAnonymous.statusCode).toBe(404)
+
+    const profileAsStranger = await app.inject({
+      method: 'GET',
+      url: '/v1/users/protectedauthor/posts',
+      headers: { authorization: `Bearer ${strangerToken}` },
+    })
+    expect(profileAsStranger.statusCode).toBe(200)
+    expect(profileAsStranger.json().data).toEqual([])
+
+    const getByIdAsFollower = await app.inject({
+      method: 'GET',
+      url: `/v1/posts/${post.id}`,
+      headers: { authorization: `Bearer ${followerToken}` },
+    })
+    expect(getByIdAsFollower.statusCode).toBe(200)
+
+    const profileAsFollower = await app.inject({
+      method: 'GET',
+      url: '/v1/users/protectedauthor/posts',
+      headers: { authorization: `Bearer ${followerToken}` },
+    })
+    expect(profileAsFollower.statusCode).toBe(200)
+    expect(profileAsFollower.json().data).toHaveLength(1)
+    expect(profileAsFollower.json().data[0].id).toBe(post.id)
+
+    const getByIdAsAuthor = await app.inject({
+      method: 'GET',
+      url: `/v1/posts/${post.id}`,
+      headers: { authorization: `Bearer ${authorToken}` },
+    })
+    expect(getByIdAsAuthor.statusCode).toBe(200)
   })
 })

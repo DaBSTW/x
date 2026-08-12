@@ -3,16 +3,23 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from './api-client'
 
-/** POST /users/{id}/follow. Refreshes suggestions (drop the now-followed account) and the timeline (their posts can now appear). */
+/**
+ * POST /users/{id}/follow. A protected account (ROADMAP.md 2.6) returns
+ * `status: 'requested'` instead of an immediate follow — the caller
+ * (FollowButton) needs that to show "Solicitud enviada" instead of
+ * "Siguiendo". Refreshes suggestions (drop the now-followed/requested
+ * account) and the timeline (their posts can now appear, for a real follow).
+ */
 export function useFollow() {
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (userId: string) => {
-      const { error } = await apiClient.POST('/users/{id}/follow', {
+      const { data, error } = await apiClient.POST('/users/{id}/follow', {
         params: { path: { id: userId } },
       })
       if (error) throw new Error(error.error.message)
+      return data.data.status
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users', 'suggestions'] })
