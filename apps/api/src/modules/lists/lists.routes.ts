@@ -2,6 +2,7 @@ import {
   createListSchema,
   errorResponseSchema,
   listListResponseSchema,
+  listMembersResponseSchema,
   listResponseSchema,
   paginationQuerySchema,
   postListResponseSchema,
@@ -154,6 +155,30 @@ export async function registerListsRoutes(app: FastifyInstance, options: ListsRo
         BigInt(request.params.userId),
       )
       return reply.status(204).send(null)
+    },
+  )
+
+  server.get(
+    '/lists/:id/members',
+    {
+      schema: {
+        params: z.object({ id: snowflakeIdSchema }),
+        querystring: paginationQuerySchema,
+        response: { 200: listMembersResponseSchema, 404: errorResponseSchema },
+      },
+      preHandler: [optionalAuth],
+    },
+    async (request, reply) => {
+      const cursor = request.query.cursor ? decodeCursor(request.query.cursor) : null
+      const { items, hasMore } = await listsService.listMembers(
+        BigInt(request.params.id),
+        request.user?.id,
+        request.query.limit,
+        cursor,
+      )
+      const lastItem = items.at(-1)
+      const nextCursor = hasMore && lastItem ? encodeCursor(BigInt(lastItem.id)) : null
+      return reply.send({ data: items, meta: { nextCursor, prevCursor: null, hasMore } })
     },
   )
 

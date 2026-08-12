@@ -2,7 +2,7 @@ import type { Post } from '@x/contracts'
 import { ConflictError, ForbiddenError, NotFoundError, generateId } from '@x/utils'
 import type { PostsService } from '../posts/posts.service.js'
 import { type MuteLookup, dropMuted } from '../timeline/timeline.service.js'
-import type { ListPatch, ListsRepository } from './lists.repository.js'
+import type { ListMemberRow, ListPatch, ListsRepository } from './lists.repository.js'
 
 export type ListDto = {
   id: string
@@ -24,6 +24,14 @@ export type UpdateListServiceInput = {
   name?: string | undefined
   description?: string | undefined
   isPrivate?: boolean | undefined
+}
+
+export type ListMemberDto = {
+  id: string
+  username: string
+  displayName: string
+  avatarUrl: string | null
+  isVerified: boolean
 }
 
 /** A list's timeline only ever needs to turn ids into posts — same narrowing as timeline.service.ts's own PostHydrator. */
@@ -133,6 +141,36 @@ export function createListsService(
     await repository.deleteMember(listId, userId)
   }
 
+  function toMemberDto(row: ListMemberRow): ListMemberDto {
+    return {
+      id: row.id.toString(),
+      username: row.username,
+      displayName: row.displayName,
+      avatarUrl: row.avatarUrl,
+      isVerified: row.isVerified,
+    }
+  }
+
+  /**
+   * GET /lists/:id/members (ROADMAP.md 2.8) — same "a private list 404s for
+   * anyone but its owner" visibility rule as getById/getTimeline above.
+   */
+  async function listMembers(
+    listId: bigint,
+    viewerId: bigint | undefined,
+    limit: number,
+    cursor: bigint | null,
+  ): Promise<{ items: ListMemberDto[]; hasMore: boolean }> {
+    const list = await repository.findListById(listId)
+    if (!list || (list.isPrivate && list.ownerId !== viewerId)) {
+      throw new NotFoundError('list', listId.toString())
+    }
+    const rows = await repository.findMembers(listId, limit + 1, cursor)
+    const hasMore = rows.length > limit
+    const page = hasMore ? rows.slice(0, limit) : rows
+    return { items: page.map(toMemberDto), hasMore }
+  }
+
   async function listByOwner(
     usernameLower: string,
     limit: number,
@@ -187,6 +225,7 @@ export function createListsService(
     remove,
     addMember,
     removeMember,
+    listMembers,
     listByOwner,
     getTimeline,
   }

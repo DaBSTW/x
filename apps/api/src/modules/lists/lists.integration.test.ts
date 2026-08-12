@@ -77,6 +77,12 @@ describe('lists routes', () => {
       S3_ACCESS_KEY_ID: 'x-minio',
       S3_SECRET_ACCESS_KEY: 'x-minio-secret',
       S3_FORCE_PATH_STYLE: true,
+      // This file's tests each register (and log into) several of their own
+      // users — SPECS.md §11.3's production ceiling (10/15min per IP) is
+      // sized for one real client, not this whole file's worth of
+      // registerAndLogin calls sharing one IP (see posts.integration.test.ts
+      // for the same reasoning).
+      LOGIN_RATE_LIMIT_MAX: 100,
     }
     app = await buildApp(env)
   }, 120_000)
@@ -189,6 +195,62 @@ describe('lists routes', () => {
 
     const afterRemove = await app.inject({ method: 'GET', url: `/v1/lists/${listId}` })
     expect(afterRemove.json().data.memberCount).toBe(0)
+  })
+
+  it('GET /lists/:id/members reflects adds/removes and 404s a private list for anyone but its owner (ROADMAP.md 2.8)', async () => {
+    const owner = await registerAndLogin('listowner5')
+    const member = await registerAndLogin('listmember5')
+    const stranger = await registerAndLogin('liststranger5')
+
+    const created = await app.inject({
+      method: 'POST',
+      url: '/v1/lists',
+      headers: { authorization: `Bearer ${owner.accessToken}` },
+      payload: { name: 'Con miembros', isPrivate: true },
+    })
+    const listId = created.json().data.id
+
+    const emptyMembers = await app.inject({
+      method: 'GET',
+      url: `/v1/lists/${listId}/members`,
+      headers: { authorization: `Bearer ${owner.accessToken}` },
+    })
+    expect(emptyMembers.statusCode).toBe(200)
+    expect(emptyMembers.json().data).toEqual([])
+
+    await app.inject({
+      method: 'POST',
+      url: `/v1/lists/${listId}/members/${member.userId}`,
+      headers: { authorization: `Bearer ${owner.accessToken}` },
+    })
+
+    const asStranger = await app.inject({
+      method: 'GET',
+      url: `/v1/lists/${listId}/members`,
+      headers: { authorization: `Bearer ${stranger.accessToken}` },
+    })
+    expect(asStranger.statusCode).toBe(404)
+
+    const asOwner = await app.inject({
+      method: 'GET',
+      url: `/v1/lists/${listId}/members`,
+      headers: { authorization: `Bearer ${owner.accessToken}` },
+    })
+    expect(asOwner.statusCode).toBe(200)
+    expect(asOwner.json().data).toMatchObject([{ id: member.userId, username: 'listmember5' }])
+
+    await app.inject({
+      method: 'DELETE',
+      url: `/v1/lists/${listId}/members/${member.userId}`,
+      headers: { authorization: `Bearer ${owner.accessToken}` },
+    })
+
+    const afterRemove = await app.inject({
+      method: 'GET',
+      url: `/v1/lists/${listId}/members`,
+      headers: { authorization: `Bearer ${owner.accessToken}` },
+    })
+    expect(afterRemove.json().data).toEqual([])
   })
 
   it('hides a private list from everyone but its owner, in both GET /lists/:id and GET /users/:username/lists, and GET /timeline/list/:id reflects membership', async () => {

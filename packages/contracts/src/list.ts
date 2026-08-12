@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { paginatedResponseSchema, snowflakeIdSchema } from './common.js'
+import { followListItemSchema } from './social-graph.js'
 
 // Matches lists.name/description's VARCHAR(25)/VARCHAR(100) — SPECS.md §4.2.
 const listNameSchema = z.string().min(1).max(25)
@@ -32,3 +33,8 @@ export type List = z.infer<typeof listSchema>
 
 export const listResponseSchema = z.object({ data: listSchema })
 export const listListResponseSchema = paginatedResponseSchema(listSchema)
+
+// GET /lists/:id/members (ROADMAP.md 2.8) — same profile-summary shape
+// social-graph.ts's follow/follow-request lists already use; a list
+// membership row carries no data of its own worth exposing beyond who's in it.
+export const listMembersResponseSchema = paginatedResponseSchema(followListItemSchema)

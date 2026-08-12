@@ -4,6 +4,14 @@ import { and, count, desc, eq, isNull, lt } from 'drizzle-orm'
 
 export type ListPatch = Partial<Pick<List, 'name' | 'description' | 'isPrivate'>>
 
+export type ListMemberRow = {
+  id: bigint
+  username: string
+  displayName: string
+  avatarUrl: string | null
+  isVerified: boolean
+}
+
 export type ListsRepository = ReturnType<typeof createListsRepository>
 
 export function createListsRepository(db: Database) {
@@ -57,6 +65,35 @@ export function createListsRepository(db: Database) {
       await db
         .delete(listMembers)
         .where(and(eq(listMembers.listId, listId), eq(listMembers.userId, userId)))
+    },
+
+    /**
+     * GET /lists/:id/members (ROADMAP.md 2.8) — cursor-paginated like every
+     * other list here, just keyed on `users.id` instead of a dedicated
+     * membership id: `list_members` has none of its own (its primary key is
+     * the `(listId, userId)` pair), and a member's own Snowflake id is
+     * already a valid, globally unique sort/cursor key on its own.
+     */
+    async findMembers(
+      listId: bigint,
+      limit: number,
+      cursor: bigint | null,
+    ): Promise<ListMemberRow[]> {
+      const conditions = [eq(listMembers.listId, listId)]
+      if (cursor !== null) conditions.push(lt(users.id, cursor))
+      return db
+        .select({
+          id: users.id,
+          username: users.username,
+          displayName: users.displayName,
+          avatarUrl: users.avatarUrl,
+          isVerified: users.isVerified,
+        })
+        .from(listMembers)
+        .innerJoin(users, eq(users.id, listMembers.userId))
+        .where(and(...conditions))
+        .orderBy(desc(users.id))
+        .limit(limit)
     },
 
     async findUserIdByUsername(usernameLower: string): Promise<bigint | null> {

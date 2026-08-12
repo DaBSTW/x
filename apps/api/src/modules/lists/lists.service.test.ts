@@ -12,7 +12,14 @@ type FakeList = {
   isPrivate: boolean
   createdAt: Date
 }
-type FakeUser = { id: bigint; usernameLower: string }
+type FakeUser = {
+  id: bigint
+  usernameLower: string
+  username: string
+  displayName: string
+  avatarUrl: string | null
+  isVerified: boolean
+}
 
 function createFakeRepository() {
   const listsById = new Map<bigint, FakeList>()
@@ -68,10 +75,40 @@ function createFakeRepository() {
       // getTimeline wires ids through without needing a real posts table.
       return memberIds.slice(0, limit)
     },
+    async findMembers(listId, limit, cursor) {
+      const memberIds = new Set(
+        [...members]
+          .filter((key) => key.startsWith(`${listId}:`))
+          .map((key) => BigInt(key.split(':')[1] as string)),
+      )
+      return users
+        .filter((user) => memberIds.has(user.id))
+        .filter((user) => cursor === null || user.id < cursor)
+        .sort((a, b) => (b.id > a.id ? 1 : -1))
+        .slice(0, limit)
+        .map((user) => ({
+          id: user.id,
+          username: user.username,
+          displayName: user.displayName,
+          avatarUrl: user.avatarUrl,
+          isVerified: user.isVerified,
+        }))
+    },
   }
 
-  function addUser(usernameLower: string): FakeUser {
-    const user = { id: generateId(), usernameLower }
+  function addUser(
+    usernameLower: string,
+    overrides: Partial<Omit<FakeUser, 'id' | 'usernameLower'>> = {},
+  ): FakeUser {
+    const user: FakeUser = {
+      id: generateId(),
+      usernameLower,
+      username: usernameLower,
+      displayName: usernameLower,
+      avatarUrl: null,
+      isVerified: false,
+      ...overrides,
+    }
     users.push(user)
     return user
   }
@@ -258,6 +295,64 @@ describe('createListsService', () => {
       await expect(
         service.removeMember(BigInt(list.id), owner, generateId()),
       ).resolves.toBeUndefined()
+    })
+  })
+
+  describe('listMembers', () => {
+    it('returns each member with their profile fields', async () => {
+      const service = createListsService(repository, createFakeHydrator())
+      const list = await service.create(owner, { name: 'Con miembros', isPrivate: false })
+      const bob = addUser('bob', { username: 'bob', displayName: 'Bob', isVerified: true })
+      await service.addMember(BigInt(list.id), owner, bob.id)
+
+      const page = await service.listMembers(BigInt(list.id), undefined, 20, null)
+
+      expect(page.items).toEqual([
+        {
+          id: bob.id.toString(),
+          username: 'bob',
+          displayName: 'Bob',
+          avatarUrl: null,
+          isVerified: true,
+        },
+      ])
+      expect(page.hasMore).toBe(false)
+    })
+
+    it('returns an empty page for a list with no members yet', async () => {
+      const service = createListsService(repository, createFakeHydrator())
+      const list = await service.create(owner, { name: 'Vacía', isPrivate: false })
+
+      const page = await service.listMembers(BigInt(list.id), undefined, 20, null)
+
+      expect(page).toEqual({ items: [], hasMore: false })
+    })
+
+    it('paginates by cursor, newest member first', async () => {
+      const service = createListsService(repository, createFakeHydrator())
+      const list = await service.create(owner, { name: 'Con miembros', isPrivate: false })
+      const first = addUser('first')
+      const second = addUser('second')
+      await service.addMember(BigInt(list.id), owner, first.id)
+      await service.addMember(BigInt(list.id), owner, second.id)
+
+      const page = await service.listMembers(BigInt(list.id), undefined, 1, null)
+
+      expect(page.items).toHaveLength(1)
+      expect(page.items[0]?.id).toBe(second.id.toString())
+      expect(page.hasMore).toBe(true)
+    })
+
+    it("404s a private list's members for anyone but its owner", async () => {
+      const service = createListsService(repository, createFakeHydrator())
+      const list = await service.create(owner, { name: 'Privada', isPrivate: true })
+
+      await expect(
+        service.listMembers(BigInt(list.id), generateId(), 20, null),
+      ).rejects.toMatchObject({ code: 'NOT_FOUND' })
+      await expect(service.listMembers(BigInt(list.id), owner, 20, null)).resolves.toMatchObject({
+        items: [],
+      })
     })
   })
 

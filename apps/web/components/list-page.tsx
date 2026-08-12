@@ -1,11 +1,13 @@
 'use client'
 
+import { ListMembers } from '@/components/list-members'
 import { PostFeedList } from '@/components/post-feed-list'
 import { TimelineSkeleton } from '@/components/timeline-skeleton'
 import { useCurrentUser } from '@/lib/use-current-user'
 import { useListTimeline } from '@/lib/use-list-timeline'
 import { useDeleteList, useList } from '@/lib/use-lists'
 import { useRouter } from 'next/navigation'
+import { useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from './ui/button'
 
@@ -27,6 +29,7 @@ export function ListPage({ listId }: ListPageProps) {
   const timeline = useListTimeline(listId)
   const deleteList = useDeleteList()
   const posts = timeline.data?.pages.flatMap((page) => page.data) ?? []
+  const [showMembers, setShowMembers] = useState(false)
 
   if (isLoading) return <TimelineSkeleton />
   if (isError) {
@@ -55,9 +58,14 @@ export function ListPage({ listId }: ListPageProps) {
             )}
           </h1>
           {list.description && <p className="text-sm text-muted-foreground">{list.description}</p>}
-          <p className="text-xs text-muted-foreground">
+          <button
+            type="button"
+            className="w-fit text-xs text-muted-foreground hover:underline"
+            aria-expanded={showMembers}
+            onClick={() => setShowMembers((current) => !current)}
+          >
             {list.memberCount} {list.memberCount === 1 ? 'miembro' : 'miembros'}
-          </p>
+          </button>
         </div>
         {isOwner && (
           <Button
@@ -81,6 +89,8 @@ export function ListPage({ listId }: ListPageProps) {
           </Button>
         )}
       </div>
+
+      {showMembers && <ListMembers listId={listId} isOwner={isOwner} />}
 
       {timeline.isLoading ? (
         <TimelineSkeleton />
