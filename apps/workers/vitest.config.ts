@@ -13,6 +13,7 @@ export default defineConfig({
         'src/media/media.processor.ts',
         'src/notifications/notifications.processor.ts',
         'src/notifications/push-text.ts',
+        'src/trends/trend-ingest.processor.ts',
         'src/env.ts',
       ],
       thresholds: { lines: 80, statements: 80, branches: 80, functions: 80 },

@@ -1,4 +1,8 @@
-export { ClockDriftError, createSnowflakeGenerator } from './snowflake/snowflake.js'
+export {
+  ClockDriftError,
+  createSnowflakeGenerator,
+  extractTimestamp,
+} from './snowflake/snowflake.js'
 export type { SnowflakeGenerator } from './snowflake/snowflake.js'
 export { generateId } from './snowflake/id.js'
 export { hashPassword, needsRehash, verifyPassword } from './password.js'
@@ -19,8 +23,8 @@ export {
   zeroCounterValues,
 } from './counters.js'
 export type { CounterField, CounterValues } from './counters.js'
-export { FANOUT_QUEUE_NAME } from './queues.js'
-export type { FanoutJobData } from './queues.js'
+export { FANOUT_QUEUE_NAME, TREND_INGEST_QUEUE_NAME } from './queues.js'
+export type { FanoutJobData, TrendIngestJobData } from './queues.js'
 export {
   CELEBRITY_FOLLOWER_THRESHOLD,
   FANOUT_BATCH_SIZE,
@@ -97,3 +101,11 @@ export {
   timelineChannel,
   userChannel,
 } from './realtime.js'
+export {
+  GLOBAL_TREND_SCOPE,
+  MIN_AUTHOR_POST_RATIO,
+  MIN_UNIQUE_AUTHORS,
+  computeTrendScore,
+  passesTrendFilters,
+} from './trends.js'
+export type { TrendCandidateStats, TrendFilterInput } from './trends.js'

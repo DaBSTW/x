@@ -17,6 +17,7 @@ import { createMailer } from './lib/mailer.js'
 import { createMediaQueue } from './lib/media-queue.js'
 import { createMediaStorage } from './lib/media-storage.js'
 import { createNotificationsQueue } from './lib/notifications-queue.js'
+import { createTrendIngestQueue } from './lib/trend-ingest-queue.js'
 import { createAuthRepository } from './modules/auth/auth.repository.js'
 import { registerAuthRoutes } from './modules/auth/auth.routes.js'
 import { createAuthService } from './modules/auth/auth.service.js'
@@ -114,8 +115,14 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   const fanoutQueue = createFanoutQueue(env.REDIS_URL)
   const notificationsQueue = createNotificationsQueue(env.REDIS_URL)
   const mediaQueue = createMediaQueue(env.REDIS_URL)
+  const trendIngestQueue = createTrendIngestQueue(env.REDIS_URL)
   app.addHook('onClose', async () => {
-    await Promise.all([fanoutQueue.close(), notificationsQueue.close(), mediaQueue.close()])
+    await Promise.all([
+      fanoutQueue.close(),
+      notificationsQueue.close(),
+      mediaQueue.close(),
+      trendIngestQueue.close(),
+    ])
   })
   const publishNotification = notificationsQueue.enqueue
 
@@ -145,6 +152,7 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
     // no adapter needed for either, unlike isFollowing above.
     socialGraphRepository,
     socialGraphRepository,
+    trendIngestQueue.enqueue,
   )
 
   const mediaStorage = createMediaStorage({

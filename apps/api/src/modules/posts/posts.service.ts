@@ -6,9 +6,11 @@ import {
   NotFoundError,
   type NotificationJobData,
   type ParsedEntity,
+  type TrendIngestJobData,
   ValidationError,
   buildPublicUrl,
   countCharacters,
+  extractTimestamp,
   generateId,
   parseEntities,
   pickPrimaryVariant,
@@ -120,6 +122,9 @@ export type OnPostCreated = (postId: bigint, authorId: bigint) => Promise<void>
 /** Called for each notification-worthy event a post produces (reply, quote, mention) — ROADMAP.md 1.7. */
 export type PublishNotification = (data: NotificationJobData) => Promise<void>
 
+/** Called once per created post that has at least one hashtag — ROADMAP.md 2.4. */
+export type PublishTrendIngest = (data: TrendIngestJobData) => Promise<void>
+
 export type MediaUrlConfig = {
   bucket: string
   publicUrlBase: string
@@ -157,6 +162,9 @@ export function createPostsService(
   // Also optional, same posture again: unset means protected-account
   // filtering is skipped, not that no accounts are protected.
   protectionLookup?: ProtectionLookup,
+  // Also optional, same posture again: unset means no hashtag ever reaches
+  // trend scoring (ROADMAP.md 2.4) — a missing dependency, not a broken one.
+  publishTrendIngest?: PublishTrendIngest,
 ) {
   /**
    * `undefined` when there's no viewer (anonymous) or nothing wired up —
@@ -286,6 +294,31 @@ export function createPostsService(
     }
   }
 
+  // Same failure posture as safePublish above — trend scoring (ROADMAP.md
+  // 2.4) is a background enrichment, never something a post's own write
+  // path can fail over. Only called when hashtags is non-empty (both call
+  // sites below already guard on that), same as onPostCreated only firing
+  // for a post that actually persisted.
+  async function safePublishTrendIngest(
+    postId: bigint,
+    authorId: bigint,
+    hashtags: string[],
+    lang: string | null,
+  ): Promise<void> {
+    if (!publishTrendIngest) return
+    try {
+      await publishTrendIngest({
+        postId: postId.toString(),
+        authorId: authorId.toString(),
+        hashtags,
+        createdAtMs: extractTimestamp(postId),
+        lang,
+      })
+    } catch {
+      // Swallowed intentionally.
+    }
+  }
+
   async function create(authorId: bigint, input: CreatePostServiceInput): Promise<Post> {
     const mediaIds = input.mediaIds ?? []
     const { graphemeCount, entities: parsed } = validateAndParseText(input.text)
@@ -333,18 +366,21 @@ export function createPostsService(
         entity.kind === 'mention' ? (mentionIds.get(entity.value.toLowerCase()) ?? null) : null,
     }))
 
-    // text can legitimately be '' for a media-only post — the DB column
-    // stores NULL for "no text", matching how a repost's text is stored.
     // lang: best-effort (ROADMAP.md 2.4/2.3) — null for empty/undetectable
     // text is correct, not a fallback failure; a media-only post has no
-    // text to detect a language from in the first place.
+    // text to detect a language from in the first place. Computed once and
+    // reused below for trend ingestion, rather than detected twice.
+    const lang = input.text ? detectLanguage(input.text) : null
+
+    // text can legitimately be '' for a media-only post — the DB column
+    // stores NULL for "no text", matching how a repost's text is stored.
     await repository.insertPost(
       {
         id,
         authorId,
         kind,
         text: input.text || null,
-        lang: input.text ? detectLanguage(input.text) : null,
+        lang,
         inReplyToId: input.inReplyToId ?? null,
         conversationId,
         quotedPostId: input.quotedPostId ?? null,
@@ -381,6 +417,13 @@ export function createPostsService(
       } catch {
         // Swallowed intentionally — see comment above.
       }
+    }
+
+    // Only hashtags feed trend scoring (SPECS.md §10.4) — nothing to ingest
+    // for a post that doesn't have any.
+    const hashtags = [...new Set(parsed.filter((e) => e.kind === 'hashtag').map((e) => e.value))]
+    if (hashtags.length > 0) {
+      await safePublishTrendIngest(id, authorId, hashtags, lang)
     }
 
     // Nobody gets notified of their own reply/quote/self-mention.
@@ -473,6 +516,10 @@ export function createPostsService(
       counters: { postId: bigint }
       mediaIds: bigint[]
     }> = []
+    // One entry per item that has at least one hashtag — trend-ingested
+    // after insertThread succeeds, same "only what actually has hashtags"
+    // filter as create() (ROADMAP.md 2.4).
+    const trendIngestItems: Array<{ id: bigint; hashtags: string[]; lang: string | null }> = []
     let previousId: bigint | undefined = input.inReplyToId
 
     for (const postInput of input.posts) {
@@ -504,13 +551,19 @@ export function createPostsService(
           entity.kind === 'mention' ? (mentionIds.get(entity.value.toLowerCase()) ?? null) : null,
       }))
 
+      const lang = postInput.text ? detectLanguage(postInput.text) : null
+      const hashtags = [...new Set(parsed.filter((e) => e.kind === 'hashtag').map((e) => e.value))]
+      if (hashtags.length > 0) {
+        trendIngestItems.push({ id, hashtags, lang })
+      }
+
       items.push({
         post: {
           id,
           authorId,
           kind: previousId !== undefined ? 'reply' : 'original',
           text: postInput.text || null,
-          lang: postInput.text ? detectLanguage(postInput.text) : null,
+          lang,
           inReplyToId: previousId ?? null,
           conversationId,
           replyPolicy: replyPolicyCode,
@@ -541,6 +594,10 @@ export function createPostsService(
           // Swallowed intentionally — see comment above.
         }
       }
+    }
+
+    for (const trendItem of trendIngestItems) {
+      await safePublishTrendIngest(trendItem.id, authorId, trendItem.hashtags, trendItem.lang)
     }
 
     // input.posts.length is validated non-zero above, so items/ids always

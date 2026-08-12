@@ -8,6 +8,9 @@ const envSchema = z.object({
   // Redis round trip — SPECS.md §6.1.
   FANOUT_WORKER_CONCURRENCY: z.coerce.number().int().positive().default(4),
   NOTIFICATIONS_WORKER_CONCURRENCY: z.coerce.number().int().positive().default(4),
+  // Mostly-I/O like fan-out/notifications above, not CPU-bound like media —
+  // default matches those two, not media's lower one.
+  TREND_INGEST_WORKER_CONCURRENCY: z.coerce.number().int().positive().default(4),
   // Lower than the others by default: sharp's transcoding is CPU-bound per
   // job, unlike fan-out/notifications' mostly-I/O work — ROADMAP.md 1.5.
   MEDIA_WORKER_CONCURRENCY: z.coerce.number().int().positive().default(2),
@@ -32,6 +35,15 @@ const envSchema = z.object({
   VAPID_PUBLIC_KEY: z.string().optional(),
   VAPID_PRIVATE_KEY: z.string().optional(),
   VAPID_SUBJECT: z.string().default('mailto:security@x.example.com'),
+
+  // ClickHouse (ROADMAP.md 2.4) — analytics-only, so unlike DATABASE_URL/
+  // REDIS_URL this isn't allowed to be empty but every field still has a
+  // docker-compose.yml-matching default, same posture as S3_* above: no
+  // reason to force every dev to configure a fourth datastore by hand.
+  CLICKHOUSE_URL: z.string().url().default('http://localhost:8123'),
+  CLICKHOUSE_USER: z.string().default('x'),
+  CLICKHOUSE_PASSWORD: z.string().default('x'),
+  CLICKHOUSE_DATABASE: z.string().default('x_analytics'),
 })
 
 export type Env = z.infer<typeof envSchema>

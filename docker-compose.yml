@@ -56,6 +56,27 @@ services:
       - "1025:1025" # SMTP
       - "8025:8025" # Web UI
 
+  # ROADMAP.md 2.4 — analytics-only store for trend scoring (SPECS.md
+  # §10.4). Nothing else in the product reads or writes ClickHouse; losing
+  # it loses trending topics, never a post, a like, or a DM.
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_USER: x
+      CLICKHOUSE_PASSWORD: x
+      CLICKHOUSE_DB: x_analytics
+    ports:
+      - "8123:8123" # HTTP interface — what @clickhouse/client speaks
+      - "9010:9000" # Native protocol, unused today but the image exposes it; host-mapped off ClickHouse's own default (9000) to not collide with MinIO's console port already at 9001 and Fastify apps commonly binding 900x in dev
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   # ⚪ OpenSearch and Kafka join the fan-out only in phase 2 (search, CDC) and
   # phase 3 (event bus at scale) — see ROADMAP.md 0.2. Left commented out so
   # `docker compose up` stays light in phases 0-1.
@@ -77,3 +98,4 @@ volumes:
   postgres_data:
   redis_data:
   minio_data:
+  clickhouse_data:

@@ -15,6 +15,7 @@
     "generate-vapid-keys": "tsx scripts/generate-vapid-keys.ts"
   },
   "dependencies": {
+    "@clickhouse/client": "^1.23.1",
     "@x/config": "workspace:*",
     "@x/contracts": "workspace:*",
     "@x/db": "workspace:*",
