@@ -7,7 +7,9 @@ import {
   createDatabase,
   migrationsFolderUrl,
   mutes,
+  notificationPreferences,
   notifications,
+  pushSubscriptions,
   userCounters,
   users,
 } from '@x/db'
@@ -202,6 +204,112 @@ describe('notifications worker', () => {
 
     const rows = await db.select().from(notifications).where(eq(notifications.userId, recipient))
     expect(rows).toHaveLength(0)
+
+    await queue.close()
+    await handle.close()
+  }, 30_000)
+
+  it('suppresses a notification the recipient turned in_app off for, without touching the counter (ROADMAP.md 2.9)', async () => {
+    const recipient = await insertUser('rcpt')
+    const actor = await insertUser('actr')
+    await db
+      .insert(notificationPreferences)
+      .values({ userId: recipient, kind: 'like', channel: 'in_app', enabled: false })
+    await redis.set(unreadCountKey(recipient), 0)
+
+    const handle = createNotificationsWorker({
+      repository: createNotificationsRepository(db),
+      redisUrl,
+      concurrency: 1,
+    })
+    const queue = new Queue<NotificationJobData>(NOTIFICATIONS_QUEUE_NAME, {
+      connection: new Redis(redisUrl, { maxRetriesPerRequest: null }),
+    })
+
+    const completed = new Promise<void>((resolve, reject) => {
+      handle.worker.on('completed', () => resolve())
+      handle.worker.on('failed', (_job, error) => reject(error))
+    })
+    await queue.add('notify', {
+      userId: recipient.toString(),
+      kind: 'like',
+      actorId: actor.toString(),
+      postId: '1',
+      groupKey: 'like:1',
+    })
+    await completed
+
+    const rows = await db.select().from(notifications).where(eq(notifications.userId, recipient))
+    expect(rows).toHaveLength(0)
+    expect(await redis.get(unreadCountKey(recipient))).toBe('0')
+
+    await queue.close()
+    await handle.close()
+  }, 30_000)
+
+  it('pushes to a real subscribed device for a push-enabled kind, and cleans up an expired one (ROADMAP.md 2.9)', async () => {
+    const recipient = await insertUser('rcpt')
+    const actor = await insertUser('actr')
+    await db.insert(pushSubscriptions).values([
+      {
+        id: generateId(),
+        userId: recipient,
+        endpoint: 'https://push.example.com/fresh',
+        p256dh: 'p256dh-fresh',
+        authKey: 'auth-fresh',
+      },
+      {
+        id: generateId(),
+        userId: recipient,
+        endpoint: 'https://push.example.com/stale',
+        p256dh: 'p256dh-stale',
+        authKey: 'auth-stale',
+      },
+    ])
+
+    // A fake transport — the real `web-push` HTTP/encryption round trip is
+    // covered by nothing here on purpose (there's no local stand-in for a
+    // real browser push service, unlike Mailpit for SMTP); this proves the
+    // worker's own decision-making (preference check, subscription lookup,
+    // expired-subscription cleanup) against real Postgres instead.
+    const sent: string[] = []
+    const handle = createNotificationsWorker({
+      repository: createNotificationsRepository(db),
+      redisUrl,
+      concurrency: 1,
+      sendPush: async (subscription) => {
+        sent.push(subscription.endpoint)
+        return { expired: subscription.endpoint.endsWith('/stale') }
+      },
+    })
+    const queue = new Queue<NotificationJobData>(NOTIFICATIONS_QUEUE_NAME, {
+      connection: new Redis(redisUrl, { maxRetriesPerRequest: null }),
+    })
+
+    const completed = new Promise<void>((resolve, reject) => {
+      handle.worker.on('completed', () => resolve())
+      handle.worker.on('failed', (_job, error) => reject(error))
+    })
+    // 'follow' is push-enabled by default (@x/utils' defaultChannelEnabled) — no preference row needed.
+    await queue.add('notify', {
+      userId: recipient.toString(),
+      kind: 'follow',
+      actorId: actor.toString(),
+      postId: null,
+      groupKey: 'follow',
+    })
+    await completed
+
+    expect(sent.sort()).toEqual([
+      'https://push.example.com/fresh',
+      'https://push.example.com/stale',
+    ])
+
+    const remaining = await db
+      .select({ endpoint: pushSubscriptions.endpoint })
+      .from(pushSubscriptions)
+      .where(eq(pushSubscriptions.userId, recipient))
+    expect(remaining).toEqual([{ endpoint: 'https://push.example.com/fresh' }])
 
     await queue.close()
     await handle.close()

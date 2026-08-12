@@ -11,9 +11,23 @@ import { createMediaRepository } from './media/media.repository.js'
 import { createMediaWorker } from './media/media.worker.js'
 import { createNotificationsRepository } from './notifications/notifications.repository.js'
 import { createNotificationsWorker } from './notifications/notifications.worker.js'
+import { createWebPushSender } from './notifications/push-sender.js'
 
 const env = parseEnv(process.env)
 const db = createDatabase(env.DATABASE_URL)
+
+// Both keys configured or neither — a lone key can't sign anything.
+const sendPush =
+  env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY
+    ? createWebPushSender({
+        publicKey: env.VAPID_PUBLIC_KEY,
+        privateKey: env.VAPID_PRIVATE_KEY,
+        subject: env.VAPID_SUBJECT,
+      })
+    : undefined
+if (!sendPush) {
+  console.warn('VAPID keys not configured — web push notifications are disabled')
+}
 
 const fanoutWorker = createFanoutWorker({
   repository: createFanoutRepository(db),
@@ -28,6 +42,7 @@ const notificationsWorker = createNotificationsWorker({
   repository: createNotificationsRepository(db),
   redisUrl: env.REDIS_URL,
   concurrency: env.NOTIFICATIONS_WORKER_CONCURRENCY,
+  ...(sendPush && { sendPush }),
 })
 notificationsWorker.worker.on('failed', (job, error) => {
   console.error(`notification job ${job?.id ?? '(unknown)'} failed:`, error)

@@ -95,7 +95,22 @@ describe('notifications routes', () => {
       url: '/v1/notifications/read',
       payload: { cursor: '1' },
     })
-    expect([list.statusCode, unread.statusCode, read.statusCode]).toEqual([401, 401, 401])
+    const getPreferences = await app.inject({
+      method: 'GET',
+      url: '/v1/notifications/preferences',
+    })
+    const putPreference = await app.inject({
+      method: 'PUT',
+      url: '/v1/notifications/preferences',
+      payload: { kind: 'like', channel: 'push', enabled: true },
+    })
+    expect([
+      list.statusCode,
+      unread.statusCode,
+      read.statusCode,
+      getPreferences.statusCode,
+      putPreference.statusCode,
+    ]).toEqual([401, 401, 401, 401, 401])
   })
 
   it('lists, counts, and marks notifications read for a real recipient', async () => {
@@ -192,5 +207,55 @@ describe('notifications routes', () => {
     expect(after).toBeGreaterThan(before)
 
     await queue.close()
+  })
+
+  it('returns the default preference matrix, then persists an override (ROADMAP.md 2.9)', async () => {
+    const before = await app.inject({
+      method: 'GET',
+      url: '/v1/notifications/preferences',
+      headers: { authorization: `Bearer ${bobToken}` },
+    })
+    expect(before.statusCode).toBe(200)
+    const beforeData = before.json().data as Array<{
+      kind: string
+      channel: string
+      enabled: boolean
+    }>
+    expect(beforeData).toHaveLength(14)
+    // Default: push is off for "like" until bob turns it on below.
+    expect(beforeData.find((p) => p.kind === 'like' && p.channel === 'push')?.enabled).toBe(false)
+
+    const update = await app.inject({
+      method: 'PUT',
+      url: '/v1/notifications/preferences',
+      headers: { authorization: `Bearer ${bobToken}` },
+      payload: { kind: 'like', channel: 'push', enabled: true },
+    })
+    expect(update.statusCode).toBe(204)
+
+    const after = await app.inject({
+      method: 'GET',
+      url: '/v1/notifications/preferences',
+      headers: { authorization: `Bearer ${bobToken}` },
+    })
+    const afterData = after.json().data as Array<{
+      kind: string
+      channel: string
+      enabled: boolean
+    }>
+    expect(afterData.find((p) => p.kind === 'like' && p.channel === 'push')?.enabled).toBe(true)
+    // Untouched defaults, including alice's (a different user), are unaffected.
+    expect(afterData.find((p) => p.kind === 'repost' && p.channel === 'push')?.enabled).toBe(false)
+
+    const aliceStill = await app.inject({
+      method: 'GET',
+      url: '/v1/notifications/preferences',
+      headers: { authorization: `Bearer ${aliceToken}` },
+    })
+    expect(
+      (aliceStill.json().data as Array<{ kind: string; channel: string; enabled: boolean }>).find(
+        (p) => p.kind === 'like' && p.channel === 'push',
+      )?.enabled,
+    ).toBe(false)
   })
 })

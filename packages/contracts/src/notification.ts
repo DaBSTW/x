@@ -35,3 +35,37 @@ export const unreadCountResponseSchema = z.object({
 
 export const markNotificationsReadSchema = z.object({ cursor: snowflakeIdSchema })
 export type MarkNotificationsReadInput = z.infer<typeof markNotificationsReadSchema>
+
+// ROADMAP.md 2.9 "preferencias granulares por tipo × canal" — 'system' is
+// deliberately excluded from notificationKindSchema's list here since it's
+// never user-configurable (mirrors why security emails aren't either).
+export const notificationChannelSchema = z.enum(['in_app', 'push'])
+export const configurableNotificationKindSchema = z.enum([
+  'like',
+  'repost',
+  'reply',
+  'quote',
+  'follow',
+  'mention',
+  'follow_request',
+])
+
+export const notificationPreferenceSchema = z.object({
+  kind: configurableNotificationKindSchema,
+  channel: notificationChannelSchema,
+  enabled: z.boolean(),
+})
+export type NotificationPreference = z.infer<typeof notificationPreferenceSchema>
+
+export const notificationPreferencesResponseSchema = z.object({
+  data: z.array(notificationPreferenceSchema),
+})
+
+export const updateNotificationPreferenceRequestSchema = z.object({
+  kind: configurableNotificationKindSchema,
+  channel: notificationChannelSchema,
+  enabled: z.boolean(),
+})
+export type UpdateNotificationPreferenceRequest = z.infer<
+  typeof updateNotificationPreferenceRequestSchema
+>

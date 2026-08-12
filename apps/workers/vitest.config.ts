@@ -11,6 +11,8 @@ export default defineConfig({
         'src/fanout/fanout.processor.ts',
         'src/counters/counters.flush-worker.ts',
         'src/media/media.processor.ts',
+        'src/notifications/notifications.processor.ts',
+        'src/notifications/push-text.ts',
         'src/env.ts',
       ],
       thresholds: { lines: 80, statements: 80, branches: 80, functions: 80 },

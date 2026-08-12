@@ -32,6 +32,15 @@ const envSchema = z
     LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().positive().optional(),
     FORGOT_PASSWORD_RATE_LIMIT_MAX: z.coerce.number().int().positive().optional(),
 
+    // Web Push (ROADMAP.md 2.9) — optional, same reasoning as the rate
+    // limits above: apps/api only ever reads the public half (it serves
+    // GET /push/vapid-public-key so the browser can subscribe); signing
+    // outgoing pushes with the private half happens in apps/workers.
+    // Unset in development/test — push is then reported unconfigured
+    // instead of failing to boot (CODESTYLE.md §8.4 vs. §8.3: nothing here
+    // is required to *serve a request* the way the JWT keypair is).
+    VAPID_PUBLIC_KEY: z.string().optional(),
+
     // Object storage (S3/MinIO) — ROADMAP.md 1.5. Defaults match docker-compose.yml's minio service.
     S3_ENDPOINT: z.string().url().default('http://localhost:9000'),
     S3_REGION: z.string().default('us-east-1'),

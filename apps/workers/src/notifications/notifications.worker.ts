@@ -1,12 +1,16 @@
-import { NOTIFICATIONS_QUEUE_NAME, type NotificationJobData, unreadCountKey } from '@x/utils'
+import { NOTIFICATIONS_QUEUE_NAME, type NotificationJobData } from '@x/utils'
 import { Worker } from 'bullmq'
 import { Redis } from 'ioredis'
+import { createNotificationsProcessor } from './notifications.processor.js'
 import type { NotificationsRepository } from './notifications.repository.js'
+import type { SendPush } from './push-sender.js'
 
 export type NotificationsWorkerOptions = {
   repository: NotificationsRepository
   redisUrl: string
   concurrency: number
+  /** `undefined` when no VAPID keypair is configured — push is then skipped entirely (env.ts). */
+  sendPush?: SendPush
 }
 
 export type NotificationsWorkerHandle = {
@@ -22,22 +26,19 @@ export function createNotificationsWorker(
   // share a socket.
   const bullmqConnection = new Redis(options.redisUrl, { maxRetriesPerRequest: null })
   const redis = new Redis(options.redisUrl)
+  const process = createNotificationsProcessor({
+    repository: options.repository,
+    redis,
+    ...(options.sendPush !== undefined && { sendPush: options.sendPush }),
+  })
 
   const worker = new Worker<NotificationJobData>(
     NOTIFICATIONS_QUEUE_NAME,
-    async (job) => {
-      const id = await options.repository.insertFromJob(job.data)
-      if (id === null) return // blocked or muted (ROADMAP.md 2.6) — nothing was inserted, nothing to count
-
-      // Only bump an already-warm counter. A cold one is left alone —
-      // apps/api's getUnreadCount() recomputes it from Postgres on next
-      // read, which by then already includes the row just inserted above.
-      const key = unreadCountKey(job.data.userId)
-      if (await redis.exists(key)) {
-        await redis.incr(key)
-      }
+    (job) => process(job.data),
+    {
+      connection: bullmqConnection,
+      concurrency: options.concurrency,
     },
-    { connection: bullmqConnection, concurrency: options.concurrency },
   )
 
   return {

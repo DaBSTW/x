@@ -57,6 +57,13 @@
       "when": 1786490162373,
       "tag": "0007_lethal_paibok",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1786492424306,
+      "tag": "0008_modern_zarek",
+      "breakpoints": true
     }
   ]
 }

@@ -27,11 +27,19 @@ export {
   timelineKey,
 } from './timeline-constants.js'
 export {
+  CONFIGURABLE_NOTIFICATION_KINDS,
+  NOTIFICATION_CHANNELS,
   NOTIFICATION_KINDS,
   NOTIFICATIONS_QUEUE_NAME,
+  defaultChannelEnabled,
   unreadCountKey,
 } from './notifications.js'
-export type { NotificationJobData, NotificationKind } from './notifications.js'
+export type {
+  ConfigurableNotificationKind,
+  NotificationChannel,
+  NotificationJobData,
+  NotificationKind,
+} from './notifications.js'
 export {
   ALLOWED_IMAGE_MIME_TYPES,
   MEDIA_LIMITS,

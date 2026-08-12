@@ -1,5 +1,5 @@
-import type { Notification } from '@x/contracts'
-import { unreadCountKey } from '@x/utils'
+import type { Notification, NotificationPreference } from '@x/contracts'
+import { CONFIGURABLE_NOTIFICATION_KINDS, defaultChannelEnabled, unreadCountKey } from '@x/utils'
 import type { Redis } from 'ioredis'
 import type { NotificationRow, NotificationsRepository } from './notifications.repository.js'
 
@@ -43,7 +43,25 @@ export function createNotificationsService(repository: NotificationsRepository, 
     return real
   }
 
-  return { list, markRead, getUnreadCount }
+  /** Full type×channel matrix (CONFIGURABLE_NOTIFICATION_KINDS × {in_app, push}), overrides layered onto @x/utils' shared defaults — the caller never has to know which rows exist in Postgres and which don't. */
+  async function getPreferences(userId: bigint): Promise<NotificationPreference[]> {
+    const overrides = await repository.listPreferenceOverrides(userId)
+    const overrideFor = new Map(overrides.map((row) => [`${row.kind}:${row.channel}`, row.enabled]))
+
+    return CONFIGURABLE_NOTIFICATION_KINDS.flatMap((kind) =>
+      (['in_app', 'push'] as const).map((channel) => ({
+        kind,
+        channel,
+        enabled: overrideFor.get(`${kind}:${channel}`) ?? defaultChannelEnabled(kind, channel),
+      })),
+    )
+  }
+
+  async function updatePreference(userId: bigint, input: NotificationPreference): Promise<void> {
+    await repository.setPreference(userId, input.kind, input.channel, input.enabled)
+  }
+
+  return { list, markRead, getUnreadCount, getPreferences, updatePreference }
 }
 
 function toNotificationDto(row: NotificationRow): Notification {

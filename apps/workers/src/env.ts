@@ -23,6 +23,15 @@ const envSchema = z.object({
   // it needs its own value in a multi-instance deployment, same as apps/api
   // (see .env.example). @x/utils' generateId() reads this directly.
   WORKER_ID: z.coerce.number().int().min(0).max(1023).default(0),
+
+  // Web Push (ROADMAP.md 2.9) — all three optional together: unset means
+  // "push disabled," not a boot failure (CODESTYLE.md §8.3/§8.4 — nothing
+  // else in this process depends on push actually working). The public key
+  // must match whatever apps/api's VAPID_PUBLIC_KEY handed the browser, or
+  // every send fails with a signature mismatch.
+  VAPID_PUBLIC_KEY: z.string().optional(),
+  VAPID_PRIVATE_KEY: z.string().optional(),
+  VAPID_SUBJECT: z.string().default('mailto:security@x.example.com'),
 })
 
 export type Env = z.infer<typeof envSchema>

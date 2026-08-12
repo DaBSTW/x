@@ -1,3 +1,5 @@
+import type { NotificationPreference } from '@x/contracts'
+import type { NotificationPreference as NotificationPreferenceRow } from '@x/db'
 import { generateId } from '@x/utils'
 import type { Redis } from 'ioredis'
 import { beforeEach, describe, expect, it } from 'vitest'
@@ -51,11 +53,13 @@ describe('createNotificationsService', () => {
   let rows: NotificationRow[]
   let repository: NotificationsRepository
   let markReadUpToCalls: Array<{ userId: bigint; cursor: bigint }>
+  let preferenceOverrides: NotificationPreferenceRow[]
 
   beforeEach(() => {
     redis = createFakeRedis()
     rows = []
     markReadUpToCalls = []
+    preferenceOverrides = []
     repository = {
       async listForUser(_userId, limit) {
         return rows.slice(0, limit)
@@ -68,6 +72,19 @@ describe('createNotificationsService', () => {
       },
       async countUnread(_userId) {
         return rows.filter((row) => row.readAt === null).length
+      },
+      async listPreferenceOverrides(userId) {
+        return preferenceOverrides.filter((row) => row.userId === userId)
+      },
+      async setPreference(userId, kind, channel, enabled) {
+        const existing = preferenceOverrides.find(
+          (row) => row.userId === userId && row.kind === kind && row.channel === channel,
+        )
+        if (existing) {
+          existing.enabled = enabled
+        } else {
+          preferenceOverrides.push({ userId, kind, channel, enabled })
+        }
       },
     }
   })
@@ -163,6 +180,68 @@ describe('createNotificationsService', () => {
       const service = createNotificationsService(repository, redis)
 
       expect(await service.getUnreadCount(userId)).toBe(0)
+    })
+  })
+
+  describe('getPreferences', () => {
+    function find(
+      preferences: NotificationPreference[],
+      kind: NotificationPreference['kind'],
+      channel: NotificationPreference['channel'],
+    ) {
+      return preferences.find((p) => p.kind === kind && p.channel === channel)
+    }
+
+    it('defaults in_app to enabled and push to the SPECS.md §13.2 set, with no overrides stored', async () => {
+      const userId = generateId()
+      const service = createNotificationsService(repository, redis)
+
+      const preferences = await service.getPreferences(userId)
+
+      expect(preferences).toHaveLength(14) // 7 configurable kinds × 2 channels
+      expect(find(preferences, 'like', 'in_app')?.enabled).toBe(true)
+      expect(find(preferences, 'like', 'push')?.enabled).toBe(false)
+      expect(find(preferences, 'mention', 'push')?.enabled).toBe(true)
+      expect(find(preferences, 'follow', 'push')?.enabled).toBe(true)
+    })
+
+    it('layers a stored override on top of the default', async () => {
+      const userId = generateId()
+      preferenceOverrides = [{ userId, kind: 'like', channel: 'push', enabled: true }]
+      const service = createNotificationsService(repository, redis)
+
+      const preferences = await service.getPreferences(userId)
+
+      expect(find(preferences, 'like', 'push')?.enabled).toBe(true)
+      // Unrelated defaults are untouched by the override.
+      expect(find(preferences, 'repost', 'push')?.enabled).toBe(false)
+    })
+
+    it("never mixes another user's overrides in", async () => {
+      const userId = generateId()
+      const otherUserId = generateId()
+      preferenceOverrides = [
+        { userId: otherUserId, kind: 'mention', channel: 'push', enabled: false },
+      ]
+      const service = createNotificationsService(repository, redis)
+
+      const preferences = await service.getPreferences(userId)
+
+      expect(find(preferences, 'mention', 'push')?.enabled).toBe(true)
+    })
+  })
+
+  describe('updatePreference', () => {
+    it('persists an override that getPreferences then reflects', async () => {
+      const userId = generateId()
+      const service = createNotificationsService(repository, redis)
+
+      await service.updatePreference(userId, { kind: 'reply', channel: 'push', enabled: true })
+      const preferences = await service.getPreferences(userId)
+
+      expect(preferences.find((p) => p.kind === 'reply' && p.channel === 'push')?.enabled).toBe(
+        true,
+      )
     })
   })
 })

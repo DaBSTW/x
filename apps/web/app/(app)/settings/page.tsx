@@ -1,12 +1,22 @@
 import { ChangePasswordForm } from '@/components/change-password-form'
+import { NotificationPreferencesForm } from '@/components/notification-preferences-form'
+import { PushNotificationsToggle } from '@/components/push-notifications-toggle'
 
 export default function SettingsPage() {
   return (
-    <div className="flex flex-col gap-4 p-4">
+    <div className="flex flex-col gap-8 p-4">
       <h1 className="border-b border-border pb-4 text-xl font-bold">Configuración</h1>
       <section className="flex flex-col gap-2">
         <h2 className="text-lg font-semibold">Contraseña</h2>
         <ChangePasswordForm />
+      </section>
+      <section className="flex flex-col gap-3">
+        <h2 className="text-lg font-semibold">Notificaciones push</h2>
+        <PushNotificationsToggle />
+      </section>
+      <section className="flex flex-col gap-3">
+        <h2 className="text-lg font-semibold">Qué recibir por push</h2>
+        <NotificationPreferencesForm />
       </section>
     </div>
   )

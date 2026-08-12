@@ -2,8 +2,10 @@ import {
   errorResponseSchema,
   markNotificationsReadSchema,
   notificationListResponseSchema,
+  notificationPreferencesResponseSchema,
   paginationQuerySchema,
   unreadCountResponseSchema,
+  updateNotificationPreferenceRequestSchema,
 } from '@x/contracts'
 import { decodeCursor, encodeCursor } from '@x/utils'
 import type { FastifyInstance } from 'fastify'
@@ -75,6 +77,37 @@ export async function registerNotificationsRoutes(
     async (request, reply) => {
       const user = getAuthenticatedUser(request)
       await notificationsService.markRead(user.id, BigInt(request.body.cursor))
+      return reply.status(204).send(null)
+    },
+  )
+
+  server.get(
+    '/notifications/preferences',
+    {
+      schema: {
+        response: { 200: notificationPreferencesResponseSchema, 401: errorResponseSchema },
+      },
+      preHandler: [requireAuth],
+    },
+    async (request, reply) => {
+      const user = getAuthenticatedUser(request)
+      const preferences = await notificationsService.getPreferences(user.id)
+      return reply.send({ data: preferences })
+    },
+  )
+
+  server.put(
+    '/notifications/preferences',
+    {
+      schema: {
+        body: updateNotificationPreferenceRequestSchema,
+        response: { 204: z.null(), 401: errorResponseSchema },
+      },
+      preHandler: [requireAuth],
+    },
+    async (request, reply) => {
+      const user = getAuthenticatedUser(request)
+      await notificationsService.updatePreference(user.id, request.body)
       return reply.status(204).send(null)
     },
   )

@@ -1,4 +1,13 @@
-import { bigint, index, pgEnum, pgTable, primaryKey, text, timestamp } from 'drizzle-orm/pg-core'
+import {
+  bigint,
+  boolean,
+  index,
+  pgEnum,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+} from 'drizzle-orm/pg-core'
 import { users } from './users.js'
 
 export const notificationKind = pgEnum('notification_kind', [
@@ -11,6 +20,14 @@ export const notificationKind = pgEnum('notification_kind', [
   'follow_request',
   'system',
 ])
+
+// SPECS.md §13.2's channel column, restricted to the two this codebase
+// actually drives from the same notifications worker today — 'push' below,
+// and 'in_app' meaning the row in `notifications` itself. Email is excluded
+// on purpose: security alerts are non-optional (mailer.ts, never gated by a
+// preference) and there's no per-kind transactional/digest email yet
+// (ROADMAP.md 2.9) for a preference to mean anything for.
+export const notificationChannel = pgEnum('notification_channel', ['in_app', 'push'])
 
 // Range-partitioned by `created_at` (monthly), same as `posts` — SPECS.md
 // §14.1 lists both under "Particionado". Physical DDL is hand-patched in
@@ -46,3 +63,22 @@ export const notifications = pgTable(
 
 export type Notification = typeof notifications.$inferSelect
 export type NewNotification = typeof notifications.$inferInsert
+
+// Sparse overrides only — a (userId, kind, channel) triple with no row here
+// uses the hardcoded default in notifications.service.ts's DEFAULT_PREFERENCES,
+// same "absence means default" shape as most settings tables in this schema.
+export const notificationPreferences = pgTable(
+  'notification_preferences',
+  {
+    userId: bigint('user_id', { mode: 'bigint' })
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    kind: notificationKind('kind').notNull(),
+    channel: notificationChannel('channel').notNull(),
+    enabled: boolean('enabled').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.kind, table.channel] })],
+)
+
+export type NotificationPreference = typeof notificationPreferences.$inferSelect
+export type NewNotificationPreference = typeof notificationPreferences.$inferInsert

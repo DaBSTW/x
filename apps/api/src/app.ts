@@ -40,6 +40,9 @@ import { createPostsService } from './modules/posts/posts.service.js'
 import { createProfilesRepository } from './modules/profiles/profiles.repository.js'
 import { registerProfilesRoutes } from './modules/profiles/profiles.routes.js'
 import { createProfilesService } from './modules/profiles/profiles.service.js'
+import { createPushRepository } from './modules/push/push.repository.js'
+import { registerPushRoutes } from './modules/push/push.routes.js'
+import { createPushService } from './modules/push/push.service.js'
 import { createSocialGraphRepository } from './modules/social-graph/social-graph.repository.js'
 import { registerSocialGraphRoutes } from './modules/social-graph/social-graph.routes.js'
 import { createSocialGraphService } from './modules/social-graph/social-graph.service.js'
@@ -201,6 +204,12 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   const notificationsRepository = createNotificationsRepository(app.db)
   const notificationsService = createNotificationsService(notificationsRepository, app.redis)
 
+  const pushRepository = createPushRepository(app.db)
+  const pushService = createPushService({
+    repository: pushRepository,
+    vapidPublicKey: env.VAPID_PUBLIC_KEY ?? null,
+  })
+
   app.get('/health', async () => ({ status: 'ok' }))
 
   await app.register(
@@ -276,6 +285,13 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   await app.register(
     async (instance) => {
       await registerConversationsRoutes(instance, { conversationsService, tokenService })
+    },
+    { prefix: '/v1' },
+  )
+
+  await app.register(
+    async (instance) => {
+      await registerPushRoutes(instance, { pushService, tokenService })
     },
     { prefix: '/v1' },
   )

@@ -1,5 +1,5 @@
-import type { Database } from '@x/db'
-import { notifications, users } from '@x/db'
+import type { Database, NotificationPreference } from '@x/db'
+import { notificationPreferences, notifications, users } from '@x/db'
 import { and, count, desc, eq, isNull, lt, lte } from 'drizzle-orm'
 
 export type NotificationRow = {
@@ -72,6 +72,33 @@ export function createNotificationsRepository(db: Database) {
         .from(notifications)
         .where(and(eq(notifications.userId, userId), isNull(notifications.readAt)))
       return row?.count ?? 0
+    },
+
+    /** Only the rows the user actually changed — notifications.service.ts fills in the rest from its hardcoded defaults. */
+    async listPreferenceOverrides(userId: bigint): Promise<NotificationPreference[]> {
+      return db
+        .select()
+        .from(notificationPreferences)
+        .where(eq(notificationPreferences.userId, userId))
+    },
+
+    async setPreference(
+      userId: bigint,
+      kind: NotificationPreference['kind'],
+      channel: NotificationPreference['channel'],
+      enabled: boolean,
+    ): Promise<void> {
+      await db
+        .insert(notificationPreferences)
+        .values({ userId, kind, channel, enabled })
+        .onConflictDoUpdate({
+          target: [
+            notificationPreferences.userId,
+            notificationPreferences.kind,
+            notificationPreferences.channel,
+          ],
+          set: { enabled },
+        })
     },
   }
 }
