@@ -53,6 +53,9 @@ import { createSocialGraphService } from './modules/social-graph/social-graph.se
 import { createTimelineRepository } from './modules/timeline/timeline.repository.js'
 import { registerTimelineRoutes } from './modules/timeline/timeline.routes.js'
 import { createTimelineService } from './modules/timeline/timeline.service.js'
+import { createTrendsRepository } from './modules/trends/trends.repository.js'
+import { registerTrendsRoutes } from './modules/trends/trends.routes.js'
+import { createTrendsService } from './modules/trends/trends.service.js'
 import dbPlugin from './plugins/db.js'
 import errorHandlerPlugin from './plugins/error-handler.js'
 import redisPlugin from './plugins/redis.js'
@@ -228,6 +231,9 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
 
   const realtimeService = createRealtimeService(app.redis, REALTIME_TICKET_TTL_SECONDS)
 
+  const trendsRepository = createTrendsRepository(app.db)
+  const trendsService = createTrendsService(trendsRepository)
+
   app.get('/health', async () => ({ status: 'ok' }))
 
   await app.register(
@@ -310,6 +316,13 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   await app.register(
     async (instance) => {
       await registerPushRoutes(instance, { pushService, tokenService })
+    },
+    { prefix: '/v1' },
+  )
+
+  await app.register(
+    async (instance) => {
+      await registerTrendsRoutes(instance, { trendsService })
     },
     { prefix: '/v1' },
   )

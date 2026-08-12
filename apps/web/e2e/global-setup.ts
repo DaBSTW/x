@@ -80,9 +80,15 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   const migrationDb = createDatabase(postgres.getConnectionUri())
   await migrate(migrationDb, { migrationsFolder: fileURLToPath(migrationsFolderUrl()) })
 
-  // Read by e2e/helpers.ts's waitForEmailToken — worker processes inherit
-  // process.env as it stands once globalSetup returns.
+  // Read by e2e/helpers.ts's waitForEmailToken and explore.spec.ts's direct
+  // trending_topics seed (ROADMAP.md 2.4 — no UI path builds a trend
+  // snapshot short of 50+ real accounts posting the same hashtag and then
+  // running compute-trends.ts, which is exactly what apps/workers' and
+  // apps/api's own integration tests against real ClickHouse/Postgres
+  // already cover) — worker processes inherit process.env as it stands
+  // once globalSetup returns.
   process.env.MAILPIT_API_URL = `http://${mailpit.getHost()}:${mailpit.getMappedPort(8025)}`
+  process.env.DATABASE_URL = postgres.getConnectionUri()
 
   const s3Client = createS3Client({
     endpoint: minio.getConnectionUrl(),

@@ -31,6 +31,7 @@ test.describe('accessibility (ROADMAP.md 2.10)', () => {
 
     const paths = [
       '/home',
+      '/explore',
       '/notifications',
       '/bookmarks',
       '/lists',

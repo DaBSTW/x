@@ -45,6 +45,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         <span className="text-lg font-semibold">X</span>
         <nav className="flex flex-col gap-2 text-sm">
           <Link href="/home">Inicio</Link>
+          <Link href="/explore">Explorar</Link>
           <Link href="/notifications" className="flex items-center gap-2">
             Notificaciones
             {Boolean(unreadCount) && (
