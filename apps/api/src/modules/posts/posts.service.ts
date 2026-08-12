@@ -13,6 +13,7 @@ import {
   parseEntities,
   pickPrimaryVariant,
 } from '@x/utils'
+import { detectLanguage } from '@x/utils/language'
 import type { Redis } from 'ioredis'
 import { type CachedCounters, bumpCounter, zeroCounters } from '../../lib/post-counters-cache.js'
 import type { AuthorRow, PostEntityRow, PostMediaRow, PostRepository } from './posts.repository.js'
@@ -334,12 +335,16 @@ export function createPostsService(
 
     // text can legitimately be '' for a media-only post — the DB column
     // stores NULL for "no text", matching how a repost's text is stored.
+    // lang: best-effort (ROADMAP.md 2.4/2.3) — null for empty/undetectable
+    // text is correct, not a fallback failure; a media-only post has no
+    // text to detect a language from in the first place.
     await repository.insertPost(
       {
         id,
         authorId,
         kind,
         text: input.text || null,
+        lang: input.text ? detectLanguage(input.text) : null,
         inReplyToId: input.inReplyToId ?? null,
         conversationId,
         quotedPostId: input.quotedPostId ?? null,
@@ -505,6 +510,7 @@ export function createPostsService(
           authorId,
           kind: previousId !== undefined ? 'reply' : 'original',
           text: postInput.text || null,
+          lang: postInput.text ? detectLanguage(postInput.text) : null,
           inReplyToId: previousId ?? null,
           conversationId,
           replyPolicy: replyPolicyCode,

@@ -114,6 +114,7 @@ function createFakeRepository() {
           authorId: post.authorId,
           kind: post.kind ?? 'original',
           text: post.text ?? null,
+          lang: post.lang ?? null,
           inReplyToId: post.inReplyToId ?? null,
           conversationId: post.conversationId ?? null,
           quotedPostId: post.quotedPostId ?? null,
@@ -135,6 +136,7 @@ function createFakeRepository() {
             authorId: item.post.authorId,
             kind: item.post.kind ?? 'original',
             text: item.post.text ?? null,
+            lang: item.post.lang ?? null,
             inReplyToId: item.post.inReplyToId ?? null,
             conversationId: item.post.conversationId ?? null,
             replyPolicy: item.post.replyPolicy ?? 0,
@@ -287,7 +289,7 @@ function createFakeRepository() {
     },
   }
 
-  return { repository, authorsById, likedPostIds }
+  return { repository, authorsById, likedPostIds, postsById }
 }
 
 function addAuthor(
@@ -376,6 +378,7 @@ describe('createPostsService', () => {
   let repository: PostRepository
   let authorsById: Map<bigint, AuthorRow>
   let likedPostIds: Set<string>
+  let postsById: Map<bigint, Post>
   let author: AuthorRow
   let published: unknown[]
   let redis: Redis
@@ -385,6 +388,7 @@ describe('createPostsService', () => {
     repository = fake.repository
     authorsById = fake.authorsById
     likedPostIds = fake.likedPostIds
+    postsById = fake.postsById
     author = addAuthor(authorsById)
     published = []
     redis = createFakeRedis()
@@ -403,6 +407,35 @@ describe('createPostsService', () => {
       expect(post.text).toBe('hola mundo')
       expect(post.conversationId).toBe(post.id)
       expect(post.inReplyToId).toBeNull()
+    })
+
+    // lang isn't part of the public Post DTO (ROADMAP.md 2.3/2.4 are its
+    // only readers so far, both querying Postgres directly) — asserting via
+    // the fake repository's stored row, same reasoning as replyPolicy/
+    // isSensitive below never being checked through toPostDto either.
+    it('detects and stores the post language (roadmap 2.4)', async () => {
+      const service = createPostsService(repository)
+
+      const post = await service.create(author.id, {
+        text: 'El rápido zorro marrón salta sobre el perro perezoso',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      expect(postsById.get(BigInt(post.id))?.lang).toBe('es')
+    })
+
+    it('leaves lang null for a media-only post with no text to detect', async () => {
+      const service = createPostsService(repository)
+
+      const post = await service.create(author.id, {
+        text: '',
+        mediaIds: [generateId()],
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      expect(postsById.get(BigInt(post.id))?.lang).toBeNull()
     })
 
     it('rejects empty text with no media attached either', async () => {
@@ -770,6 +803,21 @@ describe('createPostsService', () => {
       await expect(
         service.createThread(author.id, { posts: [], replyPolicy: 'everyone' }),
       ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+    })
+
+    it('detects the language of each thread item independently (roadmap 2.4)', async () => {
+      const service = createPostsService(repository)
+
+      const thread = await service.createThread(author.id, {
+        posts: [
+          { text: 'El rápido zorro marrón salta sobre el perro perezoso', isSensitive: false },
+          { text: 'The quick brown fox jumps over the lazy dog', isSensitive: false },
+        ],
+        replyPolicy: 'everyone',
+      })
+
+      expect(postsById.get(BigInt(thread[0]?.id ?? 0n))?.lang).toBe('es')
+      expect(postsById.get(BigInt(thread[1]?.id ?? 0n))?.lang).toBe('en')
     })
 
     it('rejects a thread over the max length even when the schema layer is bypassed', async () => {

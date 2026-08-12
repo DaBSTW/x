@@ -25,6 +25,7 @@ export default defineConfig({
         'src/errors.ts',
         'src/hibp.ts',
         'src/index.ts',
+        'src/language.ts',
         'src/media.ts',
         'src/notifications.ts',
         'src/pagination.ts',

@@ -9,7 +9,8 @@
     "./text": "./src/text/index.ts",
     "./media": "./src/media.ts",
     "./notifications": "./src/notifications.ts",
-    "./realtime": "./src/realtime.ts"
+    "./realtime": "./src/realtime.ts",
+    "./language": "./src/language.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -19,6 +20,7 @@
     "@aws-sdk/client-s3": "^3.716.0",
     "@aws-sdk/s3-request-presigner": "^3.716.0",
     "@node-rs/argon2": "^2.0.2",
+    "franc-min": "^6.2.0",
     "otplib": "^13.4.1"
   },
   "devDependencies": {
