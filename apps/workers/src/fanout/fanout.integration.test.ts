@@ -13,6 +13,7 @@ import {
   CELEBRITY_FOLLOWER_THRESHOLD,
   TIMELINE_RETENTION_SIZE,
   generateId,
+  realtimeStreamKey,
   timelineChannel,
   timelineKey,
 } from '@x/utils'
@@ -111,6 +112,50 @@ describe('fan-out worker', () => {
         event: 'post.available',
         data: { postId: postId.toString() },
       })
+    } finally {
+      subscriber.disconnect()
+    }
+  })
+
+  it("XADDs the same event to the follower's stream, under the id PUBLISH carried as eventId (ROADMAP.md 2.2 recovery)", async () => {
+    const author = await insertUser(db, { prefix: 'a' })
+    const follower = await insertUser(db, { prefix: 'f' })
+    await db.insert(follows).values({ followerId: follower, followeeId: author })
+
+    const repository = createFanoutRepository(db)
+    const process = createFanoutProcessor({ repository, redis })
+    const postId = generateId()
+
+    await process({ postId: postId.toString(), authorId: author.toString() })
+
+    const entries = await redis.xrange(realtimeStreamKey(timelineChannel(follower)), '-', '+')
+    expect(entries).toHaveLength(1)
+    const [entryId, fields] = entries[0] as [string, string[]]
+    const dataIndex = fields.indexOf('data')
+    expect(dataIndex).toBeGreaterThanOrEqual(0)
+    expect(JSON.parse(fields[dataIndex + 1] as string)).toEqual({ postId: postId.toString() })
+
+    // Same identity on both paths — a client that reconnects and replays
+    // via XRANGE, and one that received this live over PUBLISH, must agree
+    // on what "this event" is called.
+    const subscriber = new Redis(redisContainer.getConnectionUrl())
+    const received: unknown[] = []
+    await subscriber.subscribe(timelineChannel(follower))
+    subscriber.on('message', (_channel, message) => received.push(JSON.parse(message)))
+    try {
+      const secondPostId = generateId()
+      await process({ postId: secondPostId.toString(), authorId: author.toString() })
+      await vi.waitFor(() => expect(received).toHaveLength(1))
+      const secondEntries = await redis.xrange(
+        realtimeStreamKey(timelineChannel(follower)),
+        '-',
+        '+',
+      )
+      const newEntry = secondEntries.find(([id]) => id !== entryId) as
+        | [string, string[]]
+        | undefined
+      expect(newEntry).toBeDefined()
+      expect((received[0] as { eventId: string }).eventId).toBe(newEntry?.[0])
     } finally {
       subscriber.disconnect()
     }

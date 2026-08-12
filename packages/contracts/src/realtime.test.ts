@@ -52,6 +52,24 @@ describe('realtimeClientMessageSchema', () => {
     expect(result.success).toBe(true)
   })
 
+  it('accepts a subscribe message with a since map for lost-event recovery', () => {
+    const result = realtimeClientMessageSchema.safeParse({
+      op: 'subscribe',
+      channels: ['timeline:123'],
+      since: { 'timeline:123': '1723-0' },
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it('rejects a since map keyed by a malformed channel', () => {
+    const result = realtimeClientMessageSchema.safeParse({
+      op: 'subscribe',
+      channels: ['timeline:123'],
+      since: { 'not-a-channel': '1723-0' },
+    })
+    expect(result.success).toBe(false)
+  })
+
   it('rejects an empty channel list', () => {
     expect(realtimeClientMessageSchema.safeParse({ op: 'subscribe', channels: [] }).success).toBe(
       false,

@@ -5,6 +5,7 @@ import type { Redis } from 'ioredis'
 import type { WebSocket } from 'ws'
 import type { ConnectionRegistry } from './connection-registry.js'
 import type { RealtimeRepository } from './realtime.repository.js'
+import { isStreamIdNewer } from './stream-id.js'
 import { createSubscriptionHandler } from './subscription-handler.js'
 
 declare module 'fastify' {
@@ -15,7 +16,7 @@ declare module 'fastify' {
 }
 
 export type GatewayPluginOptions = {
-  /** General-purpose connection — ticket redemption (`GETDEL`). */
+  /** General-purpose connection — ticket redemption (`GETDEL`), stream replay (`XRANGE`). */
   redis: Redis
   /** Dedicated to SUBSCRIBE mode: a Redis connection that has issued `SUBSCRIBE` can't issue any other command, ioredis's own documented restriction — so this must be a second connection, never the one above. */
   subscriber: Redis
@@ -99,21 +100,55 @@ export async function registerGatewayRoutes(
     backpressureLimitBytes,
   } = options
 
-  const subscriptions = createSubscriptionHandler({ registry, repository, subscriber })
+  const subscriptions = createSubscriptionHandler({ registry, repository, subscriber, redis })
   const socketsByConnectionId = new Map<string, WebSocket>()
+  // Per connection, the newest eventId already delivered on each channel —
+  // the one thing a live PUBLISH and a replayed XRANGE entry for the same
+  // event have in common, so this single guard, applied on both paths,
+  // is what keeps a reconnect's replay-then-live handoff from ever
+  // delivering the same event twice or skipping one (SPECS.md §8.3's
+  // "sin duplicados ni huecos", ROADMAP.md 2.2).
+  const lastDeliveredEventIdByConnection = new Map<string, Map<string, string>>()
   let nextConnectionId = 0
+
+  function deliverEvent(connectionId: string, channel: string, eventId: string, raw: string): void {
+    const socket = socketsByConnectionId.get(connectionId)
+    if (!socket) return
+
+    const perChannel = lastDeliveredEventIdByConnection.get(connectionId)
+    const lastId = perChannel?.get(channel)
+    if (lastId !== undefined && !isStreamIdNewer(eventId, lastId)) return // already delivered
+
+    if (perChannel) {
+      perChannel.set(channel, eventId)
+    } else {
+      lastDeliveredEventIdByConnection.set(connectionId, new Map([[channel, eventId]]))
+    }
+    sendRaw(socket, raw, backpressureLimitBytes, app.log)
+  }
 
   // One shared Redis subscriber connection dispatches every incoming
   // pub/sub message to whichever of *this process's* connections currently
   // care about that channel — SPECS.md §8.3's "cada instancia mantiene un
-  // mapa channel → Set<connection>." A raw relay on purpose: the publisher
-  // (a future checkpoint — nothing publishes real domain events yet) is
-  // trusted to have already built a wire-format-correct envelope, the same
-  // trust boundary this codebase already gives BullMQ job payloads.
+  // mapa channel → Set<connection>." The publisher (apps/workers' fan-out)
+  // is trusted to have already built a wire-format-correct envelope, the
+  // same trust boundary this codebase already gives BullMQ job payloads —
+  // but `eventId` specifically has to be read out of it here, not just
+  // relayed blind, for the dedup guard above to work at all.
   subscriber.on('message', (channel: string, raw: string) => {
+    let eventId: unknown
+    try {
+      eventId = (JSON.parse(raw) as { eventId?: unknown }).eventId
+    } catch {
+      app.log.warn({ channel }, 'discarding a non-JSON realtime pub/sub message')
+      return
+    }
+    if (typeof eventId !== 'string') {
+      app.log.warn({ channel }, 'discarding a realtime pub/sub message with no eventId')
+      return
+    }
     for (const connectionId of registry.connectionsFor(channel)) {
-      const socket = socketsByConnectionId.get(connectionId)
-      if (socket) sendRaw(socket, raw, backpressureLimitBytes, app.log)
+      deliverEvent(connectionId, channel, eventId, raw)
     }
   })
 
@@ -156,6 +191,7 @@ export async function registerGatewayRoutes(
         clearTimeout(heartbeatTimeout)
         clearInterval(pingInterval)
         socketsByConnectionId.delete(connectionId)
+        lastDeliveredEventIdByConnection.delete(connectionId)
         void subscriptions
           .disconnect(connectionId)
           .catch((error: unknown) =>
@@ -185,10 +221,11 @@ export async function registerGatewayRoutes(
         }
 
         if (result.data.op === 'subscribe') {
-          const { applied, denied } = await subscriptions.subscribe(
+          const { applied, denied, replay } = await subscriptions.subscribe(
             connectionId,
             userId,
             result.data.channels,
+            result.data.since,
           )
           if (applied.length > 0) send(JSON.stringify({ op: 'subscribed', channels: applied }))
           if (denied.length > 0) {
@@ -198,6 +235,11 @@ export async function registerGatewayRoutes(
                 message: `unauthorized channel(s): ${denied.join(', ')}`,
               }),
             )
+          }
+          // After the ack, not before — the client learns "you're
+          // subscribed" before backlog starts arriving on top of it.
+          for (const { channel, events } of replay) {
+            for (const event of events) deliverEvent(connectionId, channel, event.id, event.raw)
           }
         } else {
           const removed = await subscriptions.unsubscribe(connectionId, result.data.channels)

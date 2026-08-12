@@ -3,9 +3,13 @@ import type { FanoutJobData } from '@x/utils'
 import {
   CELEBRITY_FOLLOWER_THRESHOLD,
   FANOUT_BATCH_SIZE,
+  POST_AVAILABLE_EVENT,
+  REALTIME_STREAM_FIELD_DATA,
+  REALTIME_STREAM_FIELD_EVENT,
+  REALTIME_STREAM_RETENTION_MS,
   TIMELINE_RETENTION_SIZE,
   TIMELINE_TTL_SECONDS,
-  generateId,
+  realtimeStreamKey,
   timelineChannel,
   timelineKey,
 } from '@x/utils'
@@ -55,28 +59,68 @@ export function createFanoutProcessor({ repository, redis }: FanoutProcessorDeps
       )
       if (followerIds.length === 0) break
 
-      const pipeline = redis.pipeline()
+      const timelinePipeline = redis.pipeline()
+      // A separate pipeline, not interleaved into the one above: each
+      // XADD's Redis-assigned id becomes the event's eventId (below), and
+      // that id isn't known until this pipeline's own exec() resolves —
+      // one pipeline per followerIds[index] keeps that lookup a plain
+      // index instead of arithmetic over a shared, interleaved result array.
+      const streamPipeline = redis.pipeline()
+      // MINID trim (SPECS.md §8.3: "retención 5 min") piggybacks on every
+      // XADD instead of a separate sweep job — Redis prunes anything older
+      // than this cutoff as part of the same write.
+      const streamCutoffId = `${Date.now() - REALTIME_STREAM_RETENTION_MS}-0`
+
       for (const followerId of followerIds) {
         const key = timelineKey(followerId)
-        pipeline.zadd(key, postId.toString(), data.postId)
-        pipeline.zremrangebyrank(key, 0, -(TIMELINE_RETENTION_SIZE + 1))
-        pipeline.expire(key, TIMELINE_TTL_SECONDS)
+        timelinePipeline.zadd(key, postId.toString(), data.postId)
+        timelinePipeline.zremrangebyrank(key, 0, -(TIMELINE_RETENTION_SIZE + 1))
+        timelinePipeline.expire(key, TIMELINE_TTL_SECONDS)
 
-        // "Badge de N posts nuevos" (ROADMAP.md 2.2, SPECS.md §8.2) — best
-        // effort: PUBLISH to a channel with nobody subscribed (ws-gateway
-        // down, or the follower simply not connected right now) is a
-        // Redis no-op, never an error, and the timeline itself is already
-        // correct via the ZADD above regardless of whether this arrives.
+        // "Badge de N posts nuevos" + lost-event recovery (ROADMAP.md 2.2,
+        // SPECS.md §8.2/§8.3). The event's own type and data are stored
+        // now; its `eventId` (the entry id Redis assigns) is filled in
+        // below once this pipeline resolves, then PUBLISHed — so a client
+        // replaying via XRANGE and one receiving it live always agree on
+        // both the event's shape and its id.
+        streamPipeline.xadd(
+          realtimeStreamKey(timelineChannel(followerId)),
+          'MINID',
+          '~',
+          streamCutoffId,
+          '*',
+          REALTIME_STREAM_FIELD_EVENT,
+          POST_AVAILABLE_EVENT,
+          REALTIME_STREAM_FIELD_DATA,
+          JSON.stringify({ postId: data.postId }),
+        )
+      }
+
+      const [, streamResults] = await Promise.all([timelinePipeline.exec(), streamPipeline.exec()])
+
+      const publishPipeline = redis.pipeline()
+      followerIds.forEach((followerId, index) => {
+        const result = streamResults?.[index]
+        // A per-follower XADD failure doesn't fail the whole batch — the
+        // timeline itself is already correct via the ZADD above regardless
+        // of whether the badge event ever gets published for this one.
+        if (!result || result[0] !== null) return
+        const eventId = result[1] as string
+
         const event: RealtimeServerEvent = {
           op: 'event',
           channel: timelineChannel(followerId),
-          event: 'post.available',
+          event: POST_AVAILABLE_EVENT,
           data: { postId: data.postId },
-          eventId: generateId().toString(),
+          eventId,
         }
-        pipeline.publish(timelineChannel(followerId), JSON.stringify(event))
-      }
-      await pipeline.exec()
+        // PUBLISH to a channel with nobody subscribed (ws-gateway down, or
+        // the follower simply not connected right now) is a Redis no-op,
+        // never an error — live delivery is best-effort on top of the
+        // durable XADD above, which is what reconnect recovery replays from.
+        publishPipeline.publish(timelineChannel(followerId), JSON.stringify(event))
+      })
+      await publishPipeline.exec()
 
       if (followerIds.length < FANOUT_BATCH_SIZE) break
       afterId = followerIds.at(-1) ?? null

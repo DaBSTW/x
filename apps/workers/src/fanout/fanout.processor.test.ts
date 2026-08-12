@@ -1,17 +1,26 @@
-import { CELEBRITY_FOLLOWER_THRESHOLD, timelineChannel, timelineKey } from '@x/utils'
+import {
+  CELEBRITY_FOLLOWER_THRESHOLD,
+  realtimeStreamKey,
+  timelineChannel,
+  timelineKey,
+} from '@x/utils'
 import type { Redis } from 'ioredis'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createFanoutProcessor } from './fanout.processor.js'
 import type { FanoutRepository } from './fanout.repository.js'
 
-type PipelineCommand = ['zadd' | 'zremrangebyrank' | 'expire' | 'publish', ...unknown[]]
+type PipelineCommand = ['zadd' | 'zremrangebyrank' | 'expire' | 'xadd' | 'publish', ...unknown[]]
 
 // Hand-rolled, recording only the pipelined commands the processor actually
-// issues — real Redis ZADD/ZREMRANGEBYRANK/EXPIRE/PUBLISH semantics are
-// exercised by fanout.integration.test.ts against a real container.
+// issues — real Redis ZADD/ZREMRANGEBYRANK/EXPIRE/XADD/PUBLISH semantics
+// are exercised by fanout.integration.test.ts against a real container.
+// exec() fakes ioredis's own [error, result][] shape, assigning each XADD a
+// distinct id — the processor reads that id back to build eventId, so a
+// fake that always returned the same value would hide a real bug.
 function createFakeRedis() {
   const strings = new Map<string, string>()
   const executed: PipelineCommand[] = []
+  let nextStreamSeq = 0
 
   const redis = {
     async set(key: string, value: string, ...rest: unknown[]) {
@@ -34,13 +43,23 @@ function createFakeRedis() {
           batch.push(['expire', ...args])
           return api
         },
+        xadd(...args: unknown[]) {
+          batch.push(['xadd', ...args])
+          return api
+        },
         publish(...args: unknown[]) {
           batch.push(['publish', ...args])
           return api
         },
-        async exec() {
+        async exec(): Promise<Array<[Error | null, unknown]>> {
           executed.push(...batch)
-          return []
+          return batch.map((command) => {
+            if (command[0] === 'xadd') {
+              nextStreamSeq += 1
+              return [null, `1723456789000-${nextStreamSeq}`]
+            }
+            return [null, 'OK']
+          })
         },
       }
       return api
@@ -82,7 +101,7 @@ describe('createFanoutProcessor', () => {
     }
   })
 
-  it("publishes a post.available event on every follower's timeline channel (ROADMAP.md 2.2 badge)", async () => {
+  it("publishes a post.available event on every follower's timeline channel, carrying the id its own stream entry was assigned (ROADMAP.md 2.2 badge)", async () => {
     const followerIds = [10n, 11n]
     const repository = createFakeRepository({
       getFollowersCount: async () => 2,
@@ -92,12 +111,19 @@ describe('createFanoutProcessor', () => {
 
     await process({ postId: '999', authorId: '1' })
 
-    const publishCalls = fakeRedis.executed.filter(([op]) => op === 'publish')
+    const xaddCalls = fakeRedis.executed.filter(
+      (command): command is ['xadd', ...unknown[]] => command[0] === 'xadd',
+    )
+    const publishCalls = fakeRedis.executed.filter(
+      (command): command is ['publish', string, string] => command[0] === 'publish',
+    )
     expect(publishCalls).toHaveLength(2)
-    for (const followerId of followerIds) {
-      const call = publishCalls.find(([, channel]) => channel === timelineChannel(followerId))
-      expect(call).toBeDefined()
-      const [, , payload] = call as [string, string, string]
+    for (const [index, followerId] of followerIds.entries()) {
+      const publishCall = publishCalls.find(
+        ([, channel]) => channel === timelineChannel(followerId),
+      )
+      expect(publishCall).toBeDefined()
+      const [, , payload] = publishCall as ['publish', string, string]
       const event = JSON.parse(payload)
       expect(event).toMatchObject({
         op: 'event',
@@ -105,12 +131,58 @@ describe('createFanoutProcessor', () => {
         event: 'post.available',
         data: { postId: '999' },
       })
-      // A fresh Snowflake id, forward-compatible plumbing for the Redis
-      // Streams recovery bullet (ROADMAP.md 2.2) that doesn't exist yet —
-      // not a fixed/predictable value, just present and well-formed.
-      expect(typeof event.eventId).toBe('string')
-      expect(event.eventId.length).toBeGreaterThan(0)
+      // Not a value the processor invented itself — the exact id the fake's
+      // exec() assigned this follower's own XADD, in call order.
+      const xaddCall = xaddCalls[index]
+      expect(xaddCall).toBeDefined()
+      expect(event.eventId).toBe(`1723456789000-${index + 1}`)
     }
+  })
+
+  it("XADDs each event to the follower's own stream key, MINID-trimmed to the retention window", async () => {
+    const followerIds = [10n]
+    const repository = createFakeRepository({
+      getFollowersCount: async () => 1,
+      listFollowerIdsBatch: async (_authorId, afterId) => (afterId === null ? followerIds : []),
+    })
+    const process = createFanoutProcessor({ repository, redis: fakeRedis.redis })
+
+    await process({ postId: '999', authorId: '1' })
+
+    const xaddCalls = fakeRedis.executed.filter(([op]) => op === 'xadd')
+    expect(xaddCalls).toHaveLength(1)
+    const [
+      ,
+      key,
+      minidToken,
+      approxToken,
+      cutoff,
+      star,
+      eventField,
+      eventValue,
+      dataField,
+      payload,
+    ] = xaddCalls[0] as [
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+    ]
+    expect(key).toBe(realtimeStreamKey(timelineChannel(10n)))
+    expect(minidToken).toBe('MINID')
+    expect(approxToken).toBe('~')
+    expect(cutoff).toMatch(/^\d+-0$/) // "<cutoff ms>-0", not a Snowflake id
+    expect(star).toBe('*') // Redis assigns the real entry id
+    expect(eventField).toBe('event')
+    expect(eventValue).toBe('post.available')
+    expect(dataField).toBe('data')
+    expect(JSON.parse(payload)).toEqual({ postId: '999' })
   })
 
   it('skips fan-out for celebrity accounts', async () => {

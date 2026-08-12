@@ -11,6 +11,8 @@ export default defineConfig({
       include: [
         'src/gateway/channel-authorization.ts',
         'src/gateway/connection-registry.ts',
+        'src/gateway/stream-id.ts',
+        'src/gateway/stream-replay.ts',
         'src/gateway/subscription-handler.ts',
         'src/env.ts',
       ],

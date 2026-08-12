@@ -9,7 +9,15 @@ import {
   migrationsFolderUrl,
   users,
 } from '@x/db'
-import { generateId, generateOpaqueToken, realtimeTicketKey, sha256Hex } from '@x/utils'
+import {
+  REALTIME_STREAM_FIELD_DATA,
+  REALTIME_STREAM_FIELD_EVENT,
+  generateId,
+  generateOpaqueToken,
+  realtimeStreamKey,
+  realtimeTicketKey,
+  sha256Hex,
+} from '@x/utils'
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
 import type { FastifyInstance } from 'fastify'
 import { Redis } from 'ioredis'
@@ -71,6 +79,39 @@ function waitForMessage(ws: WebSocket): Promise<unknown> {
         reject(error)
       }
     })
+    ws.once('error', reject)
+  })
+}
+
+/**
+ * Collects exactly `count` messages via one listener attached before the
+ * caller sends anything — unlike chaining separate `waitForMessage()`
+ * calls, which races: an action that triggers two replies close together
+ * (e.g. a subscribe ack immediately followed by a replayed event) can have
+ * the second one arrive *during* the `await` that resolves the first
+ * `waitForMessage()` promise, before a fresh `.once()` for it is
+ * registered — with no listener attached at that instant, `ws`'s
+ * EventEmitter drops the message silently and the second wait hangs
+ * forever. One persistent listener, attached up front, can't lose a
+ * message to that gap.
+ */
+function waitForMessages(ws: WebSocket, count: number): Promise<unknown[]> {
+  return new Promise((resolve, reject) => {
+    const messages: unknown[] = []
+    const onMessage = (data: WebSocket.RawData) => {
+      try {
+        messages.push(JSON.parse(data.toString()))
+      } catch (error) {
+        ws.off('message', onMessage)
+        reject(error)
+        return
+      }
+      if (messages.length === count) {
+        ws.off('message', onMessage)
+        resolve(messages)
+      }
+    }
+    ws.on('message', onMessage)
     ws.once('error', reject)
   })
 }
@@ -262,6 +303,116 @@ describe('ws-gateway', () => {
 
     await redis.publish(`timeline:${userId}`, JSON.stringify({ op: 'event' }))
     await expectNoMessage(ws)
+  })
+
+  it('replays a single missed event on reconnect, carrying the same eventId it would have live', async () => {
+    const userId = generateId()
+    const channel = `timeline:${userId}`
+    const streamKey = realtimeStreamKey(channel)
+
+    const entryId = await redis.xadd(
+      streamKey,
+      '*',
+      REALTIME_STREAM_FIELD_EVENT,
+      'post.available',
+      REALTIME_STREAM_FIELD_DATA,
+      JSON.stringify({ postId: '1' }),
+    )
+    if (entryId === null) throw new Error('XADD unexpectedly returned null')
+
+    const ws = connect(`ticket=${await issueTicket(redis, userId)}`)
+    await waitForOpen(ws)
+    // Both messages collected via one listener, attached before send() —
+    // see waitForMessages' own comment on why chaining two waitForMessage()
+    // calls here would race and hang.
+    const messages = waitForMessages(ws, 2)
+    ws.send(JSON.stringify({ op: 'subscribe', channels: [channel], since: { [channel]: '0-0' } }))
+
+    await expect(messages).resolves.toEqual([
+      { op: 'subscribed', channels: [channel] },
+      {
+        op: 'event',
+        channel,
+        event: 'post.available',
+        data: { postId: '1' },
+        eventId: entryId,
+      },
+    ])
+  })
+
+  it('recovers 500 missed events after a reconnect, without duplicates or gaps (SPECS.md §17.2)', async () => {
+    const userId = generateId()
+    const channel = `timeline:${userId}`
+    const streamKey = realtimeStreamKey(channel)
+    const totalEvents = 500
+
+    // The connection that was "online" before the drop — subscribes with
+    // no since (nothing published yet), then disconnects. Its own presence
+    // isn't the point of this test; it establishes that reconnecting is
+    // genuinely a *second* connection, not just a first subscribe.
+    const first = connect(`ticket=${await issueTicket(redis, userId)}`)
+    await waitForOpen(first)
+    first.send(JSON.stringify({ op: 'subscribe', channels: [channel] }))
+    await waitForMessage(first) // subscribed ack
+    first.close()
+    await waitForClose(first)
+
+    // While "disconnected," real fan-out activity happens — 500 events
+    // land on the stream. Direct XADD, not through apps/workers' own
+    // fanout.processor.ts (already covered by its own integration tests):
+    // this test is specifically about the gateway's replay mechanism.
+    const pipeline = redis.pipeline()
+    for (let n = 1; n <= totalEvents; n++) {
+      pipeline.xadd(
+        streamKey,
+        '*',
+        REALTIME_STREAM_FIELD_EVENT,
+        'post.available',
+        REALTIME_STREAM_FIELD_DATA,
+        JSON.stringify({ n }),
+      )
+    }
+    await pipeline.exec()
+
+    // Reconnect and ask for everything since the beginning — the first
+    // connection never actually received anything before dropping.
+    const second = connect(`ticket=${await issueTicket(redis, userId)}`)
+    await waitForOpen(second)
+
+    const received: number[] = []
+    const gotAllEvents = new Promise<void>((resolve, reject) => {
+      second.on('message', (raw) => {
+        let message: { op: string; data?: { n: number } }
+        try {
+          message = JSON.parse(raw.toString())
+        } catch (error) {
+          reject(error as Error)
+          return
+        }
+        if (message.op === 'event' && message.data) {
+          received.push(message.data.n)
+          if (received.length === totalEvents) resolve()
+        }
+      })
+    })
+    second.send(
+      JSON.stringify({ op: 'subscribe', channels: [channel], since: { [channel]: '0-0' } }),
+    )
+
+    await Promise.race([
+      gotAllEvents,
+      new Promise((_resolve, reject) =>
+        setTimeout(
+          () => reject(new Error(`timed out with ${received.length}/${totalEvents} received`)),
+          15_000,
+        ),
+      ),
+    ])
+
+    expect(new Set(received).size).toBe(totalEvents) // no duplicates
+    expect([...received].sort((a, b) => a - b)).toEqual(
+      Array.from({ length: totalEvents }, (_, i) => i + 1),
+    ) // no gaps
   })
 
   it('closes a connection that never responds to a ping, within the configured heartbeat timeout', async () => {

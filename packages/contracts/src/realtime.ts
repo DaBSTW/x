@@ -26,6 +26,11 @@ export const realtimeChannelSchema = z
 export const realtimeSubscribeMessageSchema = z.object({
   op: z.literal('subscribe'),
   channels: z.array(realtimeChannelSchema).min(1).max(20),
+  // Redis Stream entry id per channel already being re-subscribed to after
+  // a drop (SPECS.md §8.3: "al reconectar, el cliente envía last_event_id").
+  // Omitted, or a channel missing from the map, means "just subscribe
+  // live" — the normal first-time-connecting case, nothing to replay.
+  since: z.record(realtimeChannelSchema, z.string()).optional(),
 })
 export type RealtimeSubscribeMessage = z.infer<typeof realtimeSubscribeMessageSchema>
 
@@ -68,10 +73,9 @@ export type RealtimeErrorMessage = z.infer<typeof realtimeErrorMessageSchema>
 
 /**
  * Server → client event envelope, published on any of SPECS.md §8.2's
- * channels. `eventId` is a Redis Stream entry id — present from this
- * checkpoint on (even though nothing publishes real events onto a stream
- * yet) so lost-event recovery (ROADMAP.md 2.2, still open) is an additive
- * change later, not a wire-format break.
+ * channels. `eventId` is the Redis Stream entry id the event was also
+ * `XADD`ed under — what a client persists and later sends back as `since`
+ * (above) to replay whatever it missed while disconnected.
  */
 export const realtimeServerEventSchema = z.object({
   op: z.literal('event'),

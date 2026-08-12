@@ -85,9 +85,14 @@ export {
   ValidationError,
 } from './errors.js'
 export {
+  POST_AVAILABLE_EVENT,
+  REALTIME_STREAM_FIELD_DATA,
+  REALTIME_STREAM_FIELD_EVENT,
+  REALTIME_STREAM_RETENTION_MS,
   REALTIME_TICKET_TTL_SECONDS,
   conversationChannel,
   postChannel,
+  realtimeStreamKey,
   realtimeTicketKey,
   timelineChannel,
   userChannel,
