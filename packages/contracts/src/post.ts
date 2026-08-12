@@ -110,3 +110,38 @@ export const postThreadResponseSchema = z.object({
     meta: z.object({ hasMoreReplies: z.boolean() }),
   }),
 })
+
+// POST /posts/batch (ROADMAP.md 2.1): one item of a thread. Same "text or
+// media" rule as createPostSchema, but no inReplyToId (each item
+// automatically replies to the one right before it — that's what makes the
+// batch "a thread" instead of N unrelated posts) and no quotedPostId
+// (quoting mid-thread isn't supported here; a single POST /posts still
+// covers quoting).
+const createThreadItemSchema = z
+  .object({
+    text: z.string().max(280).optional(),
+    mediaIds: z.array(snowflakeIdSchema).max(4).optional(),
+    isSensitive: z.boolean().default(false),
+  })
+  .refine((input) => Boolean(input.text?.trim()) || (input.mediaIds?.length ?? 0) > 0, {
+    message: 'text or at least one media attachment is required',
+    path: ['text'],
+  })
+
+// 25 mirrors posts.service.ts's MAX_THREAD_POSTS, duplicated as a literal
+// the same way 280/4 above duplicate MAX_POST_GRAPHEMES/
+// MAX_ATTACHMENTS_PER_POST — contracts has no dependency on @x/utils or the
+// api package.
+export const createThreadSchema = z.object({
+  posts: z.array(createThreadItemSchema).min(1).max(25),
+  // If set, the thread's first post replies to this existing post (the same
+  // reply_policy enforcement a single POST /posts reply gets). Every post
+  // after the first always replies to the one directly before it.
+  inReplyToId: snowflakeIdSchema.optional(),
+  // Applies to every post in the thread — a thread is one conversational
+  // unit with one reply policy, not N independently-configured posts.
+  replyPolicy: z.enum(['everyone', 'following', 'mentioned']).default('everyone'),
+})
+export type CreateThreadInput = z.infer<typeof createThreadSchema>
+
+export const threadResponseSchema = z.object({ data: z.array(postSchema) })

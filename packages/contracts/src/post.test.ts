@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createPostSchema, postSchema } from './post.js'
+import { createPostSchema, createThreadSchema, postSchema } from './post.js'
 
 describe('createPostSchema', () => {
   it('accepts a plain text post', () => {
@@ -187,5 +187,50 @@ describe('postSchema', () => {
     })
 
     expect(result.success).toBe(false)
+  })
+})
+
+describe('createThreadSchema', () => {
+  it('accepts a thread of plain-text posts', () => {
+    const result = createThreadSchema.safeParse({
+      posts: [{ text: 'uno' }, { text: 'dos' }, { text: 'tres' }],
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it('accepts a single-post thread', () => {
+    expect(createThreadSchema.safeParse({ posts: [{ text: 'solo uno' }] }).success).toBe(true)
+  })
+
+  it('rejects an empty thread', () => {
+    expect(createThreadSchema.safeParse({ posts: [] }).success).toBe(false)
+  })
+
+  it('rejects more than 25 posts', () => {
+    const posts = Array.from({ length: 26 }, (_, i) => ({ text: `post ${i}` }))
+    expect(createThreadSchema.safeParse({ posts }).success).toBe(false)
+  })
+
+  it('rejects a thread item with neither text nor media', () => {
+    const result = createThreadSchema.safeParse({ posts: [{ text: 'uno' }, {}] })
+    expect(result.success).toBe(false)
+  })
+
+  it('accepts a media-only thread item', () => {
+    const result = createThreadSchema.safeParse({ posts: [{ mediaIds: ['123'] }] })
+    expect(result.success).toBe(true)
+  })
+
+  it('accepts an optional inReplyToId, applying to the thread as a whole', () => {
+    const result = createThreadSchema.safeParse({
+      posts: [{ text: 'uno' }],
+      inReplyToId: '456',
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it('defaults replyPolicy to everyone', () => {
+    const result = createThreadSchema.parse({ posts: [{ text: 'uno' }] })
+    expect(result.replyPolicy).toBe('everyone')
   })
 })

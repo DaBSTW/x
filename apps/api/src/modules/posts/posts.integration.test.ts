@@ -295,6 +295,119 @@ describe('posts routes', () => {
     expect(replyResponse.json().data.conversationId).toBe(root.id)
   })
 
+  it('POST /posts/batch creates a whole thread, each post replying to the one before it (ROADMAP.md 2.1)', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/posts/batch',
+      headers: authHeader(),
+      payload: { posts: [{ text: 'uno' }, { text: 'dos' }, { text: 'tres, con #hilo' }] },
+    })
+
+    expect(response.statusCode).toBe(201)
+    const thread = response.json().data
+    expect(thread.map((post: { text: string }) => post.text)).toEqual([
+      'uno',
+      'dos',
+      'tres, con #hilo',
+    ])
+    expect(thread[0].inReplyToId).toBeNull()
+    expect(thread[1].inReplyToId).toBe(thread[0].id)
+    expect(thread[2].inReplyToId).toBe(thread[1].id)
+    expect(thread[1].conversationId).toBe(thread[0].id)
+    expect(thread[2].conversationId).toBe(thread[0].id)
+
+    // Every post actually landed, independently readable, not just present
+    // in the create response.
+    for (const post of thread) {
+      const getResponse = await app.inject({ method: 'GET', url: `/v1/posts/${post.id}` })
+      expect(getResponse.statusCode).toBe(200)
+    }
+  })
+
+  it('POST /posts/batch replies to an existing post when inReplyToId is given', async () => {
+    const root = (
+      await app.inject({
+        method: 'POST',
+        url: '/v1/posts',
+        headers: authHeader(),
+        payload: { text: 'raíz externa para el hilo' },
+      })
+    ).json().data
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/posts/batch',
+      headers: authHeader(),
+      payload: { posts: [{ text: 'uno' }, { text: 'dos' }], inReplyToId: root.id },
+    })
+
+    expect(response.statusCode).toBe(201)
+    const thread = response.json().data
+    expect(thread[0].inReplyToId).toBe(root.id)
+    expect(thread[0].conversationId).toBe(root.id)
+    expect(thread[1].conversationId).toBe(root.id)
+
+    const rootThread = await app.inject({ method: 'GET', url: `/v1/posts/${root.id}/thread` })
+    expect(rootThread.json().data.replies.map((post: { id: string }) => post.id)).toEqual([
+      thread[0].id,
+    ])
+  })
+
+  it('POST /posts/batch rolls back the whole thread when one item has invalid media (transactional, ROADMAP.md 2.1)', async () => {
+    const otherRegister = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/register',
+      payload: {
+        username: 'threadstranger',
+        email: 'threadstranger@example.com',
+        password: 'a unique passphrase, stranger 9q',
+        birthDate: '1990-01-01',
+      },
+    })
+    const otherId = otherRegister.json().data.id
+    const foreignMediaId = generateId()
+    await app.db.insert(media).values({
+      id: foreignMediaId,
+      ownerId: BigInt(otherId),
+      storageKey: `media/${foreignMediaId}/original.webp`,
+      mimeType: 'image/webp',
+      sizeBytes: 100n,
+      status: MEDIA_STATUS.READY,
+    })
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/posts/batch',
+      headers: authHeader(),
+      payload: {
+        posts: [
+          { text: 'este sí debería existir si no fuera por el siguiente' },
+          { mediaIds: [foreignMediaId.toString()] },
+        ],
+      },
+    })
+
+    expect(response.statusCode).toBe(400)
+
+    // Nothing from the failed thread persisted — not even its first item,
+    // which would have succeeded on its own outside a transaction.
+    const profile = await app.inject({ method: 'GET', url: '/v1/users/poster/posts' })
+    const leaked = profile
+      .json()
+      .data.some((post: { text: string | null }) => post.text?.includes('este sí debería existir'))
+    expect(leaked).toBe(false)
+  })
+
+  it('returns 400 for an empty thread', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/posts/batch',
+      headers: authHeader(),
+      payload: { posts: [] },
+    })
+    expect(response.statusCode).toBe(400)
+  })
+
   it('paginates a user timeline by cursor', async () => {
     for (let i = 0; i < 3; i++) {
       await app.inject({

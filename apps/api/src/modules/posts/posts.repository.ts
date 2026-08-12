@@ -82,6 +82,60 @@ export function createPostsRepository(db: Database) {
       })
     },
 
+    /**
+     * POST /posts/batch (ROADMAP.md 2.1): every post in a thread, in one
+     * transaction — any failure (an invalid media id on any item) rolls
+     * back the whole thread instead of leaving a partial one behind. Same
+     * per-row work as insertPost's loop body, just run for each item before
+     * a single userCounters bump at the end (`authorId` is the same caller
+     * for the whole thread, so one `+ items.length` update beats `items.length`
+     * separate `+ 1` updates fighting over the same row's lock).
+     */
+    async insertThread(
+      items: Array<{
+        post: NewPost
+        entities: PostEntityRow[]
+        counters: NewPostCounters
+        mediaIds: bigint[]
+      }>,
+      authorId: bigint,
+    ): Promise<void> {
+      if (items.length === 0) return
+      await db.transaction(async (tx) => {
+        for (const item of items) {
+          await tx.insert(posts).values(item.post)
+          await tx.insert(postCounters).values(item.counters)
+          if (item.entities.length > 0) {
+            await tx.insert(postEntities).values(item.entities)
+          }
+          if (item.mediaIds.length > 0) {
+            // Same validate-via-WHERE-clause reasoning as insertPost above.
+            const attached = await tx
+              .update(media)
+              .set({ postId: item.post.id })
+              .where(
+                and(
+                  inArray(media.id, item.mediaIds),
+                  eq(media.ownerId, authorId),
+                  eq(media.status, MEDIA_STATUS.READY),
+                  isNull(media.postId),
+                ),
+              )
+              .returning({ id: media.id })
+            if (attached.length !== item.mediaIds.length) {
+              throw new ValidationError(
+                'one or more media attachments are invalid, not owned, not ready, or already attached to another post',
+              )
+            }
+          }
+        }
+        await tx
+          .update(userCounters)
+          .set({ postsCount: sql`${userCounters.postsCount} + ${items.length}` })
+          .where(eq(userCounters.userId, authorId))
+      })
+    },
+
     async findPostById(id: bigint) {
       const [post] = await db
         .select()

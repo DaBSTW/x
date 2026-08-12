@@ -1,5 +1,6 @@
 import {
   createPostSchema,
+  createThreadSchema,
   errorResponseSchema,
   paginationQuerySchema,
   postListResponseSchema,
@@ -7,6 +8,7 @@ import {
   postThreadResponseSchema,
   profilePostsQuerySchema,
   snowflakeIdSchema,
+  threadResponseSchema,
 } from '@x/contracts'
 import { decodeCursor, encodeCursor } from '@x/utils'
 import type { FastifyInstance } from 'fastify'
@@ -76,6 +78,52 @@ export async function registerPostsRoutes(app: FastifyInstance, options: PostsRo
         : await create()
 
       return reply.status(201).send({ data: post })
+    },
+  )
+
+  server.post(
+    '/posts/batch',
+    {
+      schema: {
+        body: createThreadSchema,
+        headers: z.object({ 'idempotency-key': z.string().uuid().optional() }),
+        response: {
+          201: threadResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+          403: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+      preHandler: [requireAuth],
+    },
+    async (request, reply) => {
+      const user = getAuthenticatedUser(request)
+      const idempotencyKey = request.headers['idempotency-key']
+
+      const createThread = () =>
+        postsService.createThread(user.id, {
+          posts: request.body.posts.map((item) => ({
+            text: item.text ?? '',
+            mediaIds: item.mediaIds?.map((id) => BigInt(id)),
+            isSensitive: item.isSensitive,
+          })),
+          inReplyToId: request.body.inReplyToId ? BigInt(request.body.inReplyToId) : undefined,
+          replyPolicy: request.body.replyPolicy,
+        })
+
+      const thread = idempotencyKey
+        ? (
+            await withIdempotency(
+              app.redis,
+              `post:batch:${user.id}:${idempotencyKey}`,
+              IDEMPOTENCY_TTL_SECONDS,
+              createThread,
+            )
+          ).result
+        : await createThread()
+
+      return reply.status(201).send({ data: thread })
     },
   )
 

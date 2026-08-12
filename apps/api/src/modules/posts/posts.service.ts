@@ -5,6 +5,7 @@ import {
   MAX_POST_GRAPHEMES,
   NotFoundError,
   type NotificationJobData,
+  type ParsedEntity,
   ValidationError,
   buildPublicUrl,
   countCharacters,
@@ -41,6 +42,40 @@ const MAX_HASHTAGS = 5
 // more" beyond this goes through the standalone, cursor-paginated
 // GET /posts/:id/replies instead.
 const THREAD_REPLIES_PAGE_SIZE = 20
+// POST /posts/batch (ROADMAP.md 2.1) — no product spec sets this, chosen the
+// same way MAX_MENTIONS/MAX_HASHTAGS were: high enough that no real thread
+// hits it, low enough that one request can't wedge the transaction open
+// indefinitely. Duplicated as a literal in createThreadSchema (contracts has
+// no dependency on this package, same reasoning as MAX_POST_GRAPHEMES's 280).
+const MAX_THREAD_POSTS = 25
+
+/**
+ * Shared by create() and createThread(): the same per-post text validation
+ * and entity parsing either one needs, so a thread item is held to exactly
+ * the rules a standalone post is. Throws ValidationError; never checks
+ * "text or media" on its own since that also depends on mediaIds, which the
+ * caller already has in hand.
+ */
+function validateAndParseText(text: string): { graphemeCount: number; entities: ParsedEntity[] } {
+  const graphemeCount = countCharacters(text)
+  if (graphemeCount > MAX_POST_GRAPHEMES) {
+    throw new ValidationError(`post text exceeds ${MAX_POST_GRAPHEMES} characters`, {
+      count: graphemeCount,
+      max: MAX_POST_GRAPHEMES,
+    })
+  }
+
+  const entities = parseEntities(text)
+  const mentionCount = entities.filter((entity) => entity.kind === 'mention').length
+  const hashtagCount = entities.filter((entity) => entity.kind === 'hashtag').length
+  if (mentionCount > MAX_MENTIONS) {
+    throw new ValidationError(`too many mentions (max ${MAX_MENTIONS})`, { count: mentionCount })
+  }
+  if (hashtagCount > MAX_HASHTAGS) {
+    throw new ValidationError(`too many hashtags (max ${MAX_HASHTAGS})`, { count: hashtagCount })
+  }
+  return { graphemeCount, entities }
+}
 
 export type CreatePostServiceInput = {
   text: string
@@ -55,6 +90,25 @@ const REPLY_POLICY_CODES: Record<CreatePostServiceInput['replyPolicy'], number> 
   everyone: 0,
   following: 1,
   mentioned: 2,
+}
+
+/**
+ * POST /posts/batch (ROADMAP.md 2.1). Deliberately narrower than
+ * CreatePostServiceInput: no per-item inReplyToId (each item always replies
+ * to the one before it — that's what makes it a thread) and no per-item
+ * quotedPostId (quoting mid-thread isn't supported here; a single POST
+ * /posts still covers that). `replyPolicy` applies to every post in the
+ * thread, not per item — matches the product's own mental model of "a
+ * thread", not N independently-configured posts.
+ */
+export type CreateThreadServiceInput = {
+  posts: Array<{
+    text: string
+    mediaIds?: bigint[] | undefined
+    isSensitive: boolean
+  }>
+  inReplyToId?: bigint | undefined
+  replyPolicy: 'everyone' | 'following' | 'mentioned'
 }
 
 export type PostsService = ReturnType<typeof createPostsService>
@@ -233,25 +287,9 @@ export function createPostsService(
 
   async function create(authorId: bigint, input: CreatePostServiceInput): Promise<Post> {
     const mediaIds = input.mediaIds ?? []
-    const graphemeCount = countCharacters(input.text)
+    const { graphemeCount, entities: parsed } = validateAndParseText(input.text)
     if (graphemeCount === 0 && mediaIds.length === 0) {
       throw new ValidationError('post text or at least one media attachment is required')
-    }
-    if (graphemeCount > MAX_POST_GRAPHEMES) {
-      throw new ValidationError(`post text exceeds ${MAX_POST_GRAPHEMES} characters`, {
-        count: graphemeCount,
-        max: MAX_POST_GRAPHEMES,
-      })
-    }
-
-    const parsed = parseEntities(input.text)
-    const mentionCount = parsed.filter((entity) => entity.kind === 'mention').length
-    const hashtagCount = parsed.filter((entity) => entity.kind === 'hashtag').length
-    if (mentionCount > MAX_MENTIONS) {
-      throw new ValidationError(`too many mentions (max ${MAX_MENTIONS})`, { count: mentionCount })
-    }
-    if (hashtagCount > MAX_HASHTAGS) {
-      throw new ValidationError(`too many hashtags (max ${MAX_HASHTAGS})`, { count: hashtagCount })
     }
 
     let kind: 'original' | 'reply' | 'quote' = 'original'
@@ -385,6 +423,151 @@ export function createPostsService(
       mediaUrlConfig,
       input.quotedPostId ? (quotedPostsById.get(input.quotedPostId) ?? null) : null,
     )
+  }
+
+  /**
+   * POST /posts/batch (ROADMAP.md 2.1): a whole thread in one transaction —
+   * `posts.repository.ts`'s insertThread rolls every item back together if
+   * any one of them is invalid (e.g. a bad media id partway through), so
+   * callers never see a half-published thread. Each item after the first
+   * replies to the one immediately before it; only the *external* parent
+   * (input.inReplyToId, if given) gets its replies counter bumped and its
+   * author notified — internal item-to-item links are the caller replying
+   * to themself, which bumpParentCounter/safePublish already no-op for one
+   * request at a time, but doing that N-1 extra times here for purely
+   * cosmetic self-thread bookkeeping isn't worth the Redis round-trips.
+   */
+  async function createThread(authorId: bigint, input: CreateThreadServiceInput): Promise<Post[]> {
+    if (input.posts.length === 0) {
+      throw new ValidationError('a thread needs at least one post')
+    }
+    if (input.posts.length > MAX_THREAD_POSTS) {
+      throw new ValidationError(`a thread can have at most ${MAX_THREAD_POSTS} posts`, {
+        count: input.posts.length,
+        max: MAX_THREAD_POSTS,
+      })
+    }
+
+    let conversationId: bigint | null = null
+    let parentAuthorId: bigint | null = null
+    if (input.inReplyToId) {
+      const parent = await repository.findPostById(input.inReplyToId)
+      if (!parent) throw new NotFoundError('post', input.inReplyToId.toString())
+      if (!(await isReplyAllowed(parent, authorId))) {
+        throw new ForbiddenError("this post's reply policy does not allow you to reply")
+      }
+      conversationId = parent.conversationId ?? parent.id
+      parentAuthorId = parent.authorId
+    }
+
+    const replyPolicyCode = REPLY_POLICY_CODES[input.replyPolicy]
+    const mentionedIds = new Set<bigint>()
+    const items: Array<{
+      post: Parameters<PostRepository['insertThread']>[0][number]['post']
+      entities: PostEntityRow[]
+      counters: { postId: bigint }
+      mediaIds: bigint[]
+    }> = []
+    let previousId: bigint | undefined = input.inReplyToId
+
+    for (const postInput of input.posts) {
+      const mediaIds = postInput.mediaIds ?? []
+      const { graphemeCount, entities: parsed } = validateAndParseText(postInput.text)
+      if (graphemeCount === 0 && mediaIds.length === 0) {
+        throw new ValidationError('post text or at least one media attachment is required')
+      }
+
+      const id = generateId()
+      // The thread's own root (no external parent) is its own conversation;
+      // every item after it, and every item when there *is* an external
+      // parent, shares that same conversationId — SPECS.md §4.3.
+      conversationId ??= id
+
+      const mentionUsernames = [
+        ...new Set(parsed.filter((e) => e.kind === 'mention').map((e) => e.value.toLowerCase())),
+      ]
+      const mentionIds = await repository.findUserIdsByUsernames(mentionUsernames)
+      for (const mentionedId of mentionIds.values()) mentionedIds.add(mentionedId)
+
+      const entityRows: PostEntityRow[] = parsed.map((entity) => ({
+        postId: id,
+        kind: ENTITY_KIND_CODES[entity.kind],
+        value: entity.value,
+        startIndex: entity.start,
+        endIndex: entity.end,
+        refId:
+          entity.kind === 'mention' ? (mentionIds.get(entity.value.toLowerCase()) ?? null) : null,
+      }))
+
+      items.push({
+        post: {
+          id,
+          authorId,
+          kind: previousId !== undefined ? 'reply' : 'original',
+          text: postInput.text || null,
+          inReplyToId: previousId ?? null,
+          conversationId,
+          replyPolicy: replyPolicyCode,
+          isSensitive: postInput.isSensitive,
+        },
+        entities: entityRows,
+        counters: { postId: id },
+        mediaIds,
+      })
+      previousId = id
+    }
+
+    await repository.insertThread(items, authorId)
+
+    if (input.inReplyToId) {
+      await bumpParentCounter('replies', input.inReplyToId)
+    }
+
+    const ids = items.map((item) => item.post.id)
+    // Fan-out per post — each one is its own timeline entry for followers,
+    // same posture as create()'s single call: a queue outage must never
+    // fail the write that already committed.
+    if (onPostCreated) {
+      for (const id of ids) {
+        try {
+          await onPostCreated(id, authorId)
+        } catch {
+          // Swallowed intentionally — see comment above.
+        }
+      }
+    }
+
+    // input.posts.length is validated non-zero above, so items/ids always
+    // has at least one entry — firstId/lastId exist whenever the loop below
+    // actually has anything to notify about.
+    const firstId = ids.at(0)
+    const lastId = ids.at(-1)
+    if (parentAuthorId !== null && parentAuthorId !== authorId && firstId !== undefined) {
+      await safePublish({
+        userId: parentAuthorId.toString(),
+        kind: 'reply',
+        actorId: authorId.toString(),
+        // The thread's first post is the one actually replying to
+        // parentAuthorId's, so the notification opens the right place.
+        postId: firstId.toString(),
+        groupKey: null,
+      })
+    }
+    for (const mentionedId of mentionedIds) {
+      if (mentionedId === authorId || lastId === undefined) continue
+      await safePublish({
+        userId: mentionedId.toString(),
+        kind: 'mention',
+        actorId: authorId.toString(),
+        // Same reasoning as thread notifications elsewhere in this file:
+        // one notification per mentioned user for the whole thread, not one
+        // per post they happen to be mentioned in.
+        postId: lastId.toString(),
+        groupKey: null,
+      })
+    }
+
+    return getManyByIds(ids, authorId)
   }
 
   /**
@@ -672,6 +855,7 @@ export function createPostsService(
 
   return {
     create,
+    createThread,
     getById,
     remove,
     repost,

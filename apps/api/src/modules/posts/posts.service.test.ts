@@ -123,6 +123,27 @@ function createFakeRepository() {
       entitiesByPostId.set(post.id, entities)
       countersByPostId.set(counters.postId, makeCounters(counters.postId))
     },
+    // Same per-item shape as insertPost above, looped — media attachment
+    // isn't modeled here either (see insertPost's own comment on that),
+    // real validation is posts.integration.test.ts's job.
+    async insertThread(items) {
+      for (const item of items) {
+        postsById.set(
+          item.post.id,
+          makePost({
+            id: item.post.id,
+            authorId: item.post.authorId,
+            kind: item.post.kind ?? 'original',
+            text: item.post.text ?? null,
+            inReplyToId: item.post.inReplyToId ?? null,
+            conversationId: item.post.conversationId ?? null,
+            replyPolicy: item.post.replyPolicy ?? 0,
+          }),
+        )
+        entitiesByPostId.set(item.post.id, item.entities)
+        countersByPostId.set(item.counters.postId, makeCounters(item.counters.postId))
+      }
+    },
     async findPostById(id) {
       const post = postsById.get(id)
       return post && !post.deletedAt ? post : null
@@ -285,8 +306,25 @@ function addAuthor(
   return author
 }
 
-// Mirrors createFakeFollowLookup just above this file's reply-policy tests
-// — a symmetric pair set is enough to fake BlockLookup's one method.
+// Backs "reply_policy: following" (createThread and reply-policy tests
+// below) — a plain directed pair set is enough to fake FollowLookup's one
+// method.
+function createFakeFollowLookup() {
+  const following = new Set<string>()
+  return {
+    followLookup: {
+      async isFollowing(followerId: bigint, followeeId: bigint) {
+        return following.has(`${followerId}:${followeeId}`)
+      },
+    },
+    follow(followerId: bigint, followeeId: bigint) {
+      following.add(`${followerId}:${followeeId}`)
+    },
+  }
+}
+
+// Mirrors createFakeFollowLookup just above — a symmetric pair set is
+// enough to fake BlockLookup's one method.
 function createFakeBlockLookup() {
   const blocked = new Set<string>()
   return {
@@ -704,21 +742,185 @@ describe('createPostsService', () => {
     })
   })
 
-  describe('reply policy', () => {
-    function createFakeFollowLookup() {
-      const following = new Set<string>()
-      return {
-        followLookup: {
-          async isFollowing(followerId: bigint, followeeId: bigint) {
-            return following.has(`${followerId}:${followeeId}`)
-          },
-        },
-        follow(followerId: bigint, followeeId: bigint) {
-          following.add(`${followerId}:${followeeId}`)
-        },
-      }
-    }
+  describe('createThread', () => {
+    it('creates every post in the thread, each replying to the one before it', async () => {
+      const service = createPostsService(repository)
 
+      const thread = await service.createThread(author.id, {
+        posts: [
+          { text: 'uno', isSensitive: false },
+          { text: 'dos', isSensitive: false },
+          { text: 'tres', isSensitive: false },
+        ],
+        replyPolicy: 'everyone',
+      })
+
+      expect(thread.map((post) => post.text)).toEqual(['uno', 'dos', 'tres'])
+      expect(thread[0]?.inReplyToId).toBeNull()
+      expect(thread[1]?.inReplyToId).toBe(thread[0]?.id)
+      expect(thread[2]?.inReplyToId).toBe(thread[1]?.id)
+      // The whole thread shares the root's conversationId — SPECS.md §4.3.
+      expect(thread[1]?.conversationId).toBe(thread[0]?.id)
+      expect(thread[2]?.conversationId).toBe(thread[0]?.id)
+    })
+
+    it('rejects an empty thread', async () => {
+      const service = createPostsService(repository)
+
+      await expect(
+        service.createThread(author.id, { posts: [], replyPolicy: 'everyone' }),
+      ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+    })
+
+    it('rejects a thread over the max length even when the schema layer is bypassed', async () => {
+      const service = createPostsService(repository)
+      const posts = Array.from({ length: 26 }, (_, i) => ({
+        text: `post ${i}`,
+        isSensitive: false,
+      }))
+
+      await expect(
+        service.createThread(author.id, { posts, replyPolicy: 'everyone' }),
+      ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+    })
+
+    it('rejects a thread item with neither text nor media', async () => {
+      const service = createPostsService(repository)
+
+      await expect(
+        service.createThread(author.id, {
+          posts: [
+            { text: 'uno', isSensitive: false },
+            { text: '', isSensitive: false },
+          ],
+          replyPolicy: 'everyone',
+        }),
+      ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+    })
+
+    it('replies to an existing post when inReplyToId is given, bumping its replies counter once', async () => {
+      const service = createPostsService(repository, undefined, undefined, undefined, redis)
+      const root = await service.create(author.id, {
+        text: 'raíz externa',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+
+      const thread = await service.createThread(author.id, {
+        posts: [
+          { text: 'uno', isSensitive: false },
+          { text: 'dos', isSensitive: false },
+        ],
+        inReplyToId: BigInt(root.id),
+        replyPolicy: 'everyone',
+      })
+
+      expect(thread[0]?.inReplyToId).toBe(root.id)
+      expect(thread[0]?.conversationId).toBe(root.id)
+      expect(await redis.hgetall(`post:${root.id}:counters`)).toMatchObject({ replies: '1' })
+    })
+
+    it('notifies the external parent author once, not once per thread item', async () => {
+      const service = createPostsService(repository, undefined, async (data) => {
+        published.push(data)
+      })
+      const stranger = addAuthor(authorsById, { id: generateId(), username: 'eve' })
+      const root = await service.create(stranger.id, {
+        text: 'raíz de eve',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      published.length = 0
+
+      await service.createThread(author.id, {
+        posts: [
+          { text: 'uno', isSensitive: false },
+          { text: 'dos', isSensitive: false },
+        ],
+        inReplyToId: BigInt(root.id),
+        replyPolicy: 'everyone',
+      })
+
+      expect(published).toMatchObject([{ userId: stranger.id.toString(), kind: 'reply' }])
+    })
+
+    it('throws NotFoundError when inReplyToId points at a nonexistent post', async () => {
+      const service = createPostsService(repository)
+
+      await expect(
+        service.createThread(author.id, {
+          posts: [{ text: 'uno', isSensitive: false }],
+          inReplyToId: 999999999999999999n,
+          replyPolicy: 'everyone',
+        }),
+      ).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    })
+
+    it("rejects a thread that violates the external parent's reply policy", async () => {
+      const { followLookup } = createFakeFollowLookup()
+      const service = createPostsService(
+        repository,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        followLookup,
+      )
+      const stranger = addAuthor(authorsById, { id: generateId(), username: 'eve' })
+      const root = await service.create(stranger.id, {
+        text: 'sólo seguidos',
+        replyPolicy: 'following',
+        isSensitive: false,
+      })
+
+      await expect(
+        service.createThread(author.id, {
+          posts: [{ text: 'uno', isSensitive: false }],
+          inReplyToId: BigInt(root.id),
+          replyPolicy: 'everyone',
+        }),
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    })
+
+    it('notifies a mentioned user once per thread, even if mentioned in more than one item', async () => {
+      const service = createPostsService(repository, undefined, async (data) => {
+        published.push(data)
+      })
+      const mentioned = addAuthor(authorsById, { id: generateId(), username: 'bob' })
+
+      await service.createThread(author.id, {
+        posts: [
+          { text: 'hola @bob', isSensitive: false },
+          { text: 'otra vez @bob', isSensitive: false },
+        ],
+        replyPolicy: 'everyone',
+      })
+
+      expect(published).toMatchObject([{ userId: mentioned.id.toString(), kind: 'mention' }])
+    })
+
+    it('calls onPostCreated for every post in the thread', async () => {
+      const calls: Array<{ postId: bigint; authorId: bigint }> = []
+      const service = createPostsService(repository, async (postId, authorId) => {
+        calls.push({ postId, authorId })
+      })
+
+      const thread = await service.createThread(author.id, {
+        posts: [
+          { text: 'uno', isSensitive: false },
+          { text: 'dos', isSensitive: false },
+        ],
+        replyPolicy: 'everyone',
+      })
+
+      expect(calls).toEqual([
+        { postId: BigInt(thread[0]?.id ?? 0n), authorId: author.id },
+        { postId: BigInt(thread[1]?.id ?? 0n), authorId: author.id },
+      ])
+    })
+  })
+
+  describe('reply policy', () => {
     it('allows a reply under the default "everyone" policy', async () => {
       const service = createPostsService(repository)
       const stranger = addAuthor(authorsById, { id: generateId(), username: 'eve' })
