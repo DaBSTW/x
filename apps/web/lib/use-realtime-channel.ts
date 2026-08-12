@@ -1,6 +1,10 @@
 'use client'
 
-import type { RealtimeServerEvent, RealtimeServerMessage } from '@x/contracts'
+import type {
+  RealtimeServerEvent,
+  RealtimeServerMessage,
+  RealtimeSubscribeMessage,
+} from '@x/contracts'
 import { useEffect, useRef } from 'react'
 import { apiClient } from './api-client'
 import { nextReconnectDelayMs } from './realtime-backoff'
@@ -31,11 +35,26 @@ export function useRealtimeChannel(
 
   useEffect(() => {
     if (!channel) return
+    // A `const` re-binding, not just the narrowed parameter: TS only
+    // carries `!channel` narrowing into the nested closures below (connect,
+    // ws.onopen) reliably through a binding it knows can't be reassigned —
+    // needed now that subscribeMessage's type actually gets checked, unlike
+    // before this file used `channel` as a bare, uninspected object literal.
+    const activeChannel = channel
 
     let cancelled = false
     let socket: WebSocket | null = null
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null
     let attempt = 0
+    // Redis Stream entry id of the last event actually delivered on this
+    // channel (SPECS.md §8.3) — undefined until the first one arrives, and
+    // reset only when `channel` itself changes (a fresh effect run), never
+    // by a reconnect. ROADMAP.md 2.2's own note: the gateway's replay
+    // machinery (`stream-replay.ts`) has existed and been tested end to end
+    // since this section was first built — nothing on this side ever sent
+    // `since` back to actually trigger it, so a connection drop silently
+    // lost whatever was published while it was down. This is that gap closed.
+    let lastEventId: string | undefined
 
     function scheduleReconnect(): void {
       if (cancelled) return
@@ -58,7 +77,15 @@ export function useRealtimeChannel(
 
       ws.onopen = () => {
         attempt = 0
-        ws.send(JSON.stringify({ op: 'subscribe', channels: [channel] }))
+        // Omitted on the very first connect (nothing received yet, nothing
+        // to replay) — same "just subscribe live" default the schema itself
+        // documents (packages/contracts/src/realtime.ts).
+        const subscribeMessage: RealtimeSubscribeMessage = {
+          op: 'subscribe',
+          channels: [activeChannel],
+        }
+        if (lastEventId !== undefined) subscribeMessage.since = { [activeChannel]: lastEventId }
+        ws.send(JSON.stringify(subscribeMessage))
       }
       ws.onmessage = (messageEvent: MessageEvent<string>) => {
         let parsed: RealtimeServerMessage
@@ -67,7 +94,10 @@ export function useRealtimeChannel(
         } catch {
           return // malformed frame — ignore rather than crash the connection over it
         }
-        if (parsed.op === 'event') onEventRef.current(parsed)
+        if (parsed.op === 'event') {
+          lastEventId = parsed.eventId
+          onEventRef.current(parsed)
+        }
       }
       ws.onclose = () => {
         if (!cancelled) scheduleReconnect()
