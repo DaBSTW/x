@@ -10,10 +10,21 @@ export default defineConfig({
     exclude: ['**/node_modules/**', '**/*.integration.test.ts'],
     coverage: {
       provider: 'v8',
-      // Routes, repositories, plugins, rate-limit and mailer touch real
-      // Postgres/Redis/SMTP — exercised by the integration suite
-      // (test:integration), not unit tests.
-      include: ['src/modules/**/*.service.ts', 'src/env.ts'],
+      // Routes, repositories, plugins, rate-limit and mailer.tsx itself
+      // touch real Postgres/Redis/SMTP — exercised by the integration suite
+      // (test:integration), not unit tests. The email templates it renders
+      // (ROADMAP.md 2.9) are pure presentational JSX with neither, same
+      // "pure logic" bucket as the *.service.ts files below — listed
+      // individually, not a src/emails/*.tsx glob, so it can't also sweep
+      // in their own *.test.tsx files sitting right next to them.
+      include: [
+        'src/modules/**/*.service.ts',
+        'src/env.ts',
+        'src/emails/layout.tsx',
+        'src/emails/verification-email.tsx',
+        'src/emails/password-reset-email.tsx',
+        'src/emails/security-alert-email.tsx',
+      ],
       thresholds: { lines: 80, statements: 80, branches: 80, functions: 80 },
     },
   },

@@ -1,4 +1,9 @@
 import nodemailer, { type Transporter } from 'nodemailer'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { Resend } from 'resend'
+import { PasswordResetEmail } from '../emails/password-reset-email.js'
+import { SecurityAlertEmail } from '../emails/security-alert-email.js'
+import { VerificationEmail } from '../emails/verification-email.js'
 
 export type SecurityAlertKind = 'new_login' | 'password_changed' | 'two_factor_enabled'
 
@@ -29,6 +34,14 @@ export type CreateMailerOptions = {
   from: string
   webUrl: string
   logger: MailerLogger
+  /**
+   * Resend (ROADMAP.md 2.9) — optional, same posture as VAPID_PUBLIC_KEY in
+   * env.ts: unset means every send falls back to the SMTP transport below
+   * (Mailpit locally and in every *.integration.test.ts/e2e run, whatever
+   * real SMTP relay is configured elsewhere) instead of failing to boot or
+   * needing a live Resend account to run the test suite at all.
+   */
+  resendApiKey?: string
 }
 
 const SECURITY_ALERT_COPY: Record<SecurityAlertKind, { subject: string; heading: string }> = {
@@ -50,17 +63,32 @@ const SECURITY_ALERT_COPY: Record<SecurityAlertKind, { subject: string; heading:
  * Transactional email sender. Delivery is best-effort: a failed send never
  * fails the request that triggered it, it's logged instead — CODESTYLE.md
  * §8.3, matching sendVerificationEmail's existing posture.
+ *
+ * HTML bodies are apps/api/src/emails/*.tsx rendered with
+ * react-dom/server's renderToStaticMarkup — plain React/JSX, not a
+ * third-party email-component package: at the time this was written every
+ * @react-email/* package on npm (including the versions this project would
+ * have pinned) carried an unexplained "no longer supported, contact npm
+ * support" deprecation notice on an otherwise actively-published package,
+ * a signal closer to an administrative or security takedown than a normal
+ * "renamed, use X instead" deprecation. Safer to own ~80 lines of
+ * table-based inline-style JSX than to build on that.
  */
 export function createMailer(options: CreateMailerOptions): Mailer {
-  const transport: Transporter = nodemailer.createTransport({
+  const smtpTransport: Transporter = nodemailer.createTransport({
     host: options.host,
     port: options.port,
     secure: false,
   })
+  const resend = options.resendApiKey ? new Resend(options.resendApiKey) : null
 
   async function send(to: string, subject: string, text: string, html: string): Promise<void> {
     try {
-      await transport.sendMail({ from: options.from, to, subject, text, html })
+      if (resend) {
+        await resend.emails.send({ from: options.from, to, subject, html, text })
+      } else {
+        await smtpTransport.sendMail({ from: options.from, to, subject, text, html })
+      }
     } catch (error) {
       options.logger.warn({ error, to }, 'email failed to send')
     }
@@ -73,7 +101,7 @@ export function createMailer(options: CreateMailerOptions): Mailer {
         to,
         'Verifica tu cuenta de X',
         `Verifica tu cuenta: ${verifyUrl}`,
-        `<p>Verifica tu cuenta: <a href="${verifyUrl}">${verifyUrl}</a></p>`,
+        renderToStaticMarkup(<VerificationEmail verifyUrl={verifyUrl} />),
       )
     },
 
@@ -83,7 +111,7 @@ export function createMailer(options: CreateMailerOptions): Mailer {
         to,
         'Restablece tu contraseña de X',
         `Restablece tu contraseña: ${resetUrl}\n\nSi no lo pediste tú, ignora este email.`,
-        `<p>Restablece tu contraseña: <a href="${resetUrl}">${resetUrl}</a></p><p>Si no lo pediste tú, ignora este email.</p>`,
+        renderToStaticMarkup(<PasswordResetEmail resetUrl={resetUrl} />),
       )
     },
 
@@ -95,7 +123,13 @@ export function createMailer(options: CreateMailerOptions): Mailer {
         to,
         subject,
         `${heading}\n${context}\n\n${footer}`,
-        `<p><strong>${heading}</strong></p><p>${context}</p><p>${footer}</p>`,
+        renderToStaticMarkup(
+          <SecurityAlertEmail
+            heading={heading}
+            ipAddress={meta.ipAddress}
+            userAgent={meta.userAgent}
+          />,
+        ),
       )
     },
   }

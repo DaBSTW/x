@@ -33,6 +33,9 @@
     "jose": "^5.9.6",
     "nodemailer": "^6.9.16",
     "qrcode": "^1.5.4",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "resend": "^6.19.0",
     "sharp": "^0.33.5",
     "tsx": "^4.19.2",
     "zod": "^3.24.1"
@@ -45,6 +48,8 @@
     "@types/node": "^22.10.5",
     "@types/nodemailer": "^6.4.17",
     "@types/qrcode": "^1.5.6",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
     "@vitest/coverage-v8": "^2.1.8",
     "testcontainers": "^10.16.0",
     "typescript": "^5.7.2",

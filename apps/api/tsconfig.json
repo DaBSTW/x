@@ -3,7 +3,10 @@
   "compilerOptions": {
     "outDir": "dist",
     "rootDir": "src",
-    "types": ["node"]
+    "types": ["node"],
+    // Only for src/emails/*.tsx (ROADMAP.md 2.9) — plain JSX->createElement,
+    // rendered server-side with react-dom/server, nothing DOM-dependent.
+    "jsx": "react-jsx"
   },
   "include": ["src"]
 }

@@ -21,6 +21,11 @@ const envSchema = z
     SMTP_HOST: z.string().default('localhost'),
     SMTP_PORT: z.coerce.number().int().positive().default(1025),
     MAIL_FROM: z.string().email().default('no-reply@x.example.com'),
+    // Optional, same posture as VAPID_PUBLIC_KEY below (ROADMAP.md 2.9):
+    // unset means mailer.ts sends through the SMTP settings above instead
+    // (Mailpit locally, in every integration test and in e2e) rather than
+    // requiring a live Resend account just to boot or run the test suite.
+    RESEND_API_KEY: z.string().optional(),
 
     // Optional (app.ts falls back to SPECS.md §11.3's 10/5) rather than
     // .default()'d — a plain .default() would make every hand-built `Env`

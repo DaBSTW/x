@@ -92,6 +92,9 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
     from: env.MAIL_FROM,
     webUrl: env.WEB_URL,
     logger: app.log,
+    // exactOptionalPropertyTypes: omit the key entirely when unset, same
+    // conditional-spread as every other optional-provider config in this file.
+    ...(env.RESEND_API_KEY !== undefined && { resendApiKey: env.RESEND_API_KEY }),
   })
 
   const authRepository = createAuthRepository(app.db)
