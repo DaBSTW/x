@@ -54,6 +54,13 @@ test('a followed account posting shows the "N posts nuevos" badge on the followe
   await expect(followerPage.getByRole('button', { name: '1 post nuevo' })).toBeVisible({
     timeout: 15_000,
   })
+  // timeline.tsx's aria-live announcement (ROADMAP.md 2.2/1.8) — the same
+  // signal a screen reader user needs, since the sticky button above is
+  // just a new DOM node quietly appearing otherwise. sr-only means
+  // toBeVisible() would (correctly) report false here, so this checks text
+  // presence directly instead — a real render, not just a prop that could
+  // exist unrendered.
+  await expect(followerPage.getByText('1 post nuevo disponible.')).toBeAttached()
 
   await followerPage.getByRole('button', { name: '1 post nuevo' }).click()
   await expect(followerPage.getByText(postText)).toBeVisible()
