@@ -179,6 +179,22 @@ export function createAuthRepository(db: Database) {
         .where(eq(refreshTokens.tokenHash, tokenHash))
     },
 
+    /** ROADMAP.md 2.6: revocation of one session among the caller's own, scoped by userId so no one can revoke a session that isn't theirs by guessing an id. `false` when there was nothing of the caller's left to revoke — already revoked/expired, or the id belongs to someone else, or doesn't exist at all; the route can't and shouldn't distinguish those (session ids are opaque Snowflakes, not a name someone could otherwise enumerate). */
+    async revokeSessionForUser(userId: bigint, sessionId: bigint): Promise<boolean> {
+      const updated = await db
+        .update(refreshTokens)
+        .set({ revokedAt: new Date() })
+        .where(
+          and(
+            eq(refreshTokens.sessionId, sessionId),
+            eq(refreshTokens.userId, userId),
+            isNull(refreshTokens.revokedAt),
+          ),
+        )
+        .returning({ id: refreshTokens.id })
+      return updated.length > 0
+    },
+
     /** One row per live session (family) — the newest token in each. */
     async listActiveSessions(userId: bigint) {
       return db

@@ -7,6 +7,7 @@ import {
   registerRequestSchema,
   registerResponseSchema,
   resetPasswordRequestSchema,
+  snowflakeIdSchema,
   tokenPairResponseSchema,
   verifyEmailRequestSchema,
 } from '@x/contracts'
@@ -243,6 +244,22 @@ export async function registerAuthRoutes(app: FastifyInstance, options: AuthRout
       const user = getAuthenticatedUser(request)
       const sessions = await authService.listSessions(user.id, user.sessionId)
       return reply.send({ data: sessions })
+    },
+  )
+
+  server.delete(
+    '/sessions/:id',
+    {
+      schema: {
+        params: z.object({ id: snowflakeIdSchema }),
+        response: { 204: z.null(), 401: errorResponseSchema, 404: errorResponseSchema },
+      },
+      preHandler: [requireAuth],
+    },
+    async (request, reply) => {
+      const user = getAuthenticatedUser(request)
+      await authService.revokeSession(user.id, BigInt(request.params.id))
+      return reply.status(204).send(null)
     },
   )
 }

@@ -1,5 +1,6 @@
 import {
   ConflictError,
+  NotFoundError,
   UnauthenticatedError,
   UnprocessableError,
   ValidationError,
@@ -306,6 +307,12 @@ export function createAuthService(options: CreateAuthServiceOptions) {
     await repository.revokeAllSessionsForUser(userId)
   }
 
+  /** ROADMAP.md 2.6: revoke one session among the caller's own — "sign out that one stolen/old laptop" without logging every device out (logoutAll) or needing that device's own refresh token (logout). */
+  async function revokeSession(userId: bigint, sessionId: bigint): Promise<void> {
+    const revoked = await repository.revokeSessionForUser(userId, sessionId)
+    if (!revoked) throw new NotFoundError('session', sessionId.toString())
+  }
+
   async function listSessions(userId: bigint, currentSessionId: bigint) {
     const rows = await repository.listActiveSessions(userId)
     return rows.map((row) => ({
@@ -328,5 +335,6 @@ export function createAuthService(options: CreateAuthServiceOptions) {
     logout,
     logoutAll,
     listSessions,
+    revokeSession,
   }
 }

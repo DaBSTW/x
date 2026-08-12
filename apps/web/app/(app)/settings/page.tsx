@@ -1,6 +1,7 @@
 import { ChangePasswordForm } from '@/components/change-password-form'
 import { NotificationPreferencesForm } from '@/components/notification-preferences-form'
 import { PushNotificationsToggle } from '@/components/push-notifications-toggle'
+import { SessionsList } from '@/components/sessions-list'
 
 export default function SettingsPage() {
   return (
@@ -9,6 +10,10 @@ export default function SettingsPage() {
       <section className="flex flex-col gap-2">
         <h2 className="text-lg font-semibold">Contraseña</h2>
         <ChangePasswordForm />
+      </section>
+      <section className="flex flex-col gap-3">
+        <h2 className="text-lg font-semibold">Sesiones activas</h2>
+        <SessionsList />
       </section>
       <section className="flex flex-col gap-3">
         <h2 className="text-lg font-semibold">Notificaciones push</h2>

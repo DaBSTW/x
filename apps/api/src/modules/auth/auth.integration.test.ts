@@ -54,6 +54,11 @@ describe('auth end-to-end cycle', () => {
       S3_ACCESS_KEY_ID: 'x-minio',
       S3_SECRET_ACCESS_KEY: 'x-minio-secret',
       S3_FORCE_PATH_STYLE: true,
+      // This file's whole point is exercising real logins — SPECS.md
+      // §11.3's production ceiling (10/15min) would otherwise force every
+      // new test here to ration its own login calls against every other
+      // test's, the same problem e2e/global-setup.ts raises this for.
+      LOGIN_RATE_LIMIT_MAX: 100,
     }
     app = await buildApp(env)
   }, 120_000)
@@ -393,6 +398,95 @@ describe('auth end-to-end cycle', () => {
     expect(await waitForEmail(mailpitApiUrl, 'cambió la contraseña', 'change_pw@example.com')).toBe(
       true,
     )
+  })
+
+  it('revokes one session by id, leaving the caller’s others alone, and rejects a foreign session id (ROADMAP.md 2.6)', async () => {
+    await app.inject({
+      method: 'POST',
+      url: '/v1/auth/register',
+      payload: {
+        username: 'multi_dev2',
+        email: 'multi_dev2@example.com',
+        password: 'vX7qk-unique-test-passphrase-42',
+        birthDate: '1990-01-01',
+      },
+    })
+    const verificationToken = await waitForVerificationToken(
+      mailpitApiUrl,
+      'multi_dev2@example.com',
+    )
+    await app.inject({
+      method: 'POST',
+      url: '/v1/auth/verify-email',
+      payload: { token: verificationToken },
+    })
+
+    const loginA = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: 'multi_dev2@example.com', password: 'vX7qk-unique-test-passphrase-42' },
+    })
+    const loginB = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: 'multi_dev2@example.com', password: 'vX7qk-unique-test-passphrase-42' },
+    })
+    const accessTokenA = loginA.json().data.accessToken
+    const refreshCookieB = getCookie(loginB, 'refresh_token')
+
+    const sessionsResponse = await app.inject({
+      method: 'GET',
+      url: '/v1/auth/sessions',
+      headers: { authorization: `Bearer ${accessTokenA}` },
+    })
+    const sessions = sessionsResponse.json().data as Array<{ id: string; isCurrent: boolean }>
+    expect(sessions).toHaveLength(2)
+    const otherSessionId = sessions.find((session) => !session.isCurrent)?.id
+    expect(otherSessionId).toBeTruthy()
+
+    // A different account can't revoke it — session ids are opaque, but the
+    // route still scopes strictly to the caller's own sessions.
+    const strangerLogin = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: 'change_pw@example.com', password: 'newPass-vX7qk-88-changed' },
+    })
+    const strangerToken = strangerLogin.json().data.accessToken
+    const strangerAttempt = await app.inject({
+      method: 'DELETE',
+      url: `/v1/auth/sessions/${otherSessionId}`,
+      headers: { authorization: `Bearer ${strangerToken}` },
+    })
+    expect(strangerAttempt.statusCode).toBe(404)
+    const stillAlive = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/refresh',
+      cookies: { refresh_token: refreshCookieB ?? '' },
+    })
+    expect(stillAlive.statusCode).toBe(200)
+
+    // The owner revoking their own other session actually works.
+    const revoke = await app.inject({
+      method: 'DELETE',
+      url: `/v1/auth/sessions/${otherSessionId}`,
+      headers: { authorization: `Bearer ${accessTokenA}` },
+    })
+    expect(revoke.statusCode).toBe(204)
+
+    const revokedRefresh = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/refresh',
+      cookies: { refresh_token: refreshCookieB ?? '' },
+    })
+    expect(revokedRefresh.statusCode).toBe(401)
+
+    // A repeat attempt (already revoked) 404s the same as a nonexistent one.
+    const repeat = await app.inject({
+      method: 'DELETE',
+      url: `/v1/auth/sessions/${otherSessionId}`,
+      headers: { authorization: `Bearer ${accessTokenA}` },
+    })
+    expect(repeat.statusCode).toBe(404)
   })
 })
 

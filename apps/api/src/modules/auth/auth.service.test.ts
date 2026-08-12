@@ -158,6 +158,16 @@ function createFakeRepository() {
       const token = refreshTokensByHash.get(tokenHash)
       if (token) token.revokedAt = new Date()
     },
+    async revokeSessionForUser(userId, sessionId) {
+      let revokedAny = false
+      for (const token of refreshTokensByHash.values()) {
+        if (token.userId === userId && token.sessionId === sessionId && !token.revokedAt) {
+          token.revokedAt = new Date()
+          revokedAny = true
+        }
+      }
+      return revokedAny
+    },
     async listActiveSessions(userId) {
       return [...refreshTokensByHash.values()].filter(
         (token) => token.userId === userId && !token.revokedAt && token.expiresAt > new Date(),
@@ -675,6 +685,75 @@ describe('createAuthService', () => {
 
       expect(sessions).toHaveLength(1)
       expect(sessions[0]?.isCurrent).toBe(true)
+    })
+  })
+
+  describe('revokeSession', () => {
+    it("revokes exactly the targeted session, leaving the caller's other sessions alone", async () => {
+      const { service, repository, tokenService } = createService()
+      await repository.insertUserWithCounters(
+        makeUser({
+          id: 1n,
+          email: 'ana@example.com',
+          passwordHash: await hashPassword('password123456'),
+        }),
+      )
+      const sessionA = await service.login(
+        { email: 'ana@example.com', password: 'password123456' },
+        META,
+      )
+      const sessionB = await service.login(
+        { email: 'ana@example.com', password: 'password123456' },
+        META,
+      )
+      const { sid } = await tokenService.verifyAccessToken(sessionA.accessToken)
+
+      await service.revokeSession(1n, BigInt(sid))
+
+      await expect(service.refresh(sessionA.refreshToken, META)).rejects.toMatchObject({
+        code: 'UNAUTHENTICATED',
+      })
+      await expect(service.refresh(sessionB.refreshToken, META)).resolves.toBeDefined()
+    })
+
+    it("throws NotFoundError when the session id belongs to someone else's account", async () => {
+      const { service, repository, tokenService } = createService()
+      await repository.insertUserWithCounters(
+        makeUser({
+          id: 1n,
+          email: 'ana@example.com',
+          passwordHash: await hashPassword('password123456'),
+        }),
+      )
+      await repository.insertUserWithCounters(
+        makeUser({
+          id: 2n,
+          username: 'bob',
+          usernameLower: 'bob',
+          email: 'bob@example.com',
+          passwordHash: await hashPassword('password123456'),
+        }),
+      )
+      const bobSession = await service.login(
+        { email: 'bob@example.com', password: 'password123456' },
+        META,
+      )
+      const { sid } = await tokenService.verifyAccessToken(bobSession.accessToken)
+
+      await expect(service.revokeSession(1n, BigInt(sid))).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      })
+      // Untouched — the attempt from the wrong account had no effect.
+      await expect(service.refresh(bobSession.refreshToken, META)).resolves.toBeDefined()
+    })
+
+    it('throws NotFoundError for a session id that does not exist', async () => {
+      const { service, repository } = createService()
+      await repository.insertUserWithCounters(makeUser({ id: 1n }))
+
+      await expect(service.revokeSession(1n, 999999n)).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      })
     })
   })
 })
