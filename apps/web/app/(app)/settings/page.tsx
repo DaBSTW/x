@@ -30,7 +30,7 @@ export default function SettingsPage() {
         <PushNotificationsToggle />
       </section>
       <section className="flex flex-col gap-3">
-        <h2 className="text-lg font-semibold">Qué recibir por push</h2>
+        <h2 className="text-lg font-semibold">Qué notificaciones recibir</h2>
         <NotificationPreferencesForm />
       </section>
     </div>

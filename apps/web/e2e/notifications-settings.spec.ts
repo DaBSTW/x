@@ -8,7 +8,7 @@ import { signUpAndLogIn } from './helpers'
 // half is independent of whether push is configured at all (they only
 // matter once a subscription exists to check them against), so it's
 // covered fully against the real API.
-test('shows push as unconfigured and persists a per-kind preference toggle (ROADMAP.md 2.9)', async ({
+test('shows push as unconfigured and persists a per-kind, per-channel preference toggle (ROADMAP.md 2.9)', async ({
   page,
 }) => {
   await signUpAndLogIn(page, 'pushcfg')
@@ -18,17 +18,26 @@ test('shows push as unconfigured and persists a per-kind preference toggle (ROAD
     page.getByText('Las notificaciones push no están configuradas en este servidor.'),
   ).toBeVisible()
 
-  const likeToggle = page.getByLabel('Me gusta')
-  // exact: true — substring match would also catch protected-account-toggle.tsx's
-  // "Privacidad" section above, whose description mentions "nuevos seguidores" too.
-  const followToggle = page.getByLabel('Nuevos seguidores', { exact: true })
-  await expect(likeToggle).not.toBeChecked() // default: off for high-volume kinds
-  await expect(followToggle).toBeChecked() // default: on (SPECS.md §13.2)
+  // Each row now has two checkboxes ("En la app" / "Push") — exact: true
+  // throughout, since "Me gusta" alone would match both this row's own
+  // in-app and push checkboxes via substring (their accessible names are
+  // "En la app: Me gusta" / "Push: Me gusta"), the same class of collision
+  // this suite has hit before with plain label/text matches.
+  const likeInApp = page.getByLabel('En la app: Me gusta', { exact: true })
+  const likePush = page.getByLabel('Push: Me gusta', { exact: true })
+  const followPush = page.getByLabel('Push: Nuevos seguidores', { exact: true })
 
-  await likeToggle.click()
-  await expect(likeToggle).toBeChecked()
+  await expect(likeInApp).toBeChecked() // in_app defaults to on for every kind
+  await expect(likePush).not.toBeChecked() // push defaults off for high-volume kinds
+  await expect(followPush).toBeChecked() // push defaults on for follow (SPECS.md §13.2)
+
+  await likePush.click()
+  await expect(likePush).toBeChecked()
+  await likeInApp.click()
+  await expect(likeInApp).not.toBeChecked()
 
   await page.reload()
-  await expect(page.getByLabel('Me gusta')).toBeChecked()
-  await expect(page.getByLabel('Nuevos seguidores', { exact: true })).toBeChecked()
+  await expect(page.getByLabel('Push: Me gusta', { exact: true })).toBeChecked()
+  await expect(page.getByLabel('En la app: Me gusta', { exact: true })).not.toBeChecked()
+  await expect(page.getByLabel('Push: Nuevos seguidores', { exact: true })).toBeChecked()
 })
