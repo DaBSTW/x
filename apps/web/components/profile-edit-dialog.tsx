@@ -140,7 +140,7 @@ export function ProfileEditDialog({
             <Button
               type="button"
               variant="outline"
-              className="absolute bottom-2 right-2"
+              className="absolute bottom-2 end-2"
               disabled={isUploadingBanner}
               onClick={() => bannerInputRef.current?.click()}
             >

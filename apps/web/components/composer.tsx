@@ -188,7 +188,7 @@ function AttachmentThumbnail({
         type="button"
         aria-label="Quitar imagen"
         onClick={onRemove}
-        className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-background/80 text-xs leading-none text-foreground hover:bg-background"
+        className="absolute end-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-background/80 text-xs leading-none text-foreground hover:bg-background"
       >
         ×
       </button>
@@ -202,7 +202,7 @@ function AttachmentThumbnail({
             setIsEditingAlt(true)
           }}
           className={cn(
-            'absolute bottom-1 left-1 rounded bg-background/80 px-1 text-[10px] font-semibold leading-tight hover:bg-background',
+            'absolute bottom-1 start-1 rounded bg-background/80 px-1 text-[10px] font-semibold leading-tight hover:bg-background',
             attachment.altText ? 'text-primary' : 'text-foreground',
           )}
         >

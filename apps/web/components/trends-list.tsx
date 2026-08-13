@@ -61,7 +61,7 @@ export function TrendsList() {
         <ol className="flex flex-col divide-y divide-border">
           {trends.map((trend, index) => (
             <li key={trend.hashtag} className="flex items-center gap-3 py-3">
-              <span className="w-5 shrink-0 text-right text-sm tabular-nums text-muted-foreground">
+              <span className="w-5 shrink-0 text-end text-sm tabular-nums text-muted-foreground">
                 {index + 1}
               </span>
               <div className="flex flex-1 flex-col">

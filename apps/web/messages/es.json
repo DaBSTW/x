@@ -1,0 +1,31 @@
+{
+  "Metadata": {
+    "title": "X",
+    "description": "Una plataforma de microblogging en tiempo real, abierta y a escala."
+  },
+  "Settings": {
+    "title": "Configuración",
+    "privacy": "Privacidad",
+    "password": "Contraseña",
+    "twoFactor": "Verificación en dos pasos",
+    "sessions": "Sesiones activas",
+    "pushNotifications": "Notificaciones push",
+    "notificationPreferences": "Qué notificaciones recibir",
+    "language": "Idioma"
+  },
+  "LanguageSwitcher": {
+    "label": "Idioma de la interfaz",
+    "es": "Español",
+    "en": "Inglés"
+  },
+  "SessionsList": {
+    "loading": "Cargando sesiones…",
+    "ariaLabel": "Sesiones activas",
+    "count": "{count, plural, =0 {Sin sesiones activas} one {# sesión activa} other {# sesiones activas}}",
+    "unknownDevice": "Dispositivo desconocido",
+    "unknownIp": "IP desconocida",
+    "currentSession": "Esta sesión",
+    "revoke": "Cerrar sesión",
+    "revokeError": "No se pudo cerrar la sesión."
+  }
+}

@@ -17,7 +17,7 @@ export function EmptyTimeline() {
         <p className="text-sm text-muted-foreground">Sigue a alguien para ver sus posts aquí.</p>
       </div>
       {!isLoading && suggestions && suggestions.length > 0 && (
-        <ul className="flex w-full max-w-sm flex-col gap-3 text-left">
+        <ul className="flex w-full max-w-sm flex-col gap-3 text-start">
           {suggestions.map((user) => {
             const isFollowingThisUser = follow.isPending && follow.variables === user.id
             return (

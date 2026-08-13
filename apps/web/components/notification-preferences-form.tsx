@@ -59,7 +59,7 @@ export function NotificationPreferencesForm() {
       <table className="w-full text-sm">
         <thead>
           <tr>
-            <th className="text-left font-normal text-muted-foreground">Tipo</th>
+            <th className="text-start font-normal text-muted-foreground">Tipo</th>
             {NOTIFICATION_CHANNELS.map((channel) => (
               <th key={channel} className="px-2 font-normal text-muted-foreground">
                 {CHANNEL_LABELS[channel]}
