@@ -218,6 +218,19 @@ function createFakeRepository() {
         .sort((a, b) => followerCountOf(b.id) - followerCountOf(a.id))
         .slice(0, limit)
     },
+    async findManyByIds(ids) {
+      return ids.flatMap((id) => {
+        const user = users.get(id)
+        return user ? [user] : []
+      })
+    },
+    async findFolloweeIds(followerId, limit) {
+      return followsList
+        .filter((f) => f.followerId === followerId)
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        .slice(0, limit)
+        .map((f) => f.followeeId)
+    },
   }
 
   function addUser(overrides: Partial<FakeUser> = {}): FakeUser {

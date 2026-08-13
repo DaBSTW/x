@@ -11,6 +11,7 @@ export type PostDocument = {
   text: string
   hashtags: string[]
   mentions: string[]
+  has_links: boolean
   lang: string | null
   has_media: boolean
   is_sensitive: boolean
@@ -21,7 +22,7 @@ export type PostDocument = {
 export type PostDocumentInput = {
   id: bigint
   authorId: bigint
-  /** '' when the author row wasn't found in the same re-fetch (shouldn't happen — author_id is NOT NULL — but never let a lookup gap crash indexing). */
+  /** '' when the author row wasn't found in the same re-fetch (shouldn't happen — author_id is NOT NULL — but never let a lookup gap crash indexing). Case doesn't matter here — buildPostDocument lowercases it. */
   authorHandle: string
   text: string | null
   lang: string | null
@@ -57,14 +58,22 @@ export function buildPostDocument(input: PostDocumentInput): PostDocument {
   const mentions = entities
     .filter((entity) => entity.kind === 'mention')
     .map((entity) => entity.value.toLowerCase())
+  const hasLinks = entities.some((entity) => entity.kind === 'url')
 
   return {
     id: input.id.toString(),
     author_id: input.authorId.toString(),
-    author_handle: input.authorHandle,
+    // Same reasoning as mentions above — author_handle is a `keyword`
+    // field, `from:`/`to:` filter against it case-insensitively
+    // (query-operators.ts lowercases whatever the searcher typed), so both
+    // sides need to agree on one case. The *displayed* username always
+    // comes from Postgres hydration afterward (search.service.ts), never
+    // from this index, so lowercasing it here loses nothing.
+    author_handle: input.authorHandle.toLowerCase(),
     text: input.text ?? '',
     hashtags,
     mentions,
+    has_links: hasLinks,
     lang: input.lang,
     has_media: input.hasMedia,
     is_sensitive: input.isSensitive,

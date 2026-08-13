@@ -2,6 +2,7 @@ import cookie from '@fastify/cookie'
 import cors from '@fastify/cors'
 import helmet from '@fastify/helmet'
 import swagger from '@fastify/swagger'
+import { Client as OpenSearchClient } from '@opensearch-project/opensearch'
 import scalarApiReference from '@scalar/fastify-api-reference'
 import { REALTIME_TICKET_TTL_SECONDS } from '@x/utils'
 import Fastify, { type FastifyInstance } from 'fastify'
@@ -47,6 +48,9 @@ import { registerPushRoutes } from './modules/push/push.routes.js'
 import { createPushService } from './modules/push/push.service.js'
 import { registerRealtimeRoutes } from './modules/realtime/realtime.routes.js'
 import { createRealtimeService } from './modules/realtime/realtime.service.js'
+import { createSearchRepository } from './modules/search/search.repository.js'
+import { registerSearchRoutes } from './modules/search/search.routes.js'
+import { createSearchService } from './modules/search/search.service.js'
 import { createSocialGraphRepository } from './modules/social-graph/social-graph.repository.js'
 import { registerSocialGraphRoutes } from './modules/social-graph/social-graph.routes.js'
 import { createSocialGraphService } from './modules/social-graph/social-graph.service.js'
@@ -253,6 +257,25 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   const trendsRepository = createTrendsRepository(app.db)
   const trendsService = createTrendsService(trendsRepository)
 
+  // Query-time only — apps/workers' search-indexer.worker.ts owns writing
+  // to these indices (ROADMAP.md 2.3), this app only ever reads them.
+  const openSearchClient = new OpenSearchClient({ node: env.OPENSEARCH_URL })
+  const searchRepository = createSearchRepository(openSearchClient)
+  const searchService = createSearchService(
+    searchRepository,
+    postsService,
+    socialGraphRepository,
+    {
+      findLikedPostIds: interactionsRepository.findLikedPostIds,
+      findBookmarkedPostIds: interactionsRepository.findBookmarkedPostIds,
+      findRepostedPostIds: postsRepository.findRepostedPostIds,
+    },
+    // Structurally identical to BlockLookup/FollowingLookup already — same
+    // no-adapter-needed reuse of socialGraphRepository as postsService above.
+    socialGraphRepository,
+    socialGraphRepository,
+  )
+
   app.get('/health', async () => ({ status: 'ok' }))
 
   await app.register(
@@ -342,6 +365,13 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   await app.register(
     async (instance) => {
       await registerTrendsRoutes(instance, { trendsService })
+    },
+    { prefix: '/v1' },
+  )
+
+  await app.register(
+    async (instance) => {
+      await registerSearchRoutes(instance, { searchService, tokenService })
     },
     { prefix: '/v1' },
   )

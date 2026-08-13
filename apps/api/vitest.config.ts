@@ -24,6 +24,13 @@ export default defineConfig({
         'src/emails/verification-email.tsx',
         'src/emails/password-reset-email.tsx',
         'src/emails/security-alert-email.tsx',
+        // Pure logic factored out of search.service.ts (parsing/query
+        // building/cursor encoding, none of it touching OpenSearch itself)
+        // — same "*.service.ts glob doesn't already catch this" reasoning
+        // as the individually-listed emails above.
+        'src/modules/search/query-operators.ts',
+        'src/modules/search/query-builder.ts',
+        'src/modules/search/cursor.ts',
       ],
       thresholds: { lines: 80, statements: 80, branches: 80, functions: 80 },
     },

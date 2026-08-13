@@ -18,6 +18,11 @@ const env: Env = {
   SMTP_HOST: 'localhost',
   SMTP_PORT: 1025,
   MAIL_FROM: 'no-reply@x.example.com',
+  // Unlike postgres.js/ioredis above, @opensearch-project/opensearch's
+  // Client throws synchronously in its constructor without a `node` —
+  // still never actually connected to just to read the swagger spec off
+  // the built instance, same as every other placeholder value here.
+  OPENSEARCH_URL: 'http://localhost:9200',
 }
 
 const app = await buildApp(env)

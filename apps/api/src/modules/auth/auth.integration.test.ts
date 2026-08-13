@@ -55,6 +55,9 @@ describe('auth end-to-end cycle', () => {
       S3_ACCESS_KEY_ID: 'x-minio',
       S3_SECRET_ACCESS_KEY: 'x-minio-secret',
       S3_FORCE_PATH_STYLE: true,
+      // Query-time only search route — none of this file's tests exercise /search,
+      // so a real reachable OpenSearch isn't needed for the app to boot.
+      OPENSEARCH_URL: 'http://localhost:9200',
       // This file's whole point is exercising real logins — SPECS.md
       // §11.3's production ceiling (10/15min) would otherwise force every
       // new test here to ration its own login calls against every other

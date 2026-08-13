@@ -61,6 +61,12 @@ export const POSTS_INDEX_BODY = {
       },
       hashtags: { type: 'keyword' },
       mentions: { type: 'keyword' },
+      // Not in SPECS.md §10.1's own mapping, added for `filter:links`
+      // (§10.3) — there's no other field a filter clause could match a URL
+      // against without a full-text scan of `text` on every query. Derived
+      // for free in apps/workers' document-builders.ts, which already runs
+      // `text` through parseEntities for hashtags/mentions.
+      has_links: { type: 'boolean' },
       lang: { type: 'keyword' },
       has_media: { type: 'boolean' },
       is_sensitive: { type: 'boolean' },
@@ -133,6 +139,28 @@ async function ensureIndex(
   body: Record<string, unknown>,
 ): Promise<void> {
   const { body: exists } = await client.indices.exists({ index })
-  if (exists) return
-  await client.indices.create({ index, body })
+  if (!exists) {
+    await client.indices.create({ index, body })
+    return
+  }
+  // Already exists — still apply the current mapping's `properties` via
+  // putMapping, which OpenSearch treats as purely additive (a genuinely new
+  // field key is safe and picked up immediately; redefining an existing
+  // field's type 400s instead of silently corrupting it). This is what
+  // lets a mapping addition like `has_links` above reach an index some
+  // earlier boot already created, without a manual reindex. `settings`
+  // (analyzers, shard count) can never change this way — that's what the
+  // later blue-green reindex checkpoint (SPECS.md §10.2) is for.
+  //
+  // Cast through `unknown`, same as opensearch-client.integration.test.ts's
+  // own precedent for this client's generated types: `body`'s real shape
+  // (POSTS_INDEX_BODY/USERS_INDEX_BODY above, the only place either is
+  // authored) is a correct OpenSearch mapping, but a plain `Record<string,
+  // unknown>` parameter loses the structure putMapping's generated
+  // `Record<string, Property>` type wants to see.
+  const { properties } = (body as { mappings: { properties: unknown } }).mappings
+  await client.indices.putMapping({
+    index,
+    body: { properties } as unknown as Parameters<typeof client.indices.putMapping>[0]['body'],
+  })
 }

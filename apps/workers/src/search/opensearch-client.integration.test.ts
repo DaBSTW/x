@@ -1,7 +1,11 @@
 import { POSTS_SEARCH_INDEX, USERS_SEARCH_INDEX } from '@x/utils'
 import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { createOpenSearchClient, ensureSearchIndices } from './opensearch-client.js'
+import {
+  POSTS_INDEX_BODY,
+  createOpenSearchClient,
+  ensureSearchIndices,
+} from './opensearch-client.js'
 
 // No @testcontainers/opensearch module compatible with this repo's pinned
 // testcontainers@10.16.0 exists (only 11.x+) — a plain GenericContainer,
@@ -69,6 +73,61 @@ describe('opensearch-client', () => {
 
     const { body: fetched } = await client.get({ index: POSTS_SEARCH_INDEX, id: '1' })
     expect(fetched._source).toMatchObject({ text: 'hola mundo' })
+  })
+
+  it('adds a new field to an already-existing index via putMapping, instead of skipping it entirely', async () => {
+    const client = createOpenSearchClient({
+      url: `http://${container.getHost()}:${container.getMappedPort(9200)}`,
+    })
+    // Simulates an index created by an older boot, before `has_links` was
+    // added to POSTS_INDEX_BODY — the *exact* real mapping (same analyzer,
+    // same every other field), minus exactly `has_links`. Not a
+    // freestanding trimmed-down mapping: OpenSearch rejects putMapping
+    // calls that would redefine an *existing* field's analyzer, so this has
+    // to stay a true subset of the real mapping to isolate what this test
+    // is actually about (an additive field showing up later), rather than
+    // accidentally hitting that unrelated restriction instead.
+    // Self-contained (CODESTYLE.md §14 — no implicit ordering against the
+    // other tests in this file): deletes POSTS_SEARCH_INDEX first
+    // regardless of whether an earlier test already created it.
+    const { has_links: _omitted, ...staleProperties } = POSTS_INDEX_BODY.mappings.properties
+    await client.indices.delete({ index: POSTS_SEARCH_INDEX }).catch(() => {})
+    await client.indices.create({
+      index: POSTS_SEARCH_INDEX,
+      // Cast through unknown, same as opensearch-client.ts's own ensureIndex
+      // — POSTS_INDEX_BODY's `as const` literals (readonly arrays, literal
+      // unions) don't structurally satisfy the client's generated types
+      // when passed directly, only once erased to Record<string, unknown>.
+      body: {
+        settings: POSTS_INDEX_BODY.settings,
+        mappings: { properties: staleProperties },
+      } as Record<string, unknown>,
+    })
+
+    const { body: before } = await client.indices.getMapping({ index: POSTS_SEARCH_INDEX })
+    expect(before[POSTS_SEARCH_INDEX]?.mappings?.properties?.has_links).toBeUndefined()
+
+    await ensureSearchIndices(client)
+
+    const { body: after } = await client.indices.getMapping({ index: POSTS_SEARCH_INDEX })
+    expect(after[POSTS_SEARCH_INDEX]?.mappings?.properties?.has_links).toMatchObject({
+      type: 'boolean',
+    })
+
+    // Not just present in the mapping — actually queryable, on a document
+    // indexed after the field was added.
+    await client.index({
+      index: POSTS_SEARCH_INDEX,
+      id: 'stale-1',
+      body: { id: 'stale-1', text: 'sin enlaces', has_links: true },
+      refresh: true,
+    })
+    const { body: result } = await client.search({
+      index: POSTS_SEARCH_INDEX,
+      body: { query: { term: { has_links: true } } },
+    })
+    const ids = (result.hits.hits as unknown as Array<{ _id: string }>).map((hit) => hit._id)
+    expect(ids).toContain('stale-1')
   })
 
   it('indexes usernames with edge_ngram so a short prefix search matches (typeahead, SPECS.md §10.1)', async () => {

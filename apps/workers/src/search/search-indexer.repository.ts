@@ -38,14 +38,18 @@ export function createSearchIndexerRepository(db: Database) {
       const postIds = rows.map((row) => row.id)
       const authorIds = [...new Set(rows.map((row) => row.authorId))]
       const [authors, counters, mediaRows] = await Promise.all([
+        // usernameLower, not username — buildPostDocument stores
+        // author_handle lowercase either way (it lowercases defensively),
+        // but selecting the column that's already canonical avoids a
+        // redundant re-lowercase and says directly what this value is for.
         db
-          .select({ id: users.id, username: users.username })
+          .select({ id: users.id, usernameLower: users.usernameLower })
           .from(users)
           .where(inArray(users.id, authorIds)),
         db.select().from(postCounters).where(inArray(postCounters.postId, postIds)),
         db.select({ postId: media.postId }).from(media).where(inArray(media.postId, postIds)),
       ])
-      const handleByAuthorId = new Map(authors.map((author) => [author.id, author.username]))
+      const handleByAuthorId = new Map(authors.map((author) => [author.id, author.usernameLower]))
       const countersByPostId = new Map(counters.map((row) => [row.postId, row]))
       const postIdsWithMedia = new Set(
         mediaRows.map((row) => row.postId).filter((postId): postId is bigint => postId !== null),

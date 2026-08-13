@@ -45,6 +45,20 @@ describe('buildPostDocument', () => {
     expect(doc.text).toBe('')
     expect(doc.hashtags).toEqual([])
     expect(doc.mentions).toEqual([])
+    expect(doc.has_links).toBe(false)
+  })
+
+  it('sets has_links from the same parseEntities pass, for filter:links (SPECS.md §10.3)', () => {
+    expect(
+      buildPostDocument(basePostInput({ text: 'mira esto https://example.com/x' })).has_links,
+    ).toBe(true)
+    expect(buildPostDocument(basePostInput({ text: 'sin enlaces aquí' })).has_links).toBe(false)
+  })
+
+  it('lowercases author_handle regardless of the display-case username it was given', () => {
+    expect(buildPostDocument(basePostInput({ authorHandle: 'AnaCapital' })).author_handle).toBe(
+      'anacapital',
+    )
   })
 
   it('carries lang/is_sensitive/has_media/created_at straight through', () => {

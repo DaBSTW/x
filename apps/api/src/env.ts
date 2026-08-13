@@ -53,6 +53,11 @@ const envSchema = z
     S3_ACCESS_KEY_ID: z.string().default('x-minio'),
     S3_SECRET_ACCESS_KEY: z.string().default('x-minio-secret'),
     S3_FORCE_PATH_STYLE: z.coerce.boolean().default(true),
+
+    // Search (ROADMAP.md 2.3 / SPECS.md §10) — query-time only; apps/api
+    // never writes to OpenSearch (apps/workers' search-indexer.worker.ts
+    // owns that), so this is the only OpenSearch config this app needs.
+    OPENSEARCH_URL: z.string().url().default('http://localhost:9200'),
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV !== 'production') return

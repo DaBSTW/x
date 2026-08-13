@@ -66,6 +66,9 @@ describe('push routes', () => {
       S3_ACCESS_KEY_ID: 'x-minio',
       S3_SECRET_ACCESS_KEY: 'x-minio-secret',
       S3_FORCE_PATH_STYLE: true,
+      // Query-time only search route — none of this file's tests exercise /search,
+      // so a real reachable OpenSearch isn't needed for the app to boot.
+      OPENSEARCH_URL: 'http://localhost:9200',
       VAPID_PUBLIC_KEY: 'test-vapid-public-key',
     }
     app = await buildApp(env)

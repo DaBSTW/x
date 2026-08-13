@@ -346,5 +346,38 @@ export function createSocialGraphRepository(db: Database) {
         .orderBy(desc(userCounters.followersCount))
         .limit(limit)
     },
+
+    /** search.service.ts's "people" mode — hydrates a ranked list of ids from OpenSearch into real profile rows. Order is not guaranteed (same as posts.repository.ts's findPostsByIds); the caller re-sorts to match its own ranked id list. */
+    async findManyByIds(ids: bigint[]) {
+      if (ids.length === 0) return []
+      return db
+        .select({
+          id: users.id,
+          username: users.username,
+          displayName: users.displayName,
+          avatarUrl: users.avatarUrl,
+          isVerified: users.isVerified,
+        })
+        .from(users)
+        .where(and(inArray(users.id, ids), isNull(users.deletedAt)))
+    },
+
+    /**
+     * search.service.ts's "afinidad social" function_score signal
+     * (SPECS.md §10.3) — capped, not the viewer's whole following list: a
+     * function_score `terms` clause holding thousands of ids would bloat
+     * every `top`-mode query for a viewer who follows a lot of accounts,
+     * for a signal that's already just one of several inputs, not the
+     * ranking on its own.
+     */
+    async findFolloweeIds(followerId: bigint, limit: number): Promise<bigint[]> {
+      const rows = await db
+        .select({ followeeId: follows.followeeId })
+        .from(follows)
+        .where(eq(follows.followerId, followerId))
+        .orderBy(desc(follows.createdAt))
+        .limit(limit)
+      return rows.map((row) => row.followeeId)
+    },
   }
 }
