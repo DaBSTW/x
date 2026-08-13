@@ -52,6 +52,10 @@ const envSchema = z.object({
   // redeploy, and a hand-edited DB row would need the same manual
   // intervention anyway.
   TRENDS_BLACKLIST_HASHTAGS: z.string().default(''),
+
+  // Search (ROADMAP.md 2.3 / SPECS.md §10) — same "always has a
+  // docker-compose.yml-matching default" posture as CLICKHOUSE_* above.
+  OPENSEARCH_URL: z.string().url().default('http://localhost:9200'),
 })
 
 export type Env = z.infer<typeof envSchema>

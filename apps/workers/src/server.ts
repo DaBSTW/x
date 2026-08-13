@@ -12,6 +12,7 @@ import { createMediaWorker } from './media/media.worker.js'
 import { createNotificationsRepository } from './notifications/notifications.repository.js'
 import { createNotificationsWorker } from './notifications/notifications.worker.js'
 import { createWebPushSender } from './notifications/push-sender.js'
+import { createOpenSearchClient, ensureSearchIndices } from './search/opensearch-client.js'
 import { createClickHouseClient, ensureHashtagMentionsTable } from './trends/clickhouse-client.js'
 import { createTrendIngestRepository } from './trends/trend-ingest.repository.js'
 import { createTrendIngestWorker } from './trends/trend-ingest.worker.js'
@@ -79,13 +80,28 @@ const mediaWorker = createMediaWorker({
 // module here it's fine for it to not be synchronous) — a job arriving
 // before the table exists would fail every time until the next deploy,
 // instead of just the first cold start taking a few ms longer.
+//
+// The ensure call itself is wrapped in try/catch rather than left to throw:
+// ClickHouse is documented (docker-compose.yml) as non-critical — losing it
+// loses trending topics, never a post, a like, or a DM — so an unreachable
+// instance at boot should degrade (trend-ingest jobs fail individually and
+// get retried by BullMQ like any other job failure) rather than crash
+// fan-out, notifications, and media processing along with it. Deliberately
+// different from apps/api's ensurePublicBucket, which DOES process.exit(1):
+// S3 is load-bearing for every media URL the API returns, so booting
+// without it would just fail every request anyway — there's no degraded
+// mode to fall back to there, unlike here.
 const clickhouseClient = createClickHouseClient({
   url: env.CLICKHOUSE_URL,
   username: env.CLICKHOUSE_USER,
   password: env.CLICKHOUSE_PASSWORD,
   database: env.CLICKHOUSE_DATABASE,
 })
-await ensureHashtagMentionsTable(clickhouseClient)
+try {
+  await ensureHashtagMentionsTable(clickhouseClient)
+} catch (error) {
+  console.warn('ClickHouse unreachable at boot — trending topics will be unavailable:', error)
+}
 const trendIngestWorker = createTrendIngestWorker({
   repository: createTrendIngestRepository(clickhouseClient),
   redisUrl: env.REDIS_URL,
@@ -94,6 +110,20 @@ const trendIngestWorker = createTrendIngestWorker({
 trendIngestWorker.worker.on('failed', (job, error) => {
   console.error(`trend-ingest job ${job?.id ?? '(unknown)'} failed:`, error)
 })
+
+// ROADMAP.md 2.3 — same top-level-await self-healing as ClickHouse above,
+// and the same non-fatal posture for the same reason: the actual CDC
+// indexer worker isn't built yet (search/README-shaped checkpoint, not this
+// one), but ensuring the index mappings exist is a self-contained piece
+// worth having ready the moment anything does start producing documents for
+// them. An unreachable OpenSearch at boot should degrade (search
+// unavailable) rather than take the whole process down with it.
+const openSearchClient = createOpenSearchClient({ url: env.OPENSEARCH_URL })
+try {
+  await ensureSearchIndices(openSearchClient)
+} catch (error) {
+  console.warn('OpenSearch unreachable at boot — search will be unavailable:', error)
+}
 
 console.info(
   'workers: fan-out, notifications, media, counters flush, and trend-ingest workers ready',
@@ -108,7 +138,7 @@ async function shutdown(): Promise<void> {
     mediaWorker.close(),
     trendIngestWorker.close(),
   ])
-  await clickhouseClient.close()
+  await Promise.all([clickhouseClient.close(), openSearchClient.close()])
   process.exit(0)
 }
 

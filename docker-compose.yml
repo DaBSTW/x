@@ -12,6 +12,12 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    # wal_level=logical (default is `replica`) — Debezium's Postgres
+    # connector (ROADMAP.md 2.3, SPECS.md §10.2) reads change data through
+    # logical decoding (the built-in pgoutput plugin), which doesn't exist
+    # below this level. Harmless for every other reader of this same
+    # instance: nothing else here uses replication at all.
+    command: ["postgres", "-c", "wal_level=logical"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U x"]
       interval: 5s
@@ -77,25 +83,106 @@ services:
       timeout: 5s
       retries: 10
 
-  # ⚪ OpenSearch and Kafka join the fan-out only in phase 2 (search, CDC) and
-  # phase 3 (event bus at scale) — see ROADMAP.md 0.2. Left commented out so
-  # `docker compose up` stays light in phases 0-1.
-  # opensearch:
-  #   image: opensearchproject/opensearch:2
-  #   environment:
-  #     - discovery.type=single-node
-  #     - DISABLE_SECURITY_PLUGIN=true
-  #   ports:
-  #     - "9200:9200"
-  #
-  # kafka:
-  #   image: redpandadata/redpanda:latest
-  #   command: redpanda start --smp 1 --overprovisioned --node-id 0 --check=false
-  #   ports:
-  #     - "9092:9092"
+  # ROADMAP.md 2.3 — SPECS.md §10.1/§10.2: full-text search + typeahead,
+  # kept behind a single-node/no-security config since this is local dev,
+  # never a production topology.
+  opensearch:
+    image: opensearchproject/opensearch:2
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - DISABLE_SECURITY_PLUGIN=true
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      # SPECS.md never asks for more than a laptop-scale local index —
+      # OpenSearch's own JVM default (a fraction of host RAM) is tuned for
+      # a dedicated search node, not one of six services sharing this box.
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Kafka-API-compatible, not literal Kafka — a single Redpanda binary needs
+  # no separate Zookeeper (unlike a real Kafka broker), which matters here:
+  # SPECS.md §10.2 only asks for a durable log between Debezium and the
+  # indexer, not a specific implementation, and this is a local dev compose
+  # file, never the production topology ROADMAP.md 3.1 migrates onto Kafka
+  # proper. debezium/connect (below) speaks the Kafka wire protocol against
+  # this exactly the same as it would against real Kafka.
+  redpanda:
+    image: redpandadata/redpanda:latest
+    restart: unless-stopped
+    command:
+      - redpanda
+      - start
+      - --smp
+      - "1"
+      - --memory
+      - "512M"
+      - --overprovisioned
+      - --node-id
+      - "0"
+      - --check=false
+      # Two listeners on one binary, Redpanda's own documented way to serve
+      # both a same-network container (debezium, below, reaching this one
+      # by service name) and a host process (Testcontainers-driven tests,
+      # or a developer's own machine) without them fighting over which
+      # address gets advertised to Kafka clients after they connect.
+      - --kafka-addr
+      - PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092
+      - --advertise-kafka-addr
+      - PLAINTEXT://redpanda:29092,OUTSIDE://localhost:9092
+    ports:
+      - "9092:9092"
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # ROADMAP.md 2.3 — SPECS.md §10.2's "CDC con Debezium → Kafka": the
+  # standard containerized path (Kafka Connect + the Debezium Postgres
+  # connector bundled together), configured against redpanda above instead
+  # of a real Kafka cluster — same reasoning redpanda's own comment gives.
+  # Registering an actual connector (which tables, which topics) happens
+  # via this container's REST API at runtime (scripts/register-cdc-connector.ts),
+  # not baked into the image, so it can be re-run idempotently.
+  debezium:
+    image: debezium/connect:2.7.3.Final
+    restart: unless-stopped
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      BOOTSTRAP_SERVERS: redpanda:29092
+      GROUP_ID: x-cdc
+      # Debezium's own internal bookkeeping topics (connector offsets,
+      # config, status) — distinct from the actual change-data topics a
+      # connector config creates per table, never read by apps/workers.
+      CONFIG_STORAGE_TOPIC: _x_connect_configs
+      OFFSET_STORAGE_TOPIC: _x_connect_offsets
+      STATUS_STORAGE_TOPIC: _x_connect_status
+    ports:
+      - "8083:8083" # Kafka Connect REST API — connector registration only, nothing in apps/* calls this at runtime
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8083/connectors || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
 
 volumes:
   postgres_data:
   redis_data:
   minio_data:
   clickhouse_data:
+  opensearch_data:
+  redpanda_data:

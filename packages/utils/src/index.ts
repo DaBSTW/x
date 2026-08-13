@@ -113,3 +113,9 @@ export {
   passesTrendFilters,
 } from './trends.js'
 export type { TrendCandidateStats, TrendFilterInput } from './trends.js'
+export {
+  CDC_TOPIC_PREFIX,
+  POSTS_SEARCH_INDEX,
+  USERS_SEARCH_INDEX,
+  cdcTopicName,
+} from './search.js'
