@@ -30,6 +30,12 @@ export default defineConfig({
         'lib/notification-grouping.ts',
         'lib/realtime-backoff.ts',
         'lib/shortcuts-dialog-store.ts',
+        // A hook, unlike the data-fetching ones this file's own comment
+        // excludes above — but no network/React Query involved, just a
+        // mockable browser API (matchMedia), so unlike use-session/
+        // use-timeline it's meaningfully unit-testable without a real
+        // backend at all.
+        'lib/use-reduced-motion.ts',
         'components/ui/button.tsx',
         'components/rich-text.tsx',
       ],

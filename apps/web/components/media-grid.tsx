@@ -8,7 +8,13 @@ import {
 } from '@/lib/media-grid-layout'
 import type { PostMediaItem } from '@x/contracts'
 import { decode } from 'blurhash'
+import dynamic from 'next/dynamic'
 import { useEffect, useState } from 'react'
+
+// ROADMAP.md 2.7's player bullet: "carga diferida (dynamic())" — a page
+// with no GIF/video media never loads this component (or, one level
+// deeper, hls.js — see lazy-video-player.tsx's own docstring) at all.
+const LazyVideoPlayer = dynamic(() => import('./lazy-video-player.js'), { ssr: false })
 
 type MediaGridProps = {
   media: PostMediaItem[]
@@ -87,16 +93,33 @@ function MediaGridItem({
           )}
         />
       )}
-      <img
-        src={item.url}
-        alt={item.altText ?? 'Imagen adjunta'}
-        loading="lazy"
-        onLoad={() => setIsLoaded(true)}
-        className={cn(
-          'relative h-full w-full object-cover transition-opacity duration-300',
-          isLoaded ? 'opacity-100' : 'opacity-0',
-        )}
-      />
+      {item.kind === 'image' ? (
+        <img
+          src={item.url}
+          alt={item.altText ?? 'Imagen adjunta'}
+          loading="lazy"
+          onLoad={() => setIsLoaded(true)}
+          className={cn(
+            'relative h-full w-full object-cover transition-opacity duration-300',
+            isLoaded ? 'opacity-100' : 'opacity-0',
+          )}
+        />
+      ) : (
+        // No onLoad-driven fade here the way the image branch above has —
+        // <video poster> has no equivalent "the poster image finished
+        // downloading" DOM event to hook without preloading it by hand, and
+        // the player's own poster/controls already sit visually on top of
+        // the blurhash placeholder immediately, so there's no blank gap to
+        // paper over the way an unstyled bare <img> would leave one.
+        <div className="relative h-full w-full">
+          <LazyVideoPlayer
+            url={item.url}
+            posterUrl={item.posterUrl}
+            kind={item.kind}
+            altText={item.altText}
+          />
+        </div>
+      )}
     </div>
   )
 }
