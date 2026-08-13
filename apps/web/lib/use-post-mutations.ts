@@ -7,6 +7,7 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 import type { Post } from '@x/contracts'
+import { useRouter } from 'next/navigation'
 import { apiClient } from './api-client'
 
 type TimelinePage = {
@@ -48,6 +49,7 @@ function useViewerToggle(options: {
   deactivate: (postId: string) => Promise<void>
 }) {
   const queryClient = useQueryClient()
+  const router = useRouter()
 
   return useMutation({
     mutationFn: async ({ postId, active }: { postId: string; active: boolean }) => {
@@ -83,6 +85,22 @@ function useViewerToggle(options: {
       for (const [key, data] of context?.snapshot ?? []) {
         queryClient.setQueryData(key, data)
       }
+    },
+    // updateCachedPost above only ever reaches a post living under the
+    // ['timeline'] query prefix (home/bookmarks/lists/profile posts) — a
+    // post's own permalink page (app/[username]/status/[id], ROADMAP.md
+    // 2.1) is a real Server Component instead: its focused post, every
+    // ancestor, and every reply (use-thread-replies.ts's own comment: "not
+    // a TanStack query") are server-rendered props with no client cache
+    // entry to patch at all, so a like/repost/bookmark there silently never
+    // became visible until this. router.refresh() re-runs that server
+    // fetch, same fix (and same reasoning) profile-edit-dialog.tsx and
+    // thread-reply-composer.tsx already needed for their own Server
+    // Component staleness — harmless where it isn't needed too, since RSC
+    // refresh and the TanStack Query cache above are separate mechanisms,
+    // and refresh() preserves client component state (it isn't a reload).
+    onSuccess: () => {
+      router.refresh()
     },
   })
 }

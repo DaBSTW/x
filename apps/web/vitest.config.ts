@@ -27,6 +27,7 @@ export default defineConfig({
         'lib/format.ts',
         'lib/media-grid-layout.ts',
         'lib/notification-text.ts',
+        'lib/notification-grouping.ts',
         'lib/realtime-backoff.ts',
         'lib/shortcuts-dialog-store.ts',
         'components/ui/button.tsx',

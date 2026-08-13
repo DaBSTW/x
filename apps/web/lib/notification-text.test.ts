@@ -1,6 +1,12 @@
 import type { Notification } from '@x/contracts'
 import { describe, expect, it } from 'vitest'
-import { notificationHref, notificationText } from './notification-text'
+import type { NotificationGroup } from './notification-grouping'
+import {
+  groupedNotificationHref,
+  groupedNotificationText,
+  notificationHref,
+  notificationText,
+} from './notification-text'
 
 function makeNotification(overrides: Partial<Notification> = {}): Notification {
   return {
@@ -90,5 +96,141 @@ describe('notificationHref', () => {
     expect(notificationHref(makeNotification({ kind: 'system', actor: null, postId: null }))).toBe(
       null,
     )
+  })
+})
+
+function makeActor(overrides: Partial<NonNullable<Notification['actor']>> = {}) {
+  return {
+    id: '1823456789012345679',
+    username: 'ana',
+    displayName: 'Ana',
+    avatarUrl: null,
+    isVerified: false,
+    ...overrides,
+  }
+}
+
+function makeGroup(overrides: Partial<NotificationGroup> = {}): NotificationGroup {
+  return {
+    groupKey: 'like:1823456789012345680',
+    kind: 'like',
+    notifications: [makeNotification()],
+    actors: [makeActor()],
+    postId: '1823456789012345680',
+    isRead: false,
+    createdAt: '2026-08-11T12:00:00.000Z',
+    ...overrides,
+  }
+}
+
+describe('groupedNotificationText', () => {
+  it('names both actors in full for a group of exactly two', () => {
+    const group = makeGroup({
+      actors: [makeActor({ displayName: 'Ana' }), makeActor({ id: 'b', displayName: 'Bea' })],
+    })
+    expect(groupedNotificationText(group)).toBe('Ana y Bea le dieron me gusta a tu post')
+  })
+
+  it('collapses to "and N more" for a group of three or more', () => {
+    const group = makeGroup({
+      actors: [
+        makeActor({ displayName: 'Ana' }),
+        makeActor({ id: 'b', displayName: 'Bea' }),
+        makeActor({ id: 'c', displayName: 'Carla' }),
+      ],
+    })
+    expect(groupedNotificationText(group)).toBe('Ana y 2 más le dieron me gusta a tu post')
+  })
+
+  it('renders a repost group', () => {
+    const group = makeGroup({
+      kind: 'repost',
+      actors: [makeActor({ displayName: 'Ana' }), makeActor({ id: 'b', displayName: 'Bea' })],
+    })
+    expect(groupedNotificationText(group)).toBe('Ana y Bea repostearon tu post')
+  })
+
+  it('renders a follow group', () => {
+    const group = makeGroup({
+      kind: 'follow',
+      postId: null,
+      actors: [makeActor({ displayName: 'Ana' }), makeActor({ id: 'b', displayName: 'Bea' })],
+    })
+    expect(groupedNotificationText(group)).toBe('Ana y Bea empezaron a seguirte')
+  })
+
+  // The backend never actually groups these four (ROADMAP.md 1.7: reply/
+  // quote/mention keep a null groupKey on purpose, and 'system' has no
+  // actor at all) — covered anyway since the switch is exhaustive by type,
+  // not by what group_key.ts happens to produce today.
+  it('renders a reply group', () => {
+    const group = makeGroup({
+      kind: 'reply',
+      actors: [makeActor({ displayName: 'Ana' }), makeActor({ id: 'b', displayName: 'Bea' })],
+    })
+    expect(groupedNotificationText(group)).toBe('Ana y Bea respondieron a tu post')
+  })
+
+  it('renders a quote group', () => {
+    const group = makeGroup({
+      kind: 'quote',
+      actors: [makeActor({ displayName: 'Ana' }), makeActor({ id: 'b', displayName: 'Bea' })],
+    })
+    expect(groupedNotificationText(group)).toBe('Ana y Bea citaron tu post')
+  })
+
+  it('renders a mention group', () => {
+    const group = makeGroup({
+      kind: 'mention',
+      actors: [makeActor({ displayName: 'Ana' }), makeActor({ id: 'b', displayName: 'Bea' })],
+    })
+    expect(groupedNotificationText(group)).toBe('Ana y Bea te mencionaron en un post')
+  })
+
+  it('renders a follow_request group', () => {
+    const group = makeGroup({
+      kind: 'follow_request',
+      postId: null,
+      actors: [makeActor({ displayName: 'Ana' }), makeActor({ id: 'b', displayName: 'Bea' })],
+    })
+    expect(groupedNotificationText(group)).toBe('Ana y Bea quieren seguirte')
+  })
+
+  it('renders a system group the same as a single system notification', () => {
+    const group = makeGroup({ kind: 'system', postId: null, actors: [] })
+    expect(groupedNotificationText(group)).toBe('Notificación del sistema')
+  })
+
+  it('names the one actor plainly when de-duping left only one behind a multi-notification group', () => {
+    const group = makeGroup({ actors: [makeActor({ displayName: 'Ana' })] })
+    expect(groupedNotificationText(group)).toBe('Ana le dio me gusta a tu post')
+  })
+
+  it('falls back to a generic singular name when a group somehow has no actors', () => {
+    expect(groupedNotificationText(makeGroup({ actors: [] }))).toBe(
+      'Alguien le dio me gusta a tu post',
+    )
+  })
+})
+
+describe('groupedNotificationHref', () => {
+  it('links a post group to the post, using the newest actor as the cosmetic username', () => {
+    const group = makeGroup({
+      actors: [makeActor({ username: 'carla' }), makeActor({ id: 'b', username: 'bea' })],
+    })
+    expect(groupedNotificationHref(group)).toBe('/carla/status/1823456789012345680')
+  })
+
+  it('links a follow group to the newest actor’s profile', () => {
+    const group = makeGroup({
+      kind: 'follow',
+      postId: null,
+      actors: [makeActor({ username: 'carla' })],
+    })
+    expect(groupedNotificationHref(group)).toBe('/carla')
+  })
+
+  it('has nowhere to go for a group with neither a post nor any actor', () => {
+    expect(groupedNotificationHref(makeGroup({ postId: null, actors: [] }))).toBe(null)
   })
 })

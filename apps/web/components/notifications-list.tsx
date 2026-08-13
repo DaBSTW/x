@@ -2,6 +2,7 @@
 
 import { NotificationItem } from '@/components/notification-item'
 import { TimelineSkeleton } from '@/components/timeline-skeleton'
+import { groupNotifications } from '@/lib/notification-grouping'
 import { useNotifications } from '@/lib/use-notifications'
 import { useEffect, useRef, useState } from 'react'
 
@@ -10,6 +11,12 @@ export function NotificationsList() {
   const { data, isLoading, isError, fetchNextPage, hasNextPage, isFetchingNextPage } =
     useNotifications()
   const notifications = data?.pages.flatMap((page) => page.data) ?? []
+  // ROADMAP.md 1.7's "colapso visual" bullet: consecutive same-groupKey
+  // notifications within an hour render as one row ("Ana y 12 más te
+  // dieron me gusta"), not N. Pagination/read-state below still reasons in
+  // terms of the raw, ungrouped `notifications` — grouping is a display
+  // concern only, layered on top right before rendering.
+  const displayItems = groupNotifications(notifications)
 
   const sentinelRef = useRef<HTMLDivElement>(null)
 
@@ -56,12 +63,16 @@ export function NotificationsList() {
 
   return (
     <div role="feed" aria-busy={isFetchingNextPage} aria-label="Notificaciones">
-      {notifications.map((notification, index) => (
+      {displayItems.map((item, index) => (
         <NotificationItem
-          key={notification.id}
-          notification={notification}
+          // A group's own id would repeat across re-renders that reorder
+          // its members no differently than before, but its newest
+          // member's id is exactly as stable as a single notification's
+          // own id already was — same Snowflake id space either way.
+          key={item.kind === 'single' ? item.notification.id : item.group.notifications[0]?.id}
+          item={item}
           posinset={index + 1}
-          setsize={hasNextPage ? -1 : notifications.length}
+          setsize={hasNextPage ? -1 : displayItems.length}
         />
       ))}
       <div ref={sentinelRef} />
