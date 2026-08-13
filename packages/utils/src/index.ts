@@ -47,20 +47,41 @@ export type {
   NotificationKind,
 } from './notifications.js'
 export {
+  ALLOWED_GIF_MIME_TYPES,
   ALLOWED_IMAGE_MIME_TYPES,
+  ALLOWED_VIDEO_MIME_TYPES,
+  HLS_RENDITION_LADDER,
+  IMAGE_VARIANT_FORMATS,
   MEDIA_LIMITS,
   MEDIA_PROCESSING_QUEUE_NAME,
   MEDIA_STATUS,
   MEDIA_VARIANT_FORMATS,
   MEDIA_VARIANT_WIDTHS,
+  detectGifMimeType,
   detectImageMimeType,
+  detectVideoMimeType,
   extensionForMimeType,
+  mediaGifMp4Key,
+  mediaHlsMasterKey,
+  mediaHlsRenditionPlaylistKey,
+  mediaHlsSegmentKeyPrefix,
+  mediaKindForMimeType,
   mediaOriginalKey,
+  mediaPosterKey,
   mediaVariantKey,
+  pickHlsMasterVariant,
+  pickMp4Variant,
+  pickPosterVariant,
   pickPrimaryVariant,
 } from './media.js'
 export type {
+  AllowedGifMimeType,
   AllowedImageMimeType,
+  AllowedMediaMimeType,
+  AllowedVideoMimeType,
+  HlsRenditionSpec,
+  ImageVariantFormat,
+  MediaKind,
   MediaProcessingJobData,
   MediaStatus,
   MediaVariant,
@@ -78,6 +99,8 @@ export {
   putObjectBuffer,
 } from './s3.js'
 export type { S3Config } from './s3.js'
+export { probeVideo } from './video-probe.js'
+export type { VideoProbeResult } from './video-probe.js'
 export {
   AppError,
   BlockedByUserError,

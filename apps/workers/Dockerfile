@@ -27,6 +27,13 @@ RUN pnpm exec turbo run build --filter=@x/workers
 
 FROM base AS runner
 WORKDIR /app
+# ffmpeg (ROADMAP.md 2.7) — GIF→MP4 and video→HLS transcoding
+# (gif-transcoder.ts/video-transcoder.ts). ffmpeg-runner.ts wraps every real
+# invocation in prlimit(1), which node:22-slim already ships (part of
+# util-linux, a base Debian package — confirmed separately from ffmpeg
+# itself, which isn't).
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+  && rm -rf /var/lib/apt/lists/*
 RUN groupadd --system --gid 1001 nodeapp \
   && useradd --system --uid 1001 --gid nodeapp workeruser
 COPY --from=builder --chown=workeruser:nodeapp /app .

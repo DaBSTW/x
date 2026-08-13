@@ -1,8 +1,23 @@
+import { spawn } from 'node:child_process'
 import { generateId } from '@x/utils'
 import sharp from 'sharp'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { type MediaStorage, createMediaProcessor } from './media.processor.js'
 import type { MediaRepository, MediaRow } from './media.repository.js'
+
+/** A real ffmpeg subprocess generates each fixture — same reasoning as gif-transcoder.test.ts/video-transcoder.test.ts: this is exactly what the code under test (via processGif/processVideo) itself shells out to. */
+function ffmpegToBuffer(args: string[], format: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('ffmpeg', ['-y', ...args, '-f', format, '-'])
+    const chunks: Buffer[] = []
+    child.stdout.on('data', (chunk: Buffer) => chunks.push(chunk))
+    child.on('error', reject)
+    child.on('close', (code) => {
+      if (code === 0) resolve(Buffer.concat(chunks))
+      else reject(new Error(`ffmpeg exited with code ${String(code)}`))
+    })
+  })
+}
 
 const BUCKET = 'test-bucket'
 
@@ -189,6 +204,111 @@ describe('createMediaProcessor', () => {
     const result = readyCalls[0]?.result as { blurhash: string }
     expect(result.blurhash.length).toBeGreaterThan(0)
   })
+
+  it('transcodes a gif into an mp4 + poster, uploads both, and marks ready with duration', async () => {
+    const row = makeMediaRow({
+      kind: 'gif',
+      storageKey: 'media/gif/original.gif',
+      mimeType: 'image/gif',
+    })
+    storageCtx.objects.set(
+      row.storageKey,
+      await ffmpegToBuffer(['-f', 'lavfi', '-i', 'testsrc=duration=1:size=64x64:rate=5'], 'gif'),
+    )
+    const { repository, readyCalls } = createFakeRepository(row)
+    const process = createMediaProcessor({
+      repository,
+      storage: storageCtx.storage,
+      bucket: BUCKET,
+    })
+
+    await process(row.id.toString())
+
+    expect(readyCalls).toHaveLength(1)
+    const result = readyCalls[0]?.result as {
+      width: number
+      height: number
+      durationMs: number
+      blurhash: string
+      variants: Array<{ format: string; key: string }>
+    }
+    expect(result.width).toBe(64)
+    expect(result.height).toBe(64)
+    expect(result.durationMs).toBeGreaterThan(0)
+    expect(result.blurhash.length).toBeGreaterThan(0)
+    expect(result.variants.map((v) => v.format).sort()).toEqual(['mp4', 'poster'])
+
+    const uploadedKeys = [...storageCtx.objects.keys()]
+    expect(uploadedKeys).toContain(`media/${row.id}/gif.mp4`)
+    expect(uploadedKeys).toContain(`media/${row.id}/poster.webp`)
+  }, 20_000)
+
+  it('transcodes a video into an HLS ladder + master playlist + poster, uploads every file, and marks ready', async () => {
+    const row = makeMediaRow({
+      kind: 'video',
+      storageKey: 'media/video/original.mp4',
+      mimeType: 'video/mp4',
+    })
+    storageCtx.objects.set(
+      row.storageKey,
+      await ffmpegToBuffer(
+        [
+          '-f',
+          'lavfi',
+          '-i',
+          'testsrc=duration=1:size=320x240:rate=10',
+          '-f',
+          'lavfi',
+          '-i',
+          'sine=frequency=440:duration=1',
+          '-c:v',
+          'libx264',
+          '-pix_fmt',
+          'yuv420p',
+          '-c:a',
+          'aac',
+          '-shortest',
+          '-movflags',
+          'frag_keyframe+empty_moov',
+        ],
+        'mp4',
+      ),
+    )
+    const { repository, readyCalls } = createFakeRepository(row)
+    const process = createMediaProcessor({
+      repository,
+      storage: storageCtx.storage,
+      bucket: BUCKET,
+    })
+
+    await process(row.id.toString())
+
+    expect(readyCalls).toHaveLength(1)
+    const result = readyCalls[0]?.result as {
+      width: number
+      height: number
+      durationMs: number
+      blurhash: string
+      variants: Array<{ format: string; key: string }>
+    }
+    expect(result.width).toBe(320)
+    expect(result.height).toBe(240)
+    expect(result.durationMs).toBeGreaterThan(0)
+    expect(result.blurhash.length).toBeGreaterThan(0)
+    // 320x240 only clears the 240p rung — one hls rendition, plus the
+    // master playlist and the poster.
+    expect(result.variants.map((v) => v.format).sort()).toEqual(['hls', 'hls-master', 'poster'])
+
+    const uploadedKeys = [...storageCtx.objects.keys()]
+    expect(uploadedKeys).toContain(`media/${row.id}/poster.webp`)
+    expect(uploadedKeys).toContain(`media/${row.id}/hls/master.m3u8`)
+    expect(uploadedKeys).toContain(`media/${row.id}/hls/240p/playlist.m3u8`)
+    expect(
+      uploadedKeys.some(
+        (key) => key.startsWith(`media/${row.id}/hls/240p/`) && key.endsWith('.ts'),
+      ),
+    ).toBe(true)
+  }, 20_000)
 
   it('does nothing for a media id that no longer exists', async () => {
     const row = makeMediaRow()

@@ -13,6 +13,9 @@ import {
   extractTimestamp,
   generateId,
   parseEntities,
+  pickHlsMasterVariant,
+  pickMp4Variant,
+  pickPosterVariant,
   pickPrimaryVariant,
 } from '@x/utils'
 import { detectLanguage } from '@x/utils/language'
@@ -1052,14 +1055,26 @@ function toPostMediaItem(row: PostMediaRow, config: MediaUrlConfig): PostMediaIt
     ...variant,
     url: buildPublicUrl(config.publicUrlBase, config.bucket, variant.key),
   }))
-  const primary = pickPrimaryVariant(variants)
+  // `url` means something different per kind — the widest image variant, the
+  // GIF's transcoded MP4, or a video's HLS *master* playlist (never one
+  // rendition) — same three-way split as media.service.ts's toMediaDto,
+  // which this mirrors deliberately (a post only ever embeds `ready` media,
+  // so both functions pick from the exact same variants shape).
+  const url =
+    row.kind === 'gif'
+      ? pickMp4Variant(variants)?.url
+      : row.kind === 'video'
+        ? pickHlsMasterVariant(variants)?.url
+        : pickPrimaryVariant(variants)?.url
 
   return {
     id: row.id.toString(),
     kind: row.kind,
-    url: primary?.url ?? buildPublicUrl(config.publicUrlBase, config.bucket, row.storageKey),
+    url: url ?? buildPublicUrl(config.publicUrlBase, config.bucket, row.storageKey),
+    posterUrl: pickPosterVariant(variants)?.url ?? null,
     width: row.width,
     height: row.height,
+    durationMs: row.durationMs,
     blurhash: row.blurhash,
     altText: row.altText,
   }

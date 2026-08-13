@@ -180,6 +180,7 @@ lectura funcionan solos a esta escala — el detalle completo está en
 ### Requisitos
 
 - Node.js ≥ 22 · pnpm ≥ 9 · Docker y Docker Compose
+- `ffmpeg` en el `PATH` — `apps/api`/`apps/workers` corren fuera de Docker en desarrollo (`pnpm dev`), así que a diferencia del resto de infraestructura (Postgres, Redis, MinIO…) esto no lo levanta `docker-compose.yml`; sólo hace falta para GIF/vídeo (ROADMAP.md 2.7)
 - 8 GB de RAM libres (los servicios de datos son los que mandan)
 
 ### Instalación

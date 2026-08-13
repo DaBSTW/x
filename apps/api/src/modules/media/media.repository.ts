@@ -1,5 +1,5 @@
 import type { Database } from '@x/db'
-import { media } from '@x/db'
+import { media, users } from '@x/db'
 import { MEDIA_STATUS } from '@x/utils'
 import { and, eq, inArray } from 'drizzle-orm'
 
@@ -11,6 +11,7 @@ export type NewMediaRow = {
   storageKey: string
   mimeType: string
   sizeBytes: bigint
+  kind: 'image' | 'gif' | 'video'
 }
 
 export type MediaRepository = ReturnType<typeof createMediaRepository>
@@ -44,6 +45,16 @@ export function createMediaRepository(db: Database) {
     async findMediaForPosts(postIds: bigint[]): Promise<MediaRow[]> {
       if (postIds.length === 0) return []
       return db.select().from(media).where(inArray(media.postId, postIds))
+    },
+
+    /** ROADMAP.md 2.7's video duration exception (140 s / 2 h para verificados) — a fresh read, not something carried in the access token: verification status can change between when a token was issued and when a video is finalized. */
+    async findOwnerIsVerified(ownerId: bigint): Promise<boolean> {
+      const [row] = await db
+        .select({ isVerified: users.isVerified })
+        .from(users)
+        .where(eq(users.id, ownerId))
+        .limit(1)
+      return row?.isVerified ?? false
     },
   }
 }

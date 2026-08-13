@@ -40,6 +40,10 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # packages/utils' video-probe.test.ts shells out to a real ffprobe
+      # (ROADMAP.md 2.7) — not pre-installed on the runner, and not
+      # something worth mocking (CODESTYLE.md §14).
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: pnpm test -- --coverage
 
   integration:
@@ -55,6 +59,10 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # apps/workers' GIF/video transcoders (ROADMAP.md 2.7) shell out to a
+      # real ffmpeg/ffprobe, isolated per-run via prlimit(1) — already part
+      # of util-linux on this runner, ffmpeg itself is not.
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       # Runner ships Docker — Testcontainers spins up real Postgres, Redis and
       # Mailpit per suite; CODESTYLE.md §14 forbids mocking them.
       - run: pnpm --filter @x/api test:integration

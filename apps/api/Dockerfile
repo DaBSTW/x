@@ -40,6 +40,13 @@ RUN pnpm exec turbo run build --filter=@x/api
 # ── Runtime ─────────────────────────────────────────────────────────────
 FROM base AS runner
 WORKDIR /app
+# ffprobe (ROADMAP.md 2.7) — finalize's own synchronous video-duration check
+# (media.service.ts's finalizeVideo) reads container metadata only, never
+# decodes a frame, so it's cheap enough to run inline in a request handler;
+# apps/workers' Dockerfile installs the same package for the actual
+# transcode, which does need to isolate/limit it (ffmpeg-runner.ts).
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+  && rm -rf /var/lib/apt/lists/*
 RUN groupadd --system --gid 1001 nodeapp \
   && useradd --system --uid 1001 --gid nodeapp apiuser
 COPY --from=builder --chown=apiuser:nodeapp /app .

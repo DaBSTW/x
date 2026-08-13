@@ -3,10 +3,23 @@ import { snowflakeIdSchema } from './common.js'
 
 export const mediaKindSchema = z.enum(['image', 'gif', 'video'])
 
-// Phase 1 only accepts images — SPECS.md §9.2's GIF/video pipeline lands in
-// a later phase. Matches @x/utils' ALLOWED_IMAGE_MIME_TYPES.
+// Matches @x/utils' ALLOWED_IMAGE_MIME_TYPES ∪ ALLOWED_GIF_MIME_TYPES ∪
+// ALLOWED_VIDEO_MIME_TYPES (ROADMAP.md 2.7) — `kind` itself is never part of
+// the request, media.service.ts derives it server-side from `mimeType`
+// (mediaKindForMimeType), the same "the server decides, the client doesn't
+// declare" posture magic-byte sniffing already applies at finalize time.
 export const uploadMediaRequestSchema = z.object({
-  mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp', 'image/avif', 'image/heic']),
+  mimeType: z.enum([
+    'image/jpeg',
+    'image/png',
+    'image/webp',
+    'image/avif',
+    'image/heic',
+    'image/gif',
+    'video/mp4',
+    'video/quicktime',
+    'video/webm',
+  ]),
 })
 export type UploadMediaRequest = z.infer<typeof uploadMediaRequestSchema>
 
@@ -27,20 +40,28 @@ export const finalizeMediaResponseSchema = z.object({
 export const mediaVariantSchema = z.object({
   width: z.number().int().positive(),
   height: z.number().int().positive(),
-  format: z.enum(['webp', 'avif']),
+  format: z.enum(['webp', 'avif', 'mp4', 'poster', 'hls', 'hls-master']),
   url: z.string().url(),
 })
 export type MediaVariantDto = z.infer<typeof mediaVariantSchema>
 
 // The full resource — GET/PATCH /media/:id. Includes `status` and the raw
 // `variants` list, since a caller polling an in-flight upload needs both.
+// `posterUrl`/`durationMs` are null for `kind:'image'` (there's no separate
+// poster frame or duration for a still image) and set once a `kind:'gif'`/
+// `kind:'video'` finishes processing — `url` itself is the MP4 for a GIF or
+// the HLS master playlist for a video (never a specific rendition), same
+// "one field, the primary thing a client renders" contract `url` already
+// has for images.
 export const mediaSchema = z.object({
   id: snowflakeIdSchema,
   kind: mediaKindSchema,
   status: mediaStatusSchema,
   url: z.string().url().nullable(),
+  posterUrl: z.string().url().nullable(),
   width: z.number().int().positive().nullable(),
   height: z.number().int().positive().nullable(),
+  durationMs: z.number().int().positive().nullable(),
   blurhash: z.string().nullable(),
   altText: z.string().nullable(),
   variants: z.array(mediaVariantSchema),
@@ -62,8 +83,10 @@ export const postMediaItemSchema = z.object({
   id: snowflakeIdSchema,
   kind: mediaKindSchema,
   url: z.string().url(),
+  posterUrl: z.string().url().nullable(),
   width: z.number().int().positive().nullable(),
   height: z.number().int().positive().nullable(),
+  durationMs: z.number().int().positive().nullable(),
   blurhash: z.string().nullable(),
   altText: z.string().nullable(),
 })

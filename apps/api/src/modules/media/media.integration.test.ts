@@ -1,10 +1,12 @@
+import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { CreateBucketCommand } from '@aws-sdk/client-s3'
 import { MinioContainer, type StartedMinioContainer } from '@testcontainers/minio'
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql'
 import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis'
-import { createDatabase, migrationsFolderUrl } from '@x/db'
-import { createS3Client } from '@x/utils'
+import { type Database, createDatabase, migrationsFolderUrl, users } from '@x/db'
+import { MEDIA_LIMITS, createS3Client } from '@x/utils'
+import { eq } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
 import type { FastifyInstance } from 'fastify'
 import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers'
@@ -23,6 +25,20 @@ const TINY_WEBP = Buffer.from(
   'base64',
 )
 
+/** A real ffmpeg subprocess, not a checked-in fixture — same reasoning as apps/workers' own gif-transcoder.test.ts/video-transcoder.test.ts: real bytes, decoded by the real magic-byte/ffprobe checks finalize() itself runs, not a stand-in for either. */
+function ffmpegToBuffer(args: string[], format: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('ffmpeg', ['-y', ...args, '-f', format, '-'])
+    const chunks: Buffer[] = []
+    child.stdout.on('data', (chunk: Buffer) => chunks.push(chunk))
+    child.on('error', reject)
+    child.on('close', (code) => {
+      if (code === 0) resolve(Buffer.concat(chunks))
+      else reject(new Error(`ffmpeg exited with code ${String(code)}`))
+    })
+  })
+}
+
 describe('media routes', () => {
   let postgresContainer: StartedPostgreSqlContainer
   let redisContainer: StartedRedisContainer
@@ -30,6 +46,7 @@ describe('media routes', () => {
   let minioContainer: StartedMinioContainer
   let app: FastifyInstance
   let accessToken: string
+  let db: Database
 
   async function registerAndLogin(username: string) {
     const email = `${username}@example.com`
@@ -45,6 +62,11 @@ describe('media routes', () => {
       payload: { email, password },
     })
     return loginResponse.json().data.accessToken as string
+  }
+
+  /** No public API mutates isVerified (an admin/moderation action, ROADMAP.md 2.7's own duration exception aside) — a direct DB write is the only way a test can reach this state, same as other tests in this repo reaching for `db` directly when there's no endpoint for the setup step itself. */
+  async function verifyUser(username: string): Promise<void> {
+    await db.update(users).set({ isVerified: true }).where(eq(users.usernameLower, username))
   }
 
   async function requestUploadUrl(token: string, mimeType: string) {
@@ -78,8 +100,8 @@ describe('media routes', () => {
       new MinioContainer('minio/minio:latest').start(),
     ])
 
-    const migrationDb = createDatabase(postgresContainer.getConnectionUri())
-    await migrate(migrationDb, { migrationsFolder: fileURLToPath(migrationsFolderUrl()) })
+    db = createDatabase(postgresContainer.getConnectionUri())
+    await migrate(db, { migrationsFolder: fileURLToPath(migrationsFolderUrl()) })
 
     const s3Endpoint = minioContainer.getConnectionUrl()
     const s3Client = createS3Client({
@@ -247,5 +269,158 @@ describe('media routes', () => {
       headers: { authorization: `Bearer ${accessToken}` },
     })
     expect(response.statusCode).toBe(404)
+  })
+
+  describe('gif uploads (roadmap 2.7)', () => {
+    it('uploads a real GIF through a presigned URL and finalizes it', async () => {
+      const gif = await ffmpegToBuffer(
+        ['-f', 'lavfi', '-i', 'testsrc=duration=1:size=32x32:rate=4'],
+        'gif',
+      )
+      const { mediaId, uploadUrl } = await requestUploadUrl(accessToken, 'image/gif')
+      await putToPresignedUrl(uploadUrl, gif, 'image/gif')
+
+      const finalizeResponse = await app.inject({
+        method: 'POST',
+        url: `/v1/media/${mediaId}/finalize`,
+        headers: { authorization: `Bearer ${accessToken}` },
+      })
+      expect(finalizeResponse.statusCode).toBe(200)
+
+      const getResponse = await app.inject({
+        method: 'GET',
+        url: `/v1/media/${mediaId}`,
+        headers: { authorization: `Bearer ${accessToken}` },
+      })
+      expect(getResponse.json().data).toMatchObject({ kind: 'gif', status: 'pending' })
+    })
+
+    it('rejects bytes that are not actually a GIF', async () => {
+      const { mediaId, uploadUrl } = await requestUploadUrl(accessToken, 'image/gif')
+      await putToPresignedUrl(uploadUrl, Buffer.from('not a gif at all'), 'image/gif')
+
+      const finalizeResponse = await app.inject({
+        method: 'POST',
+        url: `/v1/media/${mediaId}/finalize`,
+        headers: { authorization: `Bearer ${accessToken}` },
+      })
+      expect(finalizeResponse.statusCode).toBe(400)
+    })
+
+    it('rejects a GIF over the 15 MB limit', async () => {
+      const { mediaId, uploadUrl } = await requestUploadUrl(accessToken, 'image/gif')
+      const oversized = Buffer.alloc(15 * 1024 * 1024 + 1)
+      await putToPresignedUrl(uploadUrl, oversized, 'image/gif')
+
+      const finalizeResponse = await app.inject({
+        method: 'POST',
+        url: `/v1/media/${mediaId}/finalize`,
+        headers: { authorization: `Bearer ${accessToken}` },
+      })
+      expect(finalizeResponse.statusCode).toBe(400)
+    })
+  })
+
+  describe('video uploads (roadmap 2.7)', () => {
+    it('uploads a real short video through a presigned URL and finalizes it', async () => {
+      const video = await ffmpegToBuffer(
+        [
+          '-f',
+          'lavfi',
+          '-i',
+          'testsrc=duration=1:size=64x64:rate=5',
+          '-c:v',
+          'libx264',
+          '-pix_fmt',
+          'yuv420p',
+          '-movflags',
+          'frag_keyframe+empty_moov',
+        ],
+        'mp4',
+      )
+      const { mediaId, uploadUrl } = await requestUploadUrl(accessToken, 'video/mp4')
+      await putToPresignedUrl(uploadUrl, video, 'video/mp4')
+
+      const finalizeResponse = await app.inject({
+        method: 'POST',
+        url: `/v1/media/${mediaId}/finalize`,
+        headers: { authorization: `Bearer ${accessToken}` },
+      })
+      expect(finalizeResponse.statusCode).toBe(200)
+
+      const getResponse = await app.inject({
+        method: 'GET',
+        url: `/v1/media/${mediaId}`,
+        headers: { authorization: `Bearer ${accessToken}` },
+      })
+      expect(getResponse.json().data).toMatchObject({ kind: 'video', status: 'pending' })
+    })
+
+    it('rejects bytes that are not actually a video', async () => {
+      const { mediaId, uploadUrl } = await requestUploadUrl(accessToken, 'video/mp4')
+      await putToPresignedUrl(uploadUrl, Buffer.from('not a video at all'), 'video/mp4')
+
+      const finalizeResponse = await app.inject({
+        method: 'POST',
+        url: `/v1/media/${mediaId}/finalize`,
+        headers: { authorization: `Bearer ${accessToken}` },
+      })
+      expect(finalizeResponse.statusCode).toBe(400)
+    })
+
+    it('rejects a video over the 512 MB limit', async () => {
+      const { mediaId, uploadUrl } = await requestUploadUrl(accessToken, 'video/mp4')
+      const oversized = Buffer.alloc(MEDIA_LIMITS.MAX_VIDEO_SIZE_BYTES + 1)
+      await putToPresignedUrl(uploadUrl, oversized, 'video/mp4')
+
+      const finalizeResponse = await app.inject({
+        method: 'POST',
+        url: `/v1/media/${mediaId}/finalize`,
+        headers: { authorization: `Bearer ${accessToken}` },
+      })
+      expect(finalizeResponse.statusCode).toBe(400)
+    }, 30_000)
+
+    it('rejects a video whose real duration exceeds 140 s for a non-verified account, but allows it for a verified one (roadmap 2.7)', async () => {
+      // 150 real seconds — over the 140 s regular budget, comfortably under
+      // the 2 h verified one. Low framerate/resolution keeps this fast to
+      // encode despite the long duration (a handful of hundred frames, not
+      // real-time-paced).
+      const mediumVideo = await ffmpegToBuffer(
+        [
+          '-f',
+          'lavfi',
+          '-i',
+          'testsrc=duration=150:size=64x64:rate=2',
+          '-c:v',
+          'libx264',
+          '-pix_fmt',
+          'yuv420p',
+          '-movflags',
+          'frag_keyframe+empty_moov',
+        ],
+        'mp4',
+      )
+
+      const regular = await requestUploadUrl(accessToken, 'video/mp4')
+      await putToPresignedUrl(regular.uploadUrl, mediumVideo, 'video/mp4')
+      const rejected = await app.inject({
+        method: 'POST',
+        url: `/v1/media/${regular.mediaId}/finalize`,
+        headers: { authorization: `Bearer ${accessToken}` },
+      })
+      expect(rejected.statusCode).toBe(400)
+
+      const verifiedToken = await registerAndLogin('mediaverified')
+      await verifyUser('mediaverified')
+      const verified = await requestUploadUrl(verifiedToken, 'video/mp4')
+      await putToPresignedUrl(verified.uploadUrl, mediumVideo, 'video/mp4')
+      const accepted = await app.inject({
+        method: 'POST',
+        url: `/v1/media/${verified.mediaId}/finalize`,
+        headers: { authorization: `Bearer ${verifiedToken}` },
+      })
+      expect(accepted.statusCode).toBe(200)
+    }, 30_000)
   })
 })

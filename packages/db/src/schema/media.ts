@@ -15,11 +15,16 @@ import { users } from './users.js'
 
 export const mediaKind = pgEnum('media_kind', ['image', 'gif', 'video'])
 
+// Structurally matches @x/utils' own MediaVariant (independently declared,
+// same reason as elsewhere in this file: @x/db doesn't otherwise need to
+// depend on @x/utils' full media surface just for one shared shape).
 export type MediaVariantRow = {
   width: number
   height: number
-  format: 'webp' | 'avif'
+  format: 'webp' | 'avif' | 'mp4' | 'poster' | 'hls' | 'hls-master'
   key: string
+  /** Only set for format:'hls' (one bitrate rendition). */
+  bandwidthBps?: number
 }
 
 // `postId` has no FK — same reason likes/bookmarks don't have one (see

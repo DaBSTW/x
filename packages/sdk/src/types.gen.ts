@@ -1170,8 +1170,11 @@ export interface paths {
                                     kind: "image" | "gif" | "video";
                                     /** Format: uri */
                                     url: string;
+                                    /** Format: uri */
+                                    posterUrl: string | null;
                                     width: number | null;
                                     height: number | null;
+                                    durationMs: number | null;
                                     blurhash: string | null;
                                     altText: string | null;
                                 }[];
@@ -1210,8 +1213,11 @@ export interface paths {
                                         kind: "image" | "gif" | "video";
                                         /** Format: uri */
                                         url: string;
+                                        /** Format: uri */
+                                        posterUrl: string | null;
                                         width: number | null;
                                         height: number | null;
+                                        durationMs: number | null;
                                         blurhash: string | null;
                                         altText: string | null;
                                     }[];
@@ -1388,8 +1394,11 @@ export interface paths {
                                     kind: "image" | "gif" | "video";
                                     /** Format: uri */
                                     url: string;
+                                    /** Format: uri */
+                                    posterUrl: string | null;
                                     width: number | null;
                                     height: number | null;
+                                    durationMs: number | null;
                                     blurhash: string | null;
                                     altText: string | null;
                                 }[];
@@ -1428,8 +1437,11 @@ export interface paths {
                                         kind: "image" | "gif" | "video";
                                         /** Format: uri */
                                         url: string;
+                                        /** Format: uri */
+                                        posterUrl: string | null;
                                         width: number | null;
                                         height: number | null;
+                                        durationMs: number | null;
                                         blurhash: string | null;
                                         altText: string | null;
                                     }[];
@@ -1587,8 +1599,11 @@ export interface paths {
                                     kind: "image" | "gif" | "video";
                                     /** Format: uri */
                                     url: string;
+                                    /** Format: uri */
+                                    posterUrl: string | null;
                                     width: number | null;
                                     height: number | null;
+                                    durationMs: number | null;
                                     blurhash: string | null;
                                     altText: string | null;
                                 }[];
@@ -1627,8 +1642,11 @@ export interface paths {
                                         kind: "image" | "gif" | "video";
                                         /** Format: uri */
                                         url: string;
+                                        /** Format: uri */
+                                        posterUrl: string | null;
                                         width: number | null;
                                         height: number | null;
+                                        durationMs: number | null;
                                         blurhash: string | null;
                                         altText: string | null;
                                     }[];
@@ -1810,8 +1828,11 @@ export interface paths {
                                         kind: "image" | "gif" | "video";
                                         /** Format: uri */
                                         url: string;
+                                        /** Format: uri */
+                                        posterUrl: string | null;
                                         width: number | null;
                                         height: number | null;
+                                        durationMs: number | null;
                                         blurhash: string | null;
                                         altText: string | null;
                                     }[];
@@ -1850,8 +1871,11 @@ export interface paths {
                                             kind: "image" | "gif" | "video";
                                             /** Format: uri */
                                             url: string;
+                                            /** Format: uri */
+                                            posterUrl: string | null;
                                             width: number | null;
                                             height: number | null;
+                                            durationMs: number | null;
                                             blurhash: string | null;
                                             altText: string | null;
                                         }[];
@@ -1897,8 +1921,11 @@ export interface paths {
                                         kind: "image" | "gif" | "video";
                                         /** Format: uri */
                                         url: string;
+                                        /** Format: uri */
+                                        posterUrl: string | null;
                                         width: number | null;
                                         height: number | null;
+                                        durationMs: number | null;
                                         blurhash: string | null;
                                         altText: string | null;
                                     }[];
@@ -1937,8 +1964,11 @@ export interface paths {
                                             kind: "image" | "gif" | "video";
                                             /** Format: uri */
                                             url: string;
+                                            /** Format: uri */
+                                            posterUrl: string | null;
                                             width: number | null;
                                             height: number | null;
+                                            durationMs: number | null;
                                             blurhash: string | null;
                                             altText: string | null;
                                         }[];
@@ -1984,8 +2014,11 @@ export interface paths {
                                         kind: "image" | "gif" | "video";
                                         /** Format: uri */
                                         url: string;
+                                        /** Format: uri */
+                                        posterUrl: string | null;
                                         width: number | null;
                                         height: number | null;
+                                        durationMs: number | null;
                                         blurhash: string | null;
                                         altText: string | null;
                                     }[];
@@ -2024,8 +2057,11 @@ export interface paths {
                                             kind: "image" | "gif" | "video";
                                             /** Format: uri */
                                             url: string;
+                                            /** Format: uri */
+                                            posterUrl: string | null;
                                             width: number | null;
                                             height: number | null;
+                                            durationMs: number | null;
                                             blurhash: string | null;
                                             altText: string | null;
                                         }[];
@@ -2136,8 +2172,11 @@ export interface paths {
                                     kind: "image" | "gif" | "video";
                                     /** Format: uri */
                                     url: string;
+                                    /** Format: uri */
+                                    posterUrl: string | null;
                                     width: number | null;
                                     height: number | null;
+                                    durationMs: number | null;
                                     blurhash: string | null;
                                     altText: string | null;
                                 }[];
@@ -2176,8 +2215,11 @@ export interface paths {
                                         kind: "image" | "gif" | "video";
                                         /** Format: uri */
                                         url: string;
+                                        /** Format: uri */
+                                        posterUrl: string | null;
                                         width: number | null;
                                         height: number | null;
+                                        durationMs: number | null;
                                         blurhash: string | null;
                                         altText: string | null;
                                     }[];
@@ -2289,8 +2331,11 @@ export interface paths {
                                     kind: "image" | "gif" | "video";
                                     /** Format: uri */
                                     url: string;
+                                    /** Format: uri */
+                                    posterUrl: string | null;
                                     width: number | null;
                                     height: number | null;
+                                    durationMs: number | null;
                                     blurhash: string | null;
                                     altText: string | null;
                                 }[];
@@ -2329,8 +2374,11 @@ export interface paths {
                                         kind: "image" | "gif" | "video";
                                         /** Format: uri */
                                         url: string;
+                                        /** Format: uri */
+                                        posterUrl: string | null;
                                         width: number | null;
                                         height: number | null;
+                                        durationMs: number | null;
                                         blurhash: string | null;
                                         altText: string | null;
                                     }[];
@@ -3297,8 +3345,11 @@ export interface paths {
                                     kind: "image" | "gif" | "video";
                                     /** Format: uri */
                                     url: string;
+                                    /** Format: uri */
+                                    posterUrl: string | null;
                                     width: number | null;
                                     height: number | null;
+                                    durationMs: number | null;
                                     blurhash: string | null;
                                     altText: string | null;
                                 }[];
@@ -3337,8 +3388,11 @@ export interface paths {
                                         kind: "image" | "gif" | "video";
                                         /** Format: uri */
                                         url: string;
+                                        /** Format: uri */
+                                        posterUrl: string | null;
                                         width: number | null;
                                         height: number | null;
+                                        durationMs: number | null;
                                         blurhash: string | null;
                                         altText: string | null;
                                     }[];
@@ -3447,8 +3501,11 @@ export interface paths {
                                     kind: "image" | "gif" | "video";
                                     /** Format: uri */
                                     url: string;
+                                    /** Format: uri */
+                                    posterUrl: string | null;
                                     width: number | null;
                                     height: number | null;
+                                    durationMs: number | null;
                                     blurhash: string | null;
                                     altText: string | null;
                                 }[];
@@ -3487,8 +3544,11 @@ export interface paths {
                                         kind: "image" | "gif" | "video";
                                         /** Format: uri */
                                         url: string;
+                                        /** Format: uri */
+                                        posterUrl: string | null;
                                         width: number | null;
                                         height: number | null;
+                                        durationMs: number | null;
                                         blurhash: string | null;
                                         altText: string | null;
                                     }[];
@@ -3885,8 +3945,11 @@ export interface paths {
                                     kind: "image" | "gif" | "video";
                                     /** Format: uri */
                                     url: string;
+                                    /** Format: uri */
+                                    posterUrl: string | null;
                                     width: number | null;
                                     height: number | null;
+                                    durationMs: number | null;
                                     blurhash: string | null;
                                     altText: string | null;
                                 }[];
@@ -3925,8 +3988,11 @@ export interface paths {
                                         kind: "image" | "gif" | "video";
                                         /** Format: uri */
                                         url: string;
+                                        /** Format: uri */
+                                        posterUrl: string | null;
                                         width: number | null;
                                         height: number | null;
+                                        durationMs: number | null;
                                         blurhash: string | null;
                                         altText: string | null;
                                     }[];
@@ -4627,7 +4693,7 @@ export interface paths {
                 content: {
                     "application/json": {
                         /** @enum {string} */
-                        mimeType: "image/jpeg" | "image/png" | "image/webp" | "image/avif" | "image/heic";
+                        mimeType: "image/jpeg" | "image/png" | "image/webp" | "image/avif" | "image/heic" | "image/gif" | "video/mp4" | "video/quicktime" | "video/webm";
                     };
                 };
             };
@@ -4826,15 +4892,18 @@ export interface paths {
                                 status: "pending" | "ready" | "failed";
                                 /** Format: uri */
                                 url: string | null;
+                                /** Format: uri */
+                                posterUrl: string | null;
                                 width: number | null;
                                 height: number | null;
+                                durationMs: number | null;
                                 blurhash: string | null;
                                 altText: string | null;
                                 variants: {
                                     width: number;
                                     height: number;
                                     /** @enum {string} */
-                                    format: "webp" | "avif";
+                                    format: "webp" | "avif" | "mp4" | "poster" | "hls" | "hls-master";
                                     /** Format: uri */
                                     url: string;
                                 }[];
@@ -4938,15 +5007,18 @@ export interface paths {
                                 status: "pending" | "ready" | "failed";
                                 /** Format: uri */
                                 url: string | null;
+                                /** Format: uri */
+                                posterUrl: string | null;
                                 width: number | null;
                                 height: number | null;
+                                durationMs: number | null;
                                 blurhash: string | null;
                                 altText: string | null;
                                 variants: {
                                     width: number;
                                     height: number;
                                     /** @enum {string} */
-                                    format: "webp" | "avif";
+                                    format: "webp" | "avif" | "mp4" | "poster" | "hls" | "hls-master";
                                     /** Format: uri */
                                     url: string;
                                 }[];
@@ -5764,8 +5836,11 @@ export interface paths {
                                     kind: "image" | "gif" | "video";
                                     /** Format: uri */
                                     url: string;
+                                    /** Format: uri */
+                                    posterUrl: string | null;
                                     width: number | null;
                                     height: number | null;
+                                    durationMs: number | null;
                                     blurhash: string | null;
                                     altText: string | null;
                                 }[];
@@ -5804,8 +5879,11 @@ export interface paths {
                                         kind: "image" | "gif" | "video";
                                         /** Format: uri */
                                         url: string;
+                                        /** Format: uri */
+                                        posterUrl: string | null;
                                         width: number | null;
                                         height: number | null;
+                                        durationMs: number | null;
                                         blurhash: string | null;
                                         altText: string | null;
                                     }[];
@@ -6618,8 +6696,11 @@ export interface paths {
                                     kind: "image" | "gif" | "video";
                                     /** Format: uri */
                                     url: string;
+                                    /** Format: uri */
+                                    posterUrl: string | null;
                                     width: number | null;
                                     height: number | null;
+                                    durationMs: number | null;
                                     blurhash: string | null;
                                     altText: string | null;
                                 }[];
@@ -6658,8 +6739,11 @@ export interface paths {
                                         kind: "image" | "gif" | "video";
                                         /** Format: uri */
                                         url: string;
+                                        /** Format: uri */
+                                        posterUrl: string | null;
                                         width: number | null;
                                         height: number | null;
+                                        durationMs: number | null;
                                         blurhash: string | null;
                                         altText: string | null;
                                     }[];

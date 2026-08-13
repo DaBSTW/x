@@ -22,7 +22,15 @@ export function createMediaRepository(db: Database) {
 
     async markReady(
       id: bigint,
-      result: { width: number; height: number; blurhash: string; variants: MediaVariant[] },
+      result: {
+        width: number
+        height: number
+        /** For kind:'gif'/'video' this is computed from the extracted poster frame, not a raw source pixel — SPECS.md §9.2's blurhash step reads as applying to the whole pipeline, not just images. */
+        blurhash: string
+        variants: MediaVariant[]
+        /** null for kind:'image' — stills have no duration. */
+        durationMs?: number | null
+      },
     ): Promise<void> {
       await db
         .update(media)
@@ -32,6 +40,7 @@ export function createMediaRepository(db: Database) {
           height: result.height,
           blurhash: result.blurhash,
           variants: result.variants,
+          durationMs: result.durationMs ?? null,
         })
         .where(eq(media.id, id))
     },
