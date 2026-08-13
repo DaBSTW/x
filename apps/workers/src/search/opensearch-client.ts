@@ -119,14 +119,49 @@ export const USERS_INDEX_BODY = {
   },
 } as const
 
+/** `posts-v1`, `posts-v2`, … — the *real* index a version lives in, distinct from the stable alias name (`POSTS_SEARCH_INDEX`) every reader/writer elsewhere in this codebase actually uses. */
+function versionedIndexName(alias: string, version: number): string {
+  return `${alias}-v${version}`
+}
+
+function parseIndexVersion(indexName: string): number {
+  const match = indexName.match(/-v(\d+)$/)
+  return match?.[1] ? Number(match[1]) : 0
+}
+
+// Cast through `unknown`, same precedent throughout this file: `body`'s real
+// shape (POSTS_INDEX_BODY/USERS_INDEX_BODY, the only place either is
+// authored) is a correct OpenSearch mapping, but this client's generated
+// request types are stricter than a plain object literal can satisfy
+// directly (readonly arrays from `as const`, a `Property` union `properties`
+// values have to structurally match, etc.).
+function loosely<T>(value: unknown): T {
+  return value as T
+}
+
 /**
  * Idempotent — safe to call on every worker boot (apps/workers/src/server.ts),
- * same posture as ensurePublicBucket/ensureHashtagMentionsTable: creates
- * `posts`/`users` only if they don't already exist. Never recreates an
- * existing index — unlike a bucket policy or a DDL statement, `indices.create`
- * on an index that's already there would 400, and dropping-then-recreating
- * would destroy every document already indexed, so this checks existence
- * first rather than reaching for a "create or replace" shortcut.
+ * same posture as ensurePublicBucket/ensureHashtagMentionsTable. `posts`/
+ * `users` (POSTS_SEARCH_INDEX/USERS_SEARCH_INDEX) are never the literal
+ * index documents live in — they're aliases, so a full reindex
+ * (reindexSearchIndex below, SPECS.md §10.2's "reindexado blue-green") can
+ * build a new physical index and atomically swap the alias over, with zero
+ * window where search has nothing to read from. Three cases, in order:
+ *
+ * 1. The alias already exists → this is steady-state. Apply the current
+ *    mapping's `properties` via putMapping, additive-only (a genuinely new
+ *    field key like `has_links` is picked up immediately; redefining an
+ *    existing field's type 400s instead of silently corrupting it) —
+ *    `settings` (analyzers, shard count) can never change this way, only a
+ *    real reindex changes those.
+ * 2. A *plain* index already sits at this name, not an alias — an
+ *    already-running deployment from before this checkpoint introduced
+ *    aliases at all (this file's own dev environment included). Adopts it:
+ *    reindex its documents into a new `-v1` index, delete the old plain
+ *    index, alias the name onto the new one. A one-time migration, not
+ *    something a steady-state alias ever needs again.
+ * 3. Neither exists — greenfield. Create `-v1` directly with the alias
+ *    attached, in the same call.
  */
 export async function ensureSearchIndices(client: Client): Promise<void> {
   await ensureIndex(client, POSTS_SEARCH_INDEX, POSTS_INDEX_BODY)
@@ -135,32 +170,78 @@ export async function ensureSearchIndices(client: Client): Promise<void> {
 
 async function ensureIndex(
   client: Client,
-  index: string,
+  alias: string,
   body: Record<string, unknown>,
 ): Promise<void> {
-  const { body: exists } = await client.indices.exists({ index })
-  if (!exists) {
-    await client.indices.create({ index, body })
+  const { body: aliasExists } = await client.indices.existsAlias({ name: alias })
+  if (aliasExists) {
+    const { properties } = (body as { mappings: { properties: unknown } }).mappings
+    await client.indices.putMapping({ index: alias, body: loosely({ properties }) })
     return
   }
-  // Already exists — still apply the current mapping's `properties` via
-  // putMapping, which OpenSearch treats as purely additive (a genuinely new
-  // field key is safe and picked up immediately; redefining an existing
-  // field's type 400s instead of silently corrupting it). This is what
-  // lets a mapping addition like `has_links` above reach an index some
-  // earlier boot already created, without a manual reindex. `settings`
-  // (analyzers, shard count) can never change this way — that's what the
-  // later blue-green reindex checkpoint (SPECS.md §10.2) is for.
-  //
-  // Cast through `unknown`, same as opensearch-client.integration.test.ts's
-  // own precedent for this client's generated types: `body`'s real shape
-  // (POSTS_INDEX_BODY/USERS_INDEX_BODY above, the only place either is
-  // authored) is a correct OpenSearch mapping, but a plain `Record<string,
-  // unknown>` parameter loses the structure putMapping's generated
-  // `Record<string, Property>` type wants to see.
-  const { properties } = (body as { mappings: { properties: unknown } }).mappings
-  await client.indices.putMapping({
-    index,
-    body: { properties } as unknown as Parameters<typeof client.indices.putMapping>[0]['body'],
+
+  const { body: plainIndexExists } = await client.indices.exists({ index: alias })
+  if (plainIndexExists) {
+    const migratedIndex = versionedIndexName(alias, 1)
+    await client.indices.create({ index: migratedIndex, body: loosely(body) })
+    await client.reindex({
+      body: loosely({ source: { index: alias }, dest: { index: migratedIndex } }),
+      wait_for_completion: true,
+      refresh: true,
+    })
+    await client.indices.delete({ index: alias })
+    await client.indices.putAlias({ index: migratedIndex, name: alias })
+    return
+  }
+
+  await client.indices.create({
+    index: versionedIndexName(alias, 1),
+    body: loosely({ ...body, aliases: { [alias]: {} } }),
   })
+}
+
+/**
+ * SPECS.md §10.2's "reindexado blue-green mediante alias" — builds a new
+ * versioned index with `mappingBody`'s current mapping, copies every
+ * document across via OpenSearch's own `_reindex`, then atomically swaps
+ * `alias` from the old index to the new one in a single `updateAliases`
+ * call (`remove`+`add` together — never a window where the alias resolves
+ * to nothing, or to both). The old index is deliberately left in place
+ * rather than deleted — a rollback (`updateAliases` back to it) stays
+ * possible until an operator is confident enough to clean it up by hand;
+ * this function only ever adds indices, never removes one search itself
+ * still depends on.
+ *
+ * For when the *mapping itself* needs to change — a new analyzer, a
+ * different edge_ngram range — not the routine additive-field case
+ * ensureSearchIndices' own putMapping path already handles for free.
+ */
+export async function reindexSearchIndex(
+  client: Client,
+  alias: string,
+  mappingBody: Record<string, unknown>,
+): Promise<{ from: string; to: string }> {
+  const { body: aliasInfo } = await client.indices.getAlias({ name: alias })
+  const currentIndices = Object.keys(aliasInfo)
+  if (currentIndices.length !== 1) {
+    throw new Error(
+      `reindexSearchIndex: expected exactly one index behind alias '${alias}', found ${currentIndices.length} (${currentIndices.join(', ') || 'none'}) — run ensureSearchIndices first`,
+    )
+  }
+  const fromIndex = currentIndices[0] as string
+  const toIndex = versionedIndexName(alias, parseIndexVersion(fromIndex) + 1)
+
+  await client.indices.create({ index: toIndex, body: loosely(mappingBody) })
+  await client.reindex({
+    body: loosely({ source: { index: fromIndex }, dest: { index: toIndex } }),
+    wait_for_completion: true,
+    refresh: true,
+  })
+  await client.indices.updateAliases({
+    body: {
+      actions: [{ remove: { index: fromIndex, alias } }, { add: { index: toIndex, alias } }],
+    },
+  })
+
+  return { from: fromIndex, to: toIndex }
 }

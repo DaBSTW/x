@@ -14,7 +14,8 @@
     "reconcile-counters": "tsx scripts/reconcile-counters.ts",
     "compute-trends": "tsx scripts/compute-trends.ts",
     "generate-vapid-keys": "tsx scripts/generate-vapid-keys.ts",
-    "register-cdc-connector": "tsx scripts/register-cdc-connector.ts"
+    "register-cdc-connector": "tsx scripts/register-cdc-connector.ts",
+    "reindex-search": "tsx scripts/reindex-search.ts"
   },
   "dependencies": {
     "@clickhouse/client": "^1.23.1",
