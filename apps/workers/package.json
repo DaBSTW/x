@@ -13,7 +13,8 @@
     "test:integration": "vitest run --coverage --config vitest.integration.config.ts",
     "reconcile-counters": "tsx scripts/reconcile-counters.ts",
     "compute-trends": "tsx scripts/compute-trends.ts",
-    "generate-vapid-keys": "tsx scripts/generate-vapid-keys.ts"
+    "generate-vapid-keys": "tsx scripts/generate-vapid-keys.ts",
+    "register-cdc-connector": "tsx scripts/register-cdc-connector.ts"
   },
   "dependencies": {
     "@clickhouse/client": "^1.23.1",
@@ -26,6 +27,7 @@
     "bullmq": "^5.34.2",
     "drizzle-orm": "^0.38.3",
     "ioredis": "^5.4.2",
+    "json-bigint": "^1.0.0",
     "kafkajs": "^2.2.4",
     "sharp": "^0.33.5",
     "tsx": "^4.19.2",
@@ -38,6 +40,7 @@
     "@testcontainers/minio": "^10.16.0",
     "@testcontainers/postgresql": "^10.16.0",
     "@testcontainers/redis": "^10.16.0",
+    "@types/json-bigint": "^1.0.4",
     "@types/node": "^22.10.5",
     "@types/web-push": "^3.6.4",
     "@vitest/coverage-v8": "^2.1.8",

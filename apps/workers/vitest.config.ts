@@ -13,9 +13,16 @@ export default defineConfig({
         'src/media/media.processor.ts',
         'src/notifications/notifications.processor.ts',
         'src/notifications/push-text.ts',
+        'src/search/cdc.ts',
+        'src/search/document-builders.ts',
         'src/trends/rank-hashtags.ts',
         'src/trends/trend-ingest.processor.ts',
         'src/env.ts',
+        // Factored out of register-cdc-connector.ts for the same reason
+        // rank-hashtags.ts is factored out of compute-trends.ts above: the
+        // script itself is a thin, uncovered entrypoint (like server.ts),
+        // this is the actual testable logic.
+        'scripts/lib/cdc-connector-config.ts',
       ],
       thresholds: { lines: 80, statements: 80, branches: 80, functions: 80 },
     },

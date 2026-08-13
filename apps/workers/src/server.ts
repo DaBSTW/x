@@ -1,5 +1,5 @@
 import { createDatabase } from '@x/db'
-import { COUNTER_FLUSH_INTERVAL_MS } from '@x/utils'
+import { COUNTER_FLUSH_INTERVAL_MS, SEARCH_INDEXER_CONSUMER_GROUP } from '@x/utils'
 import { Redis } from 'ioredis'
 import { createCountersFlushWorker } from './counters/counters.flush-worker.js'
 import { createCountersRepository } from './counters/counters.repository.js'
@@ -13,6 +13,7 @@ import { createNotificationsRepository } from './notifications/notifications.rep
 import { createNotificationsWorker } from './notifications/notifications.worker.js'
 import { createWebPushSender } from './notifications/push-sender.js'
 import { createOpenSearchClient, ensureSearchIndices } from './search/opensearch-client.js'
+import { createSearchIndexer } from './search/search-indexer.worker.js'
 import { createClickHouseClient, ensureHashtagMentionsTable } from './trends/clickhouse-client.js'
 import { createTrendIngestRepository } from './trends/trend-ingest.repository.js'
 import { createTrendIngestWorker } from './trends/trend-ingest.worker.js'
@@ -112,12 +113,11 @@ trendIngestWorker.worker.on('failed', (job, error) => {
 })
 
 // ROADMAP.md 2.3 — same top-level-await self-healing as ClickHouse above,
-// and the same non-fatal posture for the same reason: the actual CDC
-// indexer worker isn't built yet (search/README-shaped checkpoint, not this
-// one), but ensuring the index mappings exist is a self-contained piece
-// worth having ready the moment anything does start producing documents for
-// them. An unreachable OpenSearch at boot should degrade (search
-// unavailable) rather than take the whole process down with it.
+// and the same non-fatal posture for the same reason: ensuring the index
+// mappings exist is a self-contained piece worth having ready before the
+// CDC-consuming indexer worker below starts writing to them. An unreachable
+// OpenSearch at boot should degrade (search unavailable) rather than take
+// the whole process down with it.
 const openSearchClient = createOpenSearchClient({ url: env.OPENSEARCH_URL })
 try {
   await ensureSearchIndices(openSearchClient)
@@ -125,8 +125,26 @@ try {
   console.warn('OpenSearch unreachable at boot — search will be unavailable:', error)
 }
 
+// search-indexer.worker.ts's own `.start()` connects a Kafka consumer
+// (kafkajs retries a bounded number of times with backoff on its own before
+// giving up — this isn't an instant fail like the two checks above, but it
+// is a bounded one). Same non-fatal posture: an unreachable Redpanda/Kafka
+// at boot degrades search freshness (the index stops receiving updates,
+// nothing else) rather than crashing fan-out/notifications/media with it.
+const searchIndexer = createSearchIndexer({
+  brokers: env.KAFKA_BROKERS.split(','),
+  groupId: SEARCH_INDEXER_CONSUMER_GROUP,
+  db,
+  openSearchClient,
+})
+try {
+  await searchIndexer.start()
+} catch (error) {
+  console.warn('Kafka/Redpanda unreachable at boot — the search index will fall behind:', error)
+}
+
 console.info(
-  'workers: fan-out, notifications, media, counters flush, and trend-ingest workers ready',
+  'workers: fan-out, notifications, media, counters flush, trend-ingest, and search-indexer workers ready',
 )
 
 async function shutdown(): Promise<void> {
@@ -137,6 +155,7 @@ async function shutdown(): Promise<void> {
     notificationsWorker.close(),
     mediaWorker.close(),
     trendIngestWorker.close(),
+    searchIndexer.stop(),
   ])
   await Promise.all([clickhouseClient.close(), openSearchClient.close()])
   process.exit(0)

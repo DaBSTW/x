@@ -13,5 +13,8 @@ describe('cdcTopicName', () => {
   it('matches Debezium’s own {prefix}.{schema}.{table} convention', () => {
     expect(cdcTopicName('posts')).toBe(`${CDC_TOPIC_PREFIX}.public.posts`)
     expect(cdcTopicName('users')).toBe(`${CDC_TOPIC_PREFIX}.public.users`)
+    expect(cdcTopicName('post_counters')).toBe(`${CDC_TOPIC_PREFIX}.public.post_counters`)
+    expect(cdcTopicName('user_counters')).toBe(`${CDC_TOPIC_PREFIX}.public.user_counters`)
+    expect(cdcTopicName('media')).toBe(`${CDC_TOPIC_PREFIX}.public.media`)
   })
 })

@@ -56,6 +56,23 @@ const envSchema = z.object({
   // Search (ROADMAP.md 2.3 / SPECS.md §10) — same "always has a
   // docker-compose.yml-matching default" posture as CLICKHOUSE_* above.
   OPENSEARCH_URL: z.string().url().default('http://localhost:9200'),
+  // scripts/register-cdc-connector.ts only — Kafka Connect's REST API
+  // (docker-compose.yml's debezium service, port 8083).
+  DEBEZIUM_CONNECT_URL: z.string().url().default('http://localhost:8083'),
+  // register-cdc-connector.ts's target Postgres, from *Debezium's own*
+  // network vantage point — Debezium runs in a separate container on the
+  // compose network and reaches Postgres by its service name, never by
+  // DATABASE_URL's `localhost` (that host mapping only exists for a process
+  // running outside docker, like this one). Every other connection detail
+  // (user/password/port/dbname) is the same Postgres instance, so the
+  // script derives those straight from DATABASE_URL instead of duplicating
+  // them in a second env var apiece.
+  DEBEZIUM_POSTGRES_HOST: z.string().default('postgres'),
+  // Kafka/Redpanda bootstrap broker, from the search indexer's own vantage
+  // point (a host process, like this one, not a compose-network container)
+  // — docker-compose.yml's redpanda service publishes its OUTSIDE listener
+  // on this exact port for precisely this.
+  KAFKA_BROKERS: z.string().default('localhost:9092'),
 })
 
 export type Env = z.infer<typeof envSchema>

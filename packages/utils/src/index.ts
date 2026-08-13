@@ -116,6 +116,7 @@ export type { TrendCandidateStats, TrendFilterInput } from './trends.js'
 export {
   CDC_TOPIC_PREFIX,
   POSTS_SEARCH_INDEX,
+  SEARCH_INDEXER_CONSUMER_GROUP,
   USERS_SEARCH_INDEX,
   cdcTopicName,
 } from './search.js'
