@@ -32,10 +32,31 @@ export function createSearchRepository(client: Client) {
     return { hits: hits.slice(0, size), hasMore }
   }
 
+  /**
+   * Typeahead's own two calls — no over-fetch-by-one (nothing paginates a
+   * typeahead dropdown) and, for hashtags, the real payload is the
+   * aggregation bucket, not `hits` (query-builder.ts's
+   * buildHashtagTypeaheadQueryBody sets `size: 0` for exactly this reason).
+   */
+  async function typeaheadUsers(body: OpenSearchQueryBody): Promise<string[]> {
+    const { body: result } = await client.search({ index: USERS_SEARCH_INDEX, body })
+    return (result.hits.hits as unknown as Array<{ _id: string }>).map((hit) => hit._id)
+  }
+
+  async function typeaheadHashtags(body: OpenSearchQueryBody): Promise<string[]> {
+    const { body: result } = await client.search({ index: POSTS_SEARCH_INDEX, body })
+    const buckets = (
+      result.aggregations as { hashtags?: { buckets?: Array<{ key: string }> } } | undefined
+    )?.hashtags?.buckets
+    return (buckets ?? []).map((bucket) => bucket.key)
+  }
+
   return {
     searchPosts: (body: OpenSearchQueryBody, size: number) =>
       search(POSTS_SEARCH_INDEX, body, size),
     searchUsers: (body: OpenSearchQueryBody, size: number) =>
       search(USERS_SEARCH_INDEX, body, size),
+    typeaheadUsers,
+    typeaheadHashtags,
   }
 }

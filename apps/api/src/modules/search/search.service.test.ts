@@ -1,6 +1,7 @@
 import type { Post } from '@x/contracts'
 import { describe, expect, it, vi } from 'vitest'
 import { encodeSearchCursor } from './cursor.js'
+import type { OpenSearchQueryBody } from './query-builder.js'
 import type { SearchHit, SearchRepository } from './search.repository.js'
 import {
   type FollowingLookup,
@@ -33,6 +34,8 @@ function createFakeRepository(overrides: Partial<SearchRepository> = {}): Search
   return {
     searchPosts: vi.fn(async () => ({ hits: [], hasMore: false })),
     searchUsers: vi.fn(async () => ({ hits: [], hasMore: false })),
+    typeaheadUsers: vi.fn(async () => []),
+    typeaheadHashtags: vi.fn(async () => []),
     ...overrides,
   }
 }
@@ -206,5 +209,86 @@ describe('createSearchService', () => {
       query: { bool: { filter: unknown[] } }
     }
     expect(call.query.bool.filter).toContainEqual({ term: { has_media: true } })
+  })
+
+  describe('typeahead', () => {
+    it('strips a leading #/@ before matching, since neither is part of the actual prefix', async () => {
+      const typeaheadUsers = vi.fn(async (_body: OpenSearchQueryBody): Promise<string[]> => [])
+      const typeaheadHashtags = vi.fn(async (_body: OpenSearchQueryBody): Promise<string[]> => [])
+      const repository = createFakeRepository({ typeaheadUsers, typeaheadHashtags })
+      const service = createSearchService(
+        repository,
+        { getManyByIds: async () => [] },
+        { findManyByIds: async () => [] },
+      )
+
+      // Both indices are queried on every call regardless of the '#'/'@'
+      // prefix — typeahead doesn't guess intent server-side, it hands the
+      // caller both users and hashtags and lets the UI decide what to show.
+      await service.typeahead('@ana', 10)
+      expect(typeaheadUsers.mock.calls.at(-1)?.[0]).toMatchObject({
+        query: {
+          bool: { should: [{ match: { username: 'ana' } }, { match: { display_name: 'ana' } }] },
+        },
+      })
+
+      await service.typeahead('#mun', 10)
+      expect(typeaheadHashtags.mock.calls.at(-1)?.[0]).toMatchObject({
+        query: { prefix: { hashtags: 'mun' } },
+      })
+    })
+
+    it('returns empty results for an empty or whitespace/operator-only prefix, without ever querying OpenSearch', async () => {
+      const typeaheadUsers = vi.fn(async () => [])
+      const typeaheadHashtags = vi.fn(async () => [])
+      const repository = createFakeRepository({ typeaheadUsers, typeaheadHashtags })
+      const service = createSearchService(
+        repository,
+        { getManyByIds: async () => [] },
+        { findManyByIds: async () => [] },
+      )
+
+      const page = await service.typeahead('  ', 10)
+      expect(page).toEqual({ users: [], hashtags: [] })
+      expect(typeaheadUsers).not.toHaveBeenCalled()
+      expect(typeaheadHashtags).not.toHaveBeenCalled()
+    })
+
+    it('hydrates matched user ids and drops anyone the viewer has blocked, same as people mode', async () => {
+      const rows: PeopleRow[] = [
+        { id: 1n, username: 'ana', displayName: 'Ana', avatarUrl: null, isVerified: false },
+        { id: 2n, username: 'ana2', displayName: 'Ana Two', avatarUrl: null, isVerified: false },
+      ]
+      const peopleHydrator: PeopleHydrator = { findManyByIds: async () => rows }
+      const repository = createFakeRepository({
+        typeaheadUsers: vi.fn(async () => ['2', '1']),
+      })
+      const service = createSearchService(
+        repository,
+        { getManyByIds: async () => [] },
+        peopleHydrator,
+        undefined,
+        { findBlockedAuthorIds: async () => new Set([1n]) },
+      )
+
+      const page = await service.typeahead('ana', 10, 99n)
+      expect(page.users).toEqual([
+        { id: '2', username: 'ana2', displayName: 'Ana Two', avatarUrl: null, isVerified: false },
+      ])
+    })
+
+    it('returns the hashtag aggregation results as-is, in the order the repository gave them', async () => {
+      const repository = createFakeRepository({
+        typeaheadHashtags: vi.fn(async () => ['mundial2026', 'mundo']),
+      })
+      const service = createSearchService(
+        repository,
+        { getManyByIds: async () => [] },
+        { findManyByIds: async () => [] },
+      )
+
+      const page = await service.typeahead('mun', 10)
+      expect(page.hashtags).toEqual(['mundial2026', 'mundo'])
+    })
   })
 })

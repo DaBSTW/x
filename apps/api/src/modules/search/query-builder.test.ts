@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { buildPostsQueryBody, buildUsersQueryBody, postsSort, usersSort } from './query-builder.js'
+import {
+  buildHashtagTypeaheadQueryBody,
+  buildPostsQueryBody,
+  buildUserTypeaheadQueryBody,
+  buildUsersQueryBody,
+  postsSort,
+  usersSort,
+} from './query-builder.js'
 import { parseSearchQuery } from './query-operators.js'
 
 describe('buildPostsQueryBody', () => {
@@ -133,5 +140,35 @@ describe('buildUsersQueryBody', () => {
 
   it('sorts by followers_count then id', () => {
     expect(usersSort()).toEqual([{ followers_count: { order: 'desc' } }, { id: { order: 'desc' } }])
+  })
+})
+
+describe('buildUserTypeaheadQueryBody', () => {
+  it('matches the raw prefix against username and display_name, sorted and sized', () => {
+    const body = buildUserTypeaheadQueryBody('an', 10)
+    const bool = body.query as { bool: { should: unknown[]; minimum_should_match: number } }
+    expect(bool.bool.should).toContainEqual({ match: { username: 'an' } })
+    expect(bool.bool.should).toContainEqual({ match: { display_name: 'an' } })
+    expect(bool.bool.minimum_should_match).toBe(1)
+    expect(body.sort).toEqual(usersSort())
+    expect(body.size).toBe(10)
+  })
+})
+
+describe('buildHashtagTypeaheadQueryBody', () => {
+  it('prefix-matches hashtags and aggregates distinct matching values, with size:0 (no hits, only the aggregation matters)', () => {
+    const body = buildHashtagTypeaheadQueryBody('mun', 5)
+    expect(body.size).toBe(0)
+    expect(body.query).toEqual({ prefix: { hashtags: 'mun' } })
+    const aggs = body.aggs as {
+      hashtags: { terms: { field: string; size: number; include: string } }
+    }
+    expect(aggs.hashtags.terms).toEqual({ field: 'hashtags', size: 5, include: 'mun.*' })
+  })
+
+  it('escapes a regex metacharacter in the prefix so the aggregation include stays a literal prefix match', () => {
+    const body = buildHashtagTypeaheadQueryBody('c++', 5)
+    const aggs = body.aggs as { hashtags: { terms: { include: string } } }
+    expect(aggs.hashtags.terms.include).toBe('c\\+\\+.*')
   })
 })

@@ -489,4 +489,95 @@ describe('search routes (roadmap 2.3 / SPECS.md §5.4, §10.3)', () => {
     const response = await app.inject({ method: 'GET', url: '/v1/search?q=' })
     expect(response.statusCode).toBe(400)
   })
+
+  describe('GET /search/typeahead', () => {
+    it('prefix-matches hashtags via a real aggregation — a true prefix, not a whole token', async () => {
+      const authorId = await seedUser()
+      await seedPost(authorId, { text: 'evento', hashtags: ['mundial2026'] })
+      await seedPost(authorId, { text: 'otro evento', hashtags: ['mundo'] })
+      await seedPost(authorId, { text: 'no relacionado', hashtags: ['futbol'] })
+
+      const response = await app.inject({ method: 'GET', url: '/v1/search/typeahead?q=mun' })
+
+      expect(response.statusCode).toBe(200)
+      const body = response.json().data as { users: unknown[]; hashtags: string[] }
+      expect(body.hashtags.sort()).toEqual(['mundial2026', 'mundo'])
+      expect(body.hashtags).not.toContain('futbol')
+    })
+
+    it('matches a user by a whole word in their display name', async () => {
+      // Whole word, not a true prefix — this suite's own
+      // TEST_USERS_INDEX_BODY uses a plain `standard` analyzer, same
+      // limitation and same reasoning as the people-mode test above; real
+      // edge_ngram-backed prefix matching is already covered for real by
+      // apps/workers' own opensearch-client.integration.test.ts.
+      const userId = await seedUser({ displayName: 'Typeahead Match' })
+
+      const response = await app.inject({ method: 'GET', url: '/v1/search/typeahead?q=match' })
+
+      const body = response.json().data as { users: Array<{ id: string }>; hashtags: string[] }
+      expect(body.users.map((user) => user.id)).toContain(userId.toString())
+    })
+
+    it('strips a leading # or @ before matching', async () => {
+      const userId = await seedUser({ displayName: 'Prefixmatch Person' })
+      const authorId = await seedUser()
+      await seedPost(authorId, { text: 'x', hashtags: ['prefixmatch'] })
+
+      const withAt = await app.inject({
+        method: 'GET',
+        url: '/v1/search/typeahead?q=%40Prefixmatch',
+      })
+      const atBody = withAt.json().data as { users: Array<{ id: string }> }
+      expect(atBody.users.map((user) => user.id)).toContain(userId.toString())
+
+      const withHash = await app.inject({
+        method: 'GET',
+        url: '/v1/search/typeahead?q=%23prefixmatch',
+      })
+      const hashBody = withHash.json().data as { hashtags: string[] }
+      expect(hashBody.hashtags).toContain('prefixmatch')
+    })
+
+    it('excludes a blocked user from the typeahead results, same as people mode', async () => {
+      const blockedId = await seedUser({ displayName: 'Typeaheadblock Target' })
+
+      const before = await app.inject({
+        method: 'GET',
+        url: '/v1/search/typeahead?q=typeaheadblock',
+        headers: authHeader(),
+      })
+      expect(
+        (before.json().data as { users: Array<{ id: string }> }).users.map((user) => user.id),
+      ).toContain(blockedId.toString())
+
+      await app.inject({
+        method: 'POST',
+        url: `/v1/users/${blockedId}/block`,
+        headers: authHeader(),
+      })
+
+      const after = await app.inject({
+        method: 'GET',
+        url: '/v1/search/typeahead?q=typeaheadblock',
+        headers: authHeader(),
+      })
+      expect(
+        (after.json().data as { users: Array<{ id: string }> }).users.map((user) => user.id),
+      ).not.toContain(blockedId.toString())
+
+      // Cleanup — later tests in this file authenticate as the same viewer
+      // and shouldn't inherit a block from an earlier, unrelated test.
+      await app.inject({
+        method: 'DELETE',
+        url: `/v1/users/${blockedId}/block`,
+        headers: authHeader(),
+      })
+    })
+
+    it('rejects an empty q as a validation error', async () => {
+      const response = await app.inject({ method: 'GET', url: '/v1/search/typeahead?q=' })
+      expect(response.statusCode).toBe(400)
+    })
+  })
 })

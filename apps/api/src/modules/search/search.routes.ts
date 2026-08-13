@@ -1,4 +1,10 @@
-import { errorResponseSchema, searchQuerySchema, searchResponseSchema } from '@x/contracts'
+import {
+  errorResponseSchema,
+  searchQuerySchema,
+  searchResponseSchema,
+  typeaheadQuerySchema,
+  typeaheadResponseSchema,
+} from '@x/contracts'
 import type { FastifyInstance } from 'fastify'
 import type { ZodTypeProvider } from 'fastify-type-provider-zod'
 import { createOptionalAuth } from '../../middleware/require-auth.js'
@@ -39,6 +45,25 @@ export async function registerSearchRoutes(app: FastifyInstance, options: Search
         request.user?.id,
       )
       return reply.send({ data: items, meta: { nextCursor, prevCursor: null, hasMore } })
+    },
+  )
+
+  // Same optionalAuth posture as GET /search above — public, personalized
+  // only in that a blocked/blocking relationship hides someone from the
+  // dropdown when signed in (hydratePeople, search.service.ts).
+  server.get(
+    '/search/typeahead',
+    {
+      schema: {
+        querystring: typeaheadQuerySchema,
+        response: { 200: typeaheadResponseSchema, 400: errorResponseSchema },
+      },
+      preHandler: [optionalAuth],
+    },
+    async (request, reply) => {
+      const { q, limit } = request.query
+      const data = await searchService.typeahead(q, limit, request.user?.id)
+      return reply.send({ data })
     },
   )
 }

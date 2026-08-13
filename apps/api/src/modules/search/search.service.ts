@@ -2,7 +2,12 @@ import type { Post, SearchType } from '@x/contracts'
 import type { PostsService, ViewerStateLookup } from '../posts/posts.service.js'
 import type { FollowListItem } from '../social-graph/social-graph.service.js'
 import { decodeSearchCursor, encodeSearchCursor } from './cursor.js'
-import { buildPostsQueryBody, buildUsersQueryBody } from './query-builder.js'
+import {
+  buildHashtagTypeaheadQueryBody,
+  buildPostsQueryBody,
+  buildUserTypeaheadQueryBody,
+  buildUsersQueryBody,
+} from './query-builder.js'
 import { parseSearchQuery } from './query-operators.js'
 import type { SearchRepository } from './search.repository.js'
 
@@ -40,6 +45,11 @@ export type SearchPage = {
   nextCursor: string | null
 }
 
+export type TypeaheadPage = {
+  users: FollowListItem[]
+  hashtags: string[]
+}
+
 // Capped, not the viewer's whole following list — see
 // social-graph.repository.ts's findFolloweeIds docstring for why.
 const FOLLOWING_AFFINITY_CAP = 500
@@ -70,16 +80,17 @@ export function createSearchService(
     }))
   }
 
-  async function searchPeople(
-    parsed: ReturnType<typeof parseSearchQuery>,
-    limit: number,
-    searchAfter: (string | number)[] | undefined,
-    viewerId?: bigint,
-  ): Promise<SearchPage> {
-    const body = buildUsersQueryBody(parsed, searchAfter)
-    const result = await repository.searchUsers(body, limit)
-    const ids = result.hits.map((hit) => BigInt(hit.id))
-
+  /**
+   * Shared by searchPeople and typeahead: turns a ranked list of user ids
+   * into hydrated FollowListItems, dropping anyone the viewer has blocked
+   * in either direction (search's own people mode, and now typeahead too
+   * — surfacing someone a blocked/blocking relationship exists with in an
+   * autocomplete dropdown would be the same visibility leak either path).
+   * Re-sorted to `ids`' own ranked order — findManyByIds' `WHERE id IN
+   * (...)` makes no promise about row order (same convention as
+   * posts.repository.ts's findPostsByIds).
+   */
+  async function hydratePeople(ids: bigint[], viewerId?: bigint): Promise<FollowListItem[]> {
     const [rows, blocked] = await Promise.all([
       peopleHydrator.findManyByIds(ids),
       viewerId !== undefined && blockLookup
@@ -88,9 +99,6 @@ export function createSearchService(
     ])
     const rowsById = new Map(rows.map((row) => [row.id, row]))
 
-    // Re-sorted to `ids`' own ranked order — findManyByIds' `WHERE id IN
-    // (...)` makes no promise about row order (same convention as
-    // posts.repository.ts's findPostsByIds).
     const items: FollowListItem[] = []
     for (const id of ids) {
       const row = rowsById.get(id)
@@ -103,6 +111,20 @@ export function createSearchService(
         isVerified: row.isVerified,
       })
     }
+    return items
+  }
+
+  async function searchPeople(
+    parsed: ReturnType<typeof parseSearchQuery>,
+    limit: number,
+    searchAfter: (string | number)[] | undefined,
+    viewerId?: bigint,
+  ): Promise<SearchPage> {
+    const body = buildUsersQueryBody(parsed, searchAfter)
+    const result = await repository.searchUsers(body, limit)
+    const ids = result.hits.map((hit) => BigInt(hit.id))
+
+    const items = await hydratePeople(ids, viewerId)
 
     const lastHit = result.hits.at(-1)
     const nextCursor = result.hasMore && lastHit ? encodeSearchCursor(lastHit.sortValues) : null
@@ -159,5 +181,28 @@ export function createSearchService(
     return searchPosts(parsed, type, limit, searchAfter, viewerId)
   }
 
-  return { search }
+  /**
+   * `GET /search/typeahead` (SPECS.md §5.4/§10.1) — one raw prefix, not
+   * query-operators.ts's full mini language (an autocomplete dropdown has
+   * no room for "from:ana #mundial"), so `q` is used directly rather than
+   * through parseSearchQuery. A leading '#'/'@' is stripped — a
+   * disambiguating character the caller shouldn't have to strip
+   * themselves before this even reaches the query.
+   */
+  async function typeahead(q: string, limit: number, viewerId?: bigint): Promise<TypeaheadPage> {
+    const prefix = q.replace(/^[#@]/, '').trim()
+    if (prefix.length === 0) return { users: [], hashtags: [] }
+
+    const [userIds, hashtags] = await Promise.all([
+      repository.typeaheadUsers(buildUserTypeaheadQueryBody(prefix, limit)),
+      repository.typeaheadHashtags(buildHashtagTypeaheadQueryBody(prefix, limit)),
+    ])
+    const users = await hydratePeople(
+      userIds.map((id) => BigInt(id)),
+      viewerId,
+    )
+    return { users, hashtags }
+  }
+
+  return { search, typeahead }
 }

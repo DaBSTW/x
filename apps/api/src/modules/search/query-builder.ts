@@ -163,3 +163,60 @@ export function usersSort(): Record<string, unknown>[] {
   // same reasoning as postsSort.
   return [{ followers_count: { order: 'desc' } }, { id: { order: 'desc' } }]
 }
+
+/**
+ * `GET /search/typeahead` (SPECS.md §5.4/§10.1)'s user half — `prefix` is
+ * whatever the caller already typed (query-operators.ts's full mini
+ * language doesn't apply here; typeahead is one raw prefix, not an operator
+ * query). `match` against the edge_ngram-indexed username/display_name
+ * fields (opensearch-client.ts's USERS_INDEX_BODY) does real prefix
+ * matching — "an" finds "ana" — unlike a plain `term`/`prefix` query, which
+ * would only match a literal whole-token prefix.
+ */
+export function buildUserTypeaheadQueryBody(prefix: string, size: number): OpenSearchQueryBody {
+  return {
+    query: {
+      bool: {
+        should: [{ match: { username: prefix } }, { match: { display_name: prefix } }],
+        minimum_should_match: 1,
+      },
+    },
+    sort: usersSort(),
+    size,
+  }
+}
+
+/**
+ * The hashtag half. `hashtags` is a `keyword` field (opensearch-client.ts),
+ * never edge_ngram-indexed — a `prefix` query works directly against it
+ * with no extra indexing, and this endpoint only needs a short, occasional
+ * list of matches rather than posts' own full-text relevance ranking.
+ * `size: 0` — this query's real output is the aggregation, not `hits`
+ * (search.repository.ts's typeaheadHashtags reads `aggregations` instead).
+ * The aggregation's own `include` regex re-applies the same prefix
+ * *inside* each matching document's hashtag array — a document can carry
+ * several hashtags, and only the ones actually starting with the typed
+ * prefix belong in the result, not every hashtag on any post the top-level
+ * `prefix` query happened to match.
+ */
+export function buildHashtagTypeaheadQueryBody(prefix: string, size: number): OpenSearchQueryBody {
+  return {
+    size: 0,
+    query: { prefix: { hashtags: prefix } },
+    aggs: {
+      hashtags: {
+        terms: { field: 'hashtags', size, include: `${escapeRegExp(prefix)}.*` },
+      },
+    },
+  }
+}
+
+// The `include` value above is a Lucene regex, not a literal string — a
+// prefix containing a regex metacharacter (rare for a hashtag given
+// document-builders.ts only ever indexes [\p{L}\p{N}_]+ values, but this
+// endpoint's `q` is raw user input before it's known to even look like a
+// real hashtag) must be escaped, or e.g. "c++" would silently become a
+// (broken) regex instead of a literal prefix.
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
