@@ -179,6 +179,26 @@ services:
       timeout: 5s
       retries: 30
 
+  # ROADMAP.md 2.7 / SPECS.md §9.2's scan step. Ships with a signature DB
+  # baked into the image, so clamd starts and scans real content even when
+  # freshclam's own live update can't reach database.clamav.net (a
+  # sandboxed/offline dev network) — confirmed empirically, not assumed.
+  # The volume persists whatever freshclam *does* manage to fetch across
+  # restarts, same reasoning as every other named volume here.
+  clamav:
+    image: clamav/clamav-debian:latest
+    restart: unless-stopped
+    ports:
+      - "3310:3310" # clamd's own INSTREAM protocol port — apps/workers' clamav-client.ts speaks it directly, no CLI wrapper
+    volumes:
+      - clamav_data:/var/lib/clamav
+    healthcheck:
+      test: ["CMD-SHELL", "echo PING | nc -w 5 localhost 3310 | grep -q PONG"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 60s
+
 volumes:
   postgres_data:
   redis_data:
@@ -186,3 +206,4 @@ volumes:
   clickhouse_data:
   opensearch_data:
   redpanda_data:
+  clamav_data:

@@ -73,6 +73,12 @@ const envSchema = z.object({
   // — docker-compose.yml's redpanda service publishes its OUTSIDE listener
   // on this exact port for precisely this.
   KAFKA_BROKERS: z.string().default('localhost:9092'),
+
+  // ClamAV (ROADMAP.md 2.7 / SPECS.md §9.2's scan step) — same
+  // docker-compose.yml-matching-default posture as CLICKHOUSE_*/OPENSEARCH_URL
+  // above; clamd's own default INSTREAM port is 3310.
+  CLAMAV_HOST: z.string().default('localhost'),
+  CLAMAV_PORT: z.coerce.number().int().positive().default(3310),
 })
 
 export type Env = z.infer<typeof envSchema>

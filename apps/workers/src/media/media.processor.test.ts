@@ -49,6 +49,9 @@ function createFakeRepository(row: MediaRow) {
     async markFailed(id) {
       failedIds.push(id)
     },
+    async isKnownBadHash() {
+      return false
+    },
   }
   return { repository, readyCalls, failedIds }
 }
@@ -99,6 +102,7 @@ describe('createMediaProcessor', () => {
       repository,
       storage: storageCtx.storage,
       bucket: BUCKET,
+      scanContent: async () => ({ clean: true }),
     })
 
     await process(row.id.toString())
@@ -128,6 +132,7 @@ describe('createMediaProcessor', () => {
       repository,
       storage: storageCtx.storage,
       bucket: BUCKET,
+      scanContent: async () => ({ clean: true }),
     })
 
     await process(row.id.toString())
@@ -152,6 +157,7 @@ describe('createMediaProcessor', () => {
       repository,
       storage: storageCtx.storage,
       bucket: BUCKET,
+      scanContent: async () => ({ clean: true }),
     })
 
     await process(row.id.toString())
@@ -174,6 +180,7 @@ describe('createMediaProcessor', () => {
       repository,
       storage: storageCtx.storage,
       bucket: BUCKET,
+      scanContent: async () => ({ clean: true }),
     })
 
     await process(row.id.toString())
@@ -197,6 +204,7 @@ describe('createMediaProcessor', () => {
       repository,
       storage: storageCtx.storage,
       bucket: BUCKET,
+      scanContent: async () => ({ clean: true }),
     })
 
     await process(row.id.toString())
@@ -220,6 +228,7 @@ describe('createMediaProcessor', () => {
       repository,
       storage: storageCtx.storage,
       bucket: BUCKET,
+      scanContent: async () => ({ clean: true }),
     })
 
     await process(row.id.toString())
@@ -279,6 +288,7 @@ describe('createMediaProcessor', () => {
       repository,
       storage: storageCtx.storage,
       bucket: BUCKET,
+      scanContent: async () => ({ clean: true }),
     })
 
     await process(row.id.toString())
@@ -317,6 +327,7 @@ describe('createMediaProcessor', () => {
       repository,
       storage: storageCtx.storage,
       bucket: BUCKET,
+      scanContent: async () => ({ clean: true }),
     })
 
     await process(generateId().toString())
@@ -333,6 +344,7 @@ describe('createMediaProcessor', () => {
       repository,
       storage: storageCtx.storage,
       bucket: BUCKET,
+      scanContent: async () => ({ clean: true }),
     })
 
     await expect(process(row.id.toString())).rejects.toThrow()

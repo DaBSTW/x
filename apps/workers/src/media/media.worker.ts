@@ -1,6 +1,8 @@
 import { MEDIA_PROCESSING_QUEUE_NAME, type MediaProcessingJobData } from '@x/utils'
 import { Worker } from 'bullmq'
 import { Redis } from 'ioredis'
+import type { ClamAvConfig } from './clamav-client.js'
+import { scanContent } from './content-scan.js'
 import { type MediaProcessorOptions, createMediaProcessor } from './media.processor.js'
 import type { MediaRepository } from './media.repository.js'
 
@@ -10,6 +12,7 @@ export type MediaWorkerOptions = {
   bucket: string
   redisUrl: string
   concurrency: number
+  clamAv: ClamAvConfig
 }
 
 export type MediaWorkerHandle = {
@@ -23,6 +26,7 @@ export function createMediaWorker(options: MediaWorkerOptions): MediaWorkerHandl
     repository: options.repository,
     storage: options.storage,
     bucket: options.bucket,
+    scanContent: (buffer) => scanContent(buffer, options.repository, options.clamAv),
   })
 
   const worker = new Worker<MediaProcessingJobData>(

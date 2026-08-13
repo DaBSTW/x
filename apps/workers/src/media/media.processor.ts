@@ -9,8 +9,9 @@ import {
 } from '@x/utils'
 import { encode as encodeBlurhash } from 'blurhash'
 import sharp from 'sharp'
+import type { ContentScanResult } from './content-scan.js'
 import { transcodeGif } from './gif-transcoder.js'
-import type { MediaRepository, MediaRow } from './media.repository.js'
+import type { MediaRepository } from './media.repository.js'
 import { transcodeVideo } from './video-transcoder.js'
 
 export type MediaStorage = {
@@ -22,6 +23,14 @@ export type MediaProcessorOptions = {
   repository: MediaRepository
   storage: MediaStorage
   bucket: string
+  /**
+   * Narrowed to a plain function, same DI shape as `storage` above — media.worker.ts
+   * closes over the real repository/ClamAV config (content-scan.ts's own
+   * `scanContent`) for production; unit tests substitute a fake that never
+   * needs a real ClamAV or Postgres reachable, only media.integration.test.ts
+   * does (real infra, CODESTYLE.md §14).
+   */
+  scanContent: (buffer: Buffer) => Promise<ContentScanResult>
 }
 
 const BLURHASH_SAMPLE_SIZE = 32
@@ -30,18 +39,26 @@ const HLS_PLAYLIST_CONTENT_TYPE = 'application/vnd.apple.mpegurl'
 const HLS_SEGMENT_CONTENT_TYPE = 'video/mp2t'
 
 /**
- * Deliberately does not catch-and-mark-failed on its own: finalize.ts (apps/api)
- * already validated this is a real, decodable file within limits, so an
- * exception here is most likely transient infra (S3, memory pressure), not a
- * bad file — letting it throw lets BullMQ's configured retries do their job.
- * media.worker.ts marks the row failed only once retries are exhausted.
+ * Deliberately does not catch-and-mark-failed on its own for a *transcode*
+ * failure: finalize.ts (apps/api) already validated this is a real,
+ * decodable file within limits, so an exception past the scan step is most
+ * likely transient infra (S3, memory pressure), not a bad file — letting it
+ * throw lets BullMQ's configured retries do their job. media.worker.ts
+ * marks the row failed only once retries are exhausted. A failed *scan* is
+ * the one exception to that: SPECS.md §9.2's pipeline step 3 (ClamAV + a
+ * known-content hash, content-scan.ts) runs first, for every kind, and its
+ * own verdict — clean or not — is definitive (the same bytes always scan
+ * the same way), so an infected/known-bad result marks the row failed
+ * immediately here instead of throwing for BullMQ to retry pointlessly.
+ * ClamAV being unreachable is different (infrastructure, not a verdict) and
+ * still throws, same as everything else in this function.
  *
  * Branches by `row.kind` (ROADMAP.md 2.7 adds gif/video alongside 1.5's
  * original image-only path) — each kind's own transcoder (sharp for
  * images, ffmpeg-runner-backed gif-transcoder.ts/video-transcoder.ts for
  * the other two) owns the format-specific work; this function's job is only
- * to fetch the source once, dispatch, upload whatever comes back, and mark
- * the row ready.
+ * to fetch the source once, scan it, dispatch, upload whatever comes back,
+ * and mark the row ready.
  */
 export function createMediaProcessor(options: MediaProcessorOptions) {
   return async function processMedia(mediaId: string): Promise<void> {
@@ -49,12 +66,21 @@ export function createMediaProcessor(options: MediaProcessorOptions) {
     const row = await options.repository.findMediaById(id)
     if (!row) return // Deleted between enqueue and processing — nothing to do.
 
+    const original = await options.storage.getObjectBuffer(options.bucket, row.storageKey)
+
+    const scanResult = await options.scanContent(original)
+    if (!scanResult.clean) {
+      console.error(`media ${mediaId}: failed content scan — ${scanResult.reason}`)
+      await options.repository.markFailed(id)
+      return
+    }
+
     if (row.kind === 'gif') {
-      await processGif(options, mediaId, id, row)
+      await processGif(options, mediaId, id, original)
     } else if (row.kind === 'video') {
-      await processVideo(options, mediaId, id, row)
+      await processVideo(options, mediaId, id, original)
     } else {
-      await processImage(options, mediaId, id, row)
+      await processImage(options, mediaId, id, original)
     }
   }
 }
@@ -63,10 +89,8 @@ async function processImage(
   options: MediaProcessorOptions,
   mediaId: string,
   id: bigint,
-  row: MediaRow,
+  original: Buffer,
 ): Promise<void> {
-  const original = await options.storage.getObjectBuffer(options.bucket, row.storageKey)
-
   // .rotate() bakes EXIF orientation into the pixels; not calling
   // .withMetadata() afterward is what actually strips the rest of EXIF
   // (sharp's default) — together, ROADMAP.md 1.5's "strip completo de
@@ -105,9 +129,8 @@ async function processGif(
   options: MediaProcessorOptions,
   mediaId: string,
   id: bigint,
-  row: MediaRow,
+  original: Buffer,
 ): Promise<void> {
-  const original = await options.storage.getObjectBuffer(options.bucket, row.storageKey)
   const result = await transcodeGif(original)
 
   const mp4Key = mediaGifMp4Key(mediaId)
@@ -134,9 +157,8 @@ async function processVideo(
   options: MediaProcessorOptions,
   mediaId: string,
   id: bigint,
-  row: MediaRow,
+  original: Buffer,
 ): Promise<void> {
-  const original = await options.storage.getObjectBuffer(options.bucket, row.storageKey)
   const result = await transcodeVideo(mediaId, original)
 
   const posterKey = mediaPosterKey(mediaId)

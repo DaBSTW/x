@@ -4,19 +4,34 @@ import { CreateBucketCommand, GetObjectCommand, PutObjectCommand } from '@aws-sd
 import { MinioContainer, type StartedMinioContainer } from '@testcontainers/minio'
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql'
 import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis'
-import { type Database, type Media, createDatabase, media, migrationsFolderUrl, users } from '@x/db'
+import {
+  type Database,
+  type Media,
+  createDatabase,
+  knownContentHashes,
+  media,
+  migrationsFolderUrl,
+  users,
+} from '@x/db'
 import { MEDIA_STATUS, createS3Client, generateId } from '@x/utils'
 import { Queue } from 'bullmq'
 import { eq } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
 import { Redis } from 'ioredis'
 import sharp from 'sharp'
+import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createMediaStorage } from '../lib/media-storage.js'
+import { sha256Hex } from './content-scan.js'
 import { createMediaRepository } from './media.repository.js'
 import { createMediaWorker } from './media.worker.js'
 
 const S3_BUCKET = 'x-media'
+
+// EICAR — the antivirus industry's own standard, safe test string every
+// real scanner (including ClamAV) is expected to flag; not a real virus.
+// https://www.eicar.org/download-anti-malware-testfile/
+const EICAR_TEST_STRING = 'X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*'
 
 /** A real ffmpeg subprocess, not a checked-in fixture — same reasoning as gif-transcoder.test.ts/video-transcoder.test.ts: this is exactly what the worker's own processGif/processVideo shells out to. */
 function ffmpegToBuffer(args: string[], format: string): Promise<Buffer> {
@@ -32,10 +47,25 @@ function ffmpegToBuffer(args: string[], format: string): Promise<Buffer> {
   })
 }
 
+// No @testcontainers/clamav module exists for this repo's pinned
+// testcontainers@10.16.0 (or any version) — same GenericContainer
+// workaround as OpenSearch/ClickHouse elsewhere in this repo. The image
+// ships a baked-in signature DB (confirmed separately: clamd starts and
+// scans real content even when freshclam's own live update fails, which it
+// reliably does in a sandboxed network), so no update step is needed for
+// clamd to become scan-ready — only its own real startup log line is.
+function createClamAvContainer(): GenericContainer {
+  return new GenericContainer('clamav/clamav-debian:latest')
+    .withExposedPorts(3310)
+    .withWaitStrategy(Wait.forLogMessage(/clamd started/))
+    .withStartupTimeout(120_000)
+}
+
 describe('media worker', () => {
   let postgresContainer: StartedPostgreSqlContainer
   let redisContainer: StartedRedisContainer
   let minioContainer: StartedMinioContainer
+  let clamavContainer: StartedTestContainer
   let db: Database
   let s3Config: {
     endpoint: string
@@ -44,6 +74,7 @@ describe('media worker', () => {
     secretAccessKey: string
     forcePathStyle: boolean
   }
+  let clamAv: { host: string; port: number }
 
   async function insertOwner(): Promise<bigint> {
     const id = generateId()
@@ -72,11 +103,13 @@ describe('media worker', () => {
   }
 
   beforeAll(async () => {
-    ;[postgresContainer, redisContainer, minioContainer] = await Promise.all([
+    ;[postgresContainer, redisContainer, minioContainer, clamavContainer] = await Promise.all([
       new PostgreSqlContainer('postgres:17-alpine').start(),
       new RedisContainer('redis:7-alpine').start(),
       new MinioContainer('minio/minio:latest').start(),
+      createClamAvContainer().start(),
     ])
+    clamAv = { host: clamavContainer.getHost(), port: clamavContainer.getMappedPort(3310) }
 
     db = createDatabase(postgresContainer.getConnectionUri())
     await migrate(db, { migrationsFolder: fileURLToPath(migrationsFolderUrl()) })
@@ -93,7 +126,12 @@ describe('media worker', () => {
   }, 120_000)
 
   afterAll(async () => {
-    await Promise.all([postgresContainer.stop(), redisContainer.stop(), minioContainer.stop()])
+    await Promise.all([
+      postgresContainer.stop(),
+      redisContainer.stop(),
+      minioContainer.stop(),
+      clamavContainer.stop(),
+    ])
   })
 
   it('processes a queued job end-to-end: downloads, transcodes, uploads variants, marks ready', async () => {
@@ -123,6 +161,7 @@ describe('media worker', () => {
       bucket: S3_BUCKET,
       redisUrl,
       concurrency: 1,
+      clamAv,
     })
     const queue = new Queue(handle.worker.name, {
       connection: new Redis(redisUrl, { maxRetriesPerRequest: null }),
@@ -184,6 +223,7 @@ describe('media worker', () => {
       bucket: S3_BUCKET,
       redisUrl,
       concurrency: 1,
+      clamAv,
     })
     const queue = new Queue(handle.worker.name, {
       connection: new Redis(redisUrl, { maxRetriesPerRequest: null }),
@@ -263,6 +303,7 @@ describe('media worker', () => {
       bucket: S3_BUCKET,
       redisUrl,
       concurrency: 1,
+      clamAv,
     })
     const queue = new Queue(handle.worker.name, {
       connection: new Redis(redisUrl, { maxRetriesPerRequest: null }),
@@ -301,6 +342,110 @@ describe('media worker', () => {
     await handle.close()
   }, 30_000)
 
+  it('marks media failed immediately (no transcode, no retries) when the content scan flags it via a real ClamAV (roadmap 2.7)', async () => {
+    const ownerId = await insertOwner()
+    const storageKey = 'media/eicar/original.png'
+    // A genuinely fake "image": the worker's own scan step runs before any
+    // format-specific decode is even attempted, so this never needs to be a
+    // real PNG — proves the scan gate itself, not image validation, which
+    // apps/api's finalize() (not this worker) already owns.
+    const mediaId = await insertPendingMedia(ownerId, storageKey, 'image/png')
+
+    const s3Client = createS3Client(s3Config)
+    await s3Client.send(
+      new PutObjectCommand({
+        Bucket: S3_BUCKET,
+        Key: storageKey,
+        Body: Buffer.from(EICAR_TEST_STRING),
+        ContentType: 'image/png',
+      }),
+    )
+
+    const redisUrl = `redis://${redisContainer.getHost()}:${redisContainer.getMappedPort(6379)}`
+    const handle = createMediaWorker({
+      repository: createMediaRepository(db),
+      storage: createMediaStorage(s3Config),
+      bucket: S3_BUCKET,
+      redisUrl,
+      concurrency: 1,
+      clamAv,
+    })
+    const queue = new Queue(handle.worker.name, {
+      connection: new Redis(redisUrl, { maxRetriesPerRequest: null }),
+    })
+
+    // A scan rejection returns normally (media.processor.ts's own posture:
+    // it's a definitive verdict, not a transient failure BullMQ should
+    // retry) — so the *job* completes; only the row itself ends up failed.
+    const completed = new Promise<void>((resolve, reject) => {
+      handle.worker.on('completed', (job) => {
+        if (job.data.mediaId === mediaId.toString()) resolve()
+      })
+      handle.worker.on('failed', (_job, error) => reject(error))
+    })
+    await queue.add('process', { mediaId: mediaId.toString() })
+    await completed
+
+    const [row] = await db.select().from(media).where(eq(media.id, mediaId)).limit(1)
+    expect(row?.status).toBe(MEDIA_STATUS.FAILED)
+    // Never even reached the transcode step — no variant was ever generated.
+    expect(row?.variants).toHaveLength(0)
+
+    await queue.close()
+    await handle.close()
+  }, 30_000)
+
+  it('marks media failed when its content matches a known-bad hash, without ever reaching ClamAV or the transcoder (roadmap 2.7)', async () => {
+    const ownerId = await insertOwner()
+    const storageKey = 'media/known-bad/original.png'
+    // Ordinary, benign bytes — proves the *hash* is what rejects this, not
+    // a ClamAV signature the content happens to also trip.
+    const content = Buffer.from(`known-bad test content ${generateId()}`)
+    await db
+      .insert(knownContentHashes)
+      .values({ sha256: sha256Hex(content), reason: 'test fixture' })
+    const mediaId = await insertPendingMedia(ownerId, storageKey, 'image/png')
+
+    const s3Client = createS3Client(s3Config)
+    await s3Client.send(
+      new PutObjectCommand({
+        Bucket: S3_BUCKET,
+        Key: storageKey,
+        Body: content,
+        ContentType: 'image/png',
+      }),
+    )
+
+    const redisUrl = `redis://${redisContainer.getHost()}:${redisContainer.getMappedPort(6379)}`
+    const handle = createMediaWorker({
+      repository: createMediaRepository(db),
+      storage: createMediaStorage(s3Config),
+      bucket: S3_BUCKET,
+      redisUrl,
+      concurrency: 1,
+      clamAv,
+    })
+    const queue = new Queue(handle.worker.name, {
+      connection: new Redis(redisUrl, { maxRetriesPerRequest: null }),
+    })
+
+    const completed = new Promise<void>((resolve, reject) => {
+      handle.worker.on('completed', (job) => {
+        if (job.data.mediaId === mediaId.toString()) resolve()
+      })
+      handle.worker.on('failed', (_job, error) => reject(error))
+    })
+    await queue.add('process', { mediaId: mediaId.toString() })
+    await completed
+
+    const [row] = await db.select().from(media).where(eq(media.id, mediaId)).limit(1)
+    expect(row?.status).toBe(MEDIA_STATUS.FAILED)
+    expect(row?.variants).toHaveLength(0)
+
+    await queue.close()
+    await handle.close()
+  }, 30_000)
+
   it('marks media failed once retries are exhausted for a genuinely broken object', async () => {
     const ownerId = await insertOwner()
     const storageKey = 'media/broken/original.png'
@@ -314,6 +459,7 @@ describe('media worker', () => {
       bucket: S3_BUCKET,
       redisUrl,
       concurrency: 1,
+      clamAv,
     })
     const queue = new Queue(handle.worker.name, {
       connection: new Redis(redisUrl, { maxRetriesPerRequest: null }),

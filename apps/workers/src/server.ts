@@ -74,6 +74,7 @@ const mediaWorker = createMediaWorker({
   bucket: env.S3_BUCKET,
   redisUrl: env.REDIS_URL,
   concurrency: env.MEDIA_WORKER_CONCURRENCY,
+  clamAv: { host: env.CLAMAV_HOST, port: env.CLAMAV_PORT },
 })
 
 // Awaited before the worker below starts consuming (top-level await — this

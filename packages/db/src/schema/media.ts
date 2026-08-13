@@ -57,3 +57,26 @@ export const media = pgTable(
 
 export type Media = typeof media.$inferSelect
 export type NewMedia = typeof media.$inferInsert
+
+/**
+ * SPECS.md §9.2's "hash contra base de contenido conocido (PhotoDNA/CSAM)"
+ * — PhotoDNA itself is a proprietary Microsoft service this repo has no
+ * vendor relationship with and can't honestly claim to integrate against;
+ * what's built here instead is a real, working first line of defense that
+ * *is* a legitimate, widely-used technique on its own (NCMEC and others do
+ * distribute exact-hash lists) — SHA-256 exact-match against a maintained
+ * table of known-bad hashes, documented plainly as a simplification of
+ * PhotoDNA's own perceptual hashing (which tolerates cropping/recompression;
+ * exact-match doesn't), not a silent stand-in for it. Postgres, not Redis,
+ * on purpose: this list is a security control, not cache-warm-able derived
+ * state — losing it to a Redis restart would be a real regression, not a
+ * cheap-to-rebuild inconvenience.
+ */
+export const knownContentHashes = pgTable('known_content_hashes', {
+  sha256: varchar('sha256', { length: 64 }).primaryKey(),
+  addedAt: timestamp('added_at', { withTimezone: true }).notNull().defaultNow(),
+  reason: text('reason'),
+})
+
+export type KnownContentHash = typeof knownContentHashes.$inferSelect
+export type NewKnownContentHash = typeof knownContentHashes.$inferInsert

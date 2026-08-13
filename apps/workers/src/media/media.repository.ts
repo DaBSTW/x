@@ -1,5 +1,5 @@
 import type { Database } from '@x/db'
-import { media } from '@x/db'
+import { knownContentHashes, media } from '@x/db'
 import { MEDIA_STATUS, type MediaVariant } from '@x/utils'
 import { eq } from 'drizzle-orm'
 
@@ -47,6 +47,16 @@ export function createMediaRepository(db: Database) {
 
     async markFailed(id: bigint): Promise<void> {
       await db.update(media).set({ status: MEDIA_STATUS.FAILED }).where(eq(media.id, id))
+    },
+
+    /** SPECS.md §9.2's "hash contra base de contenido conocido" — see knownContentHashes' own docstring (@x/db) for why this is SHA-256 exact-match, not PhotoDNA. */
+    async isKnownBadHash(sha256: string): Promise<boolean> {
+      const [row] = await db
+        .select({ sha256: knownContentHashes.sha256 })
+        .from(knownContentHashes)
+        .where(eq(knownContentHashes.sha256, sha256))
+        .limit(1)
+      return row !== undefined
     },
   }
 }
