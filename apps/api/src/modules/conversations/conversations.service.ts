@@ -1,5 +1,21 @@
-import type { Conversation, ConversationMemberSummary, Message } from '@x/contracts'
-import { ForbiddenError, NotFoundError, ValidationError, generateId } from '@x/utils'
+import type {
+  Conversation,
+  ConversationMemberSummary,
+  Message,
+  RealtimeServerEvent,
+} from '@x/contracts'
+import {
+  ForbiddenError,
+  MESSAGE_CREATED_EVENT,
+  NotFoundError,
+  REALTIME_STREAM_FIELD_DATA,
+  REALTIME_STREAM_FIELD_EVENT,
+  REALTIME_STREAM_RETENTION_MS,
+  ValidationError,
+  conversationChannel,
+  generateId,
+  realtimeStreamKey,
+} from '@x/utils'
 import type { Redis } from 'ioredis'
 import { enforceRateLimit } from '../../lib/rate-limit.js'
 import type { ConversationsRepository, MemberRow } from './conversations.repository.js'
@@ -170,12 +186,67 @@ export function createConversationsService(
 
     const id = generateId()
     await repository.insertMessage({ id, conversationId, senderId, text })
-    return {
+    const message: Message = {
       id: id.toString(),
       conversationId: conversationId.toString(),
       senderId: senderId.toString(),
       text,
       createdAt: new Date().toISOString(),
+    }
+
+    await publishMessageCreated(conversationId, message)
+
+    return message
+  }
+
+  /**
+   * Live delivery over `conv:{id}` (ROADMAP.md 2.5/2.2) — `conv:{id}` was
+   * already an authorized, subscribable channel (apps/ws-gateway's own
+   * channel-authorization.ts) since 2.2 shipped, but nothing ever published
+   * to it: use-messages.ts/use-conversations.ts's own comments both said
+   * "no WS gateway yet" long after one existed. Published inline here, no
+   * BullMQ queue — unlike a post's fan-out to potentially thousands of
+   * followers, a conversation only ever has a handful of members, so the
+   * XADD-then-PUBLISH fanout.processor.ts uses for a whole batch collapses
+   * to the same two calls for this one channel. Best-effort: the message
+   * is already durably in Postgres by the time this runs, so a Redis
+   * hiccup here just means this client falls back to use-messages.ts's own
+   * (much slower, now just a safety net) poll instead of getting it live —
+   * never a reason to fail the send itself.
+   */
+  async function publishMessageCreated(conversationId: bigint, message: Message): Promise<void> {
+    try {
+      const channel = conversationChannel(conversationId)
+      const streamCutoffId = `${Date.now() - REALTIME_STREAM_RETENTION_MS}-0`
+      // MINID trim piggybacks on the same XADD, same reasoning
+      // fanout.processor.ts documents for its own retention (SPECS.md §8.3:
+      // "retención 5 min") — no separate sweep job.
+      const eventId = await redis.xadd(
+        realtimeStreamKey(channel),
+        'MINID',
+        '~',
+        streamCutoffId,
+        '*',
+        REALTIME_STREAM_FIELD_EVENT,
+        MESSAGE_CREATED_EVENT,
+        REALTIME_STREAM_FIELD_DATA,
+        JSON.stringify(message),
+      )
+      if (!eventId) return
+      const event: RealtimeServerEvent = {
+        op: 'event',
+        channel,
+        event: MESSAGE_CREATED_EVENT,
+        data: message,
+        eventId,
+      }
+      // PUBLISH to a channel with nobody subscribed (ws-gateway down, or
+      // the other member simply not connected right now) is a Redis
+      // no-op, never an error — same "live delivery is best-effort on top
+      // of the durable XADD above" posture fanout.processor.ts documents.
+      await redis.publish(channel, JSON.stringify(event))
+    } catch {
+      // Swallowed intentionally — see the docstring above.
     }
   }
 

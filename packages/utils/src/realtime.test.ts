@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  MESSAGE_CREATED_EVENT,
   POST_AVAILABLE_EVENT,
   REALTIME_STREAM_FIELD_DATA,
   REALTIME_STREAM_FIELD_EVENT,
@@ -39,5 +40,7 @@ describe('stream field names and event kinds', () => {
     expect(REALTIME_STREAM_FIELD_DATA).toBe('data')
     expect(REALTIME_STREAM_FIELD_EVENT).not.toBe(REALTIME_STREAM_FIELD_DATA)
     expect(POST_AVAILABLE_EVENT).toBe('post.available')
+    expect(MESSAGE_CREATED_EVENT).toBe('message.created')
+    expect(POST_AVAILABLE_EVENT).not.toBe(MESSAGE_CREATED_EVENT)
   })
 })

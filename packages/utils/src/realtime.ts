@@ -49,3 +49,6 @@ export const REALTIME_STREAM_FIELD_DATA = 'data'
 
 /** SPECS.md §8.2's `timeline:{id}` badge event name. */
 export const POST_AVAILABLE_EVENT = 'post.available'
+
+/** `conv:{id}` live message delivery (ROADMAP.md 2.5/2.2) — the event name a member's socket sees when someone sends a new message. */
+export const MESSAGE_CREATED_EVENT = 'message.created'

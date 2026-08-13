@@ -14,7 +14,13 @@ export function useConversations() {
       if (error) throw new Error(error.error.message)
       return data.data
     },
-    refetchInterval: 30_000, // no WS gateway yet (ROADMAP.md 2.2) — polls like use-unread-count.ts does
+    // use-messages.ts now delivers new messages live over conv:{id} while a
+    // chat is actually open (ROADMAP.md 2.5/2.2) — this list view (unread
+    // counts/lastMessageAt across every conversation, not just the open
+    // one) still doesn't subscribe to anything, a deliberately separate,
+    // still-open piece of the same upgrade. Polls like use-unread-count.ts
+    // does in the meantime.
+    refetchInterval: 30_000,
   })
 }
 

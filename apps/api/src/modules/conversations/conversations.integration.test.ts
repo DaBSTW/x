@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url'
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql'
 import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis'
 import { createDatabase, migrationsFolderUrl } from '@x/db'
+import { conversationChannel, realtimeStreamKey } from '@x/utils'
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
 import type { FastifyInstance } from 'fastify'
 import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers'
@@ -208,5 +209,44 @@ describe('conversations routes', () => {
       payload: { memberIds: [bob.userId], isGroup: false },
     })
     expect(allowed.statusCode).toBe(201)
+  })
+
+  it('publishes a real message.created event to the conversation channel, durably (ROADMAP.md 2.5/2.2)', async () => {
+    const alice = await registerAndLogin('dmrtalice')
+    const bob = await registerAndLogin('dmrtbob')
+
+    const created = await app.inject({
+      method: 'POST',
+      url: '/v1/conversations',
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+      payload: { memberIds: [bob.userId], isGroup: false },
+    })
+    const conversationId = created.json().data.id as string
+
+    const sent = await app.inject({
+      method: 'POST',
+      url: `/v1/conversations/${conversationId}/messages`,
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+      payload: { text: 'evento en vivo' },
+    })
+    const message = sent.json().data
+
+    // The durable half (XADD) — what a reconnecting client's `since`
+    // replays from (ROADMAP.md 2.2) — checked directly against the real
+    // Redis Stream, not just that the HTTP call itself returned 201.
+    const channel = conversationChannel(conversationId)
+    const entries = await app.redis.xrange(realtimeStreamKey(channel), '-', '+')
+    expect(entries).toHaveLength(1)
+    const fields = entries[0]?.[1] ?? []
+    const fieldMap = Object.fromEntries(
+      Array.from({ length: fields.length / 2 }, (_, i) => [fields[i * 2], fields[i * 2 + 1]]),
+    )
+    expect(fieldMap.event).toBe('message.created')
+    expect(JSON.parse(fieldMap.data ?? '{}')).toMatchObject({
+      id: message.id,
+      conversationId,
+      senderId: alice.userId,
+      text: 'evento en vivo',
+    })
   })
 })

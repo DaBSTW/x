@@ -34,8 +34,10 @@ test('starting a DM by username delivers messages both ways (ROADMAP.md 2.5)', a
   await bobPage.getByRole('button', { name: 'Enviar' }).click()
   await expect(bobPage.getByText(reply)).toBeVisible()
 
-  // use-messages.ts polls every 5s (no WS gateway yet, ROADMAP.md 2.2).
-  await expect(alicePage.getByText(reply)).toBeVisible({ timeout: 15_000 })
+  // use-messages.ts now delivers over conv:{id} live (ROADMAP.md 2.5/2.2) —
+  // its own poll is a 30s safety net, well past this timeout, so arriving
+  // this fast is only possible via the WS channel, not the fallback.
+  await expect(alicePage.getByText(reply)).toBeVisible({ timeout: 8_000 })
 
   await aliceContext.close()
   await bobContext.close()

@@ -91,6 +91,7 @@ export {
   ValidationError,
 } from './errors.js'
 export {
+  MESSAGE_CREATED_EVENT,
   POST_AVAILABLE_EVENT,
   REALTIME_STREAM_FIELD_DATA,
   REALTIME_STREAM_FIELD_EVENT,

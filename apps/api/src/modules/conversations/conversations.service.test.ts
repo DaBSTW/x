@@ -6,14 +6,40 @@ import { createConversationsService } from './conversations.service.js'
 
 // Hand-rolled — only the INCR/PEXPIRE/PTTL sequence enforceRateLimit's Lua
 // script issues, same convention as auth.service.test.ts's own fake Redis
-// for assertLoginNotBackedOff.
-function createFakeRedis(): Redis {
+// for assertLoginNotBackedOff — plus xadd/publish for publishMessageCreated
+// (ROADMAP.md 2.5/2.2), recording what got published so tests can assert on
+// the exact channel/event/data instead of just "it didn't throw".
+function createFakeRedis() {
   const counts = new Map<string, number>()
-  return {
+  const published: Array<{ channel: string; message: string }> = []
+  let nextStreamId = 1
+  const redis = {
     async eval(_script: string, _numKeys: number, key: string) {
       const next = (counts.get(key) ?? 0) + 1
       counts.set(key, next)
       return [next, 1000]
+    },
+    async xadd() {
+      const id = `${Date.now()}-${nextStreamId}`
+      nextStreamId += 1
+      return id
+    },
+    async publish(channel: string, message: string) {
+      published.push({ channel, message })
+      return 1
+    },
+  } as unknown as Redis
+  return { redis, published }
+}
+
+/** publishMessageCreated's own try/catch should make a broken Redis publish path invisible to sendMessage's caller — this fake exercises exactly that, xadd throwing before publish is ever reached. */
+function createFailingRedis(): Redis {
+  return {
+    async eval(_script: string, _numKeys: number, _key: string) {
+      return [1, 1000]
+    },
+    async xadd() {
+      throw new Error('redis is down')
     },
   } as unknown as Redis
 }
@@ -183,6 +209,7 @@ describe('createConversationsService', () => {
   let follow: ReturnType<typeof createFakeRepository>['follow']
   let isFollowing: ReturnType<typeof createFakeRepository>['isFollowing']
   let redis: Redis
+  let published: Array<{ channel: string; message: string }>
 
   beforeEach(() => {
     const fake = createFakeRepository()
@@ -190,7 +217,9 @@ describe('createConversationsService', () => {
     addUser = fake.addUser
     follow = fake.follow
     isFollowing = fake.isFollowing
-    redis = createFakeRedis()
+    const fakeRedis = createFakeRedis()
+    redis = fakeRedis.redis
+    published = fakeRedis.published
   })
 
   function followLookup() {
@@ -322,6 +351,48 @@ describe('createConversationsService', () => {
       await service.markRead(BigInt(conversation.id), bob, BigInt(message.id))
       const { items: afterRead } = await service.listConversations(bob, 20, null)
       expect(afterRead[0]?.unreadCount).toBe(0)
+    })
+
+    // ROADMAP.md 2.5/2.2: conv:{id} was an authorized, subscribable WS
+    // channel since 2.2 shipped, but nothing ever published to it —
+    // use-messages.ts/use-conversations.ts's own "no WS gateway yet"
+    // comments were stale by the time this was found.
+    it('publishes a message.created event on the conversation channel after sending', async () => {
+      const service = createConversationsService(repository, redis)
+      const alice = addUser('alice')
+      const bob = addUser('bob')
+      const conversation = await service.create(alice, { memberIds: [bob], isGroup: false })
+
+      const message = await service.sendMessage(BigInt(conversation.id), alice, 'hola bob')
+
+      expect(published).toHaveLength(1)
+      expect(published[0]?.channel).toBe(`conv:${conversation.id}`)
+      const event = JSON.parse(published[0]?.message ?? '{}')
+      expect(event).toMatchObject({
+        op: 'event',
+        channel: `conv:${conversation.id}`,
+        event: 'message.created',
+        data: {
+          id: message.id,
+          conversationId: conversation.id,
+          senderId: alice.toString(),
+          text: 'hola bob',
+        },
+      })
+      expect(typeof event.eventId).toBe('string')
+    })
+
+    it('still sends and returns the message when publishing to Redis fails', async () => {
+      const service = createConversationsService(repository, createFailingRedis())
+      const alice = addUser('alice')
+      const bob = addUser('bob')
+      const conversation = await service.create(alice, { memberIds: [bob], isGroup: false })
+
+      const message = await service.sendMessage(BigInt(conversation.id), alice, 'hola bob')
+      expect(message.text).toBe('hola bob')
+
+      const { items } = await service.listMessages(BigInt(conversation.id), bob, 20, null)
+      expect(items.map((m) => m.text)).toEqual(['hola bob'])
     })
 
     it('404s sendMessage and listMessages for a non-member', async () => {
