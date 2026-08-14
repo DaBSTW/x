@@ -60,7 +60,9 @@ export function createModerationService(deps: ModerationServiceDeps) {
   function toReportDto(row: Report) {
     return {
       id: row.id.toString(),
-      reporterId: row.reporterId.toString(),
+      // null for a report the automatic classifier layer generated
+      // (ROADMAP.md 3.3d) — no human reporter to attribute it to.
+      reporterId: row.reporterId?.toString() ?? null,
       targetType: row.targetType,
       targetId: row.targetId.toString(),
       category: row.category,
@@ -194,6 +196,52 @@ export function createModerationService(deps: ModerationServiceDeps) {
     async listReportsQueue(status: 'pending' | 'reviewing', limit: number) {
       const rows = await repository.listReportsQueue(status, limit)
       return rows.map(toReportDto)
+    },
+
+    /**
+     * ROADMAP.md 3.3d's automatic classifier layer, SPECS.md §12.1's
+     * "0.70–0.95 → cola de revisión humana priorizada" — reuses the same
+     * `reports` queue human-submitted ones go through (reporterId `null`
+     * marks it as system-generated) rather than a parallel structure, so
+     * apps/admin's review queue is one list, not two. Priority comes
+     * directly from the classifier's own score (already a 0–1 confidence
+     * number, a more precise signal than createReport's category-severity
+     * heuristic above, which exists for the *absence* of a real score).
+     */
+    async flagForReview(input: {
+      targetType: 'post' | 'user'
+      targetId: bigint
+      category: string
+      reason: string
+      score: number
+    }) {
+      const target = await repository.findModerationTargetContext(input.targetType, input.targetId)
+      if (!target) throw new NotFoundError(input.targetType, input.targetId.toString())
+
+      const id = generateId()
+      const priority = Math.round(input.score * 100)
+      await repository.insertReport({
+        id,
+        reporterId: null,
+        targetType: input.targetType,
+        targetId: input.targetId,
+        category: input.category as Report['category'],
+        reason: input.reason,
+        priority,
+      })
+      return toReportDto({
+        id,
+        reporterId: null,
+        targetType: input.targetType,
+        targetId: input.targetId,
+        category: input.category as Report['category'],
+        reason: input.reason,
+        status: 'pending',
+        priority,
+        createdAt: new Date(),
+        resolvedAt: null,
+        resolvedBy: null,
+      })
     },
 
     /**

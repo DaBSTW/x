@@ -19,6 +19,7 @@ import {
   validatorCompiler,
 } from 'fastify-type-provider-zod'
 import type { Env } from './env.js'
+import { classifyContent } from './lib/content-classifier.js'
 import { createKafkaEventTopic } from './lib/kafka-event-topic.js'
 import { createMailer } from './lib/mailer.js'
 import { createMediaQueue } from './lib/media-queue.js'
@@ -182,6 +183,21 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   // interactionsService below reuses this same instance rather than a
   // second one.
   const interactionsRepository = createInteractionsRepository(app.db)
+
+  // Created ahead of postsService below (only app.db/mailer/webUrl
+  // needed, not postsService itself) so its applyModerationAction/
+  // flagForReview can back postsService's own automatic-classifier
+  // dependency (ROADMAP.md 3.3d) — same "created early to feed a later
+  // service's optional dependency" reasoning socialGraphRepository above
+  // already has for isFollowing.
+  const moderationRepository = createModerationRepository(app.db)
+  const moderationService = createModerationService({
+    repository: moderationRepository,
+    mailer,
+    publishNotification,
+    webUrl: env.WEB_URL,
+  })
+
   const postsService = createPostsService(
     postsRepository,
     async (postId, authorId) => {
@@ -208,15 +224,15 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
     // (env.ts's own comment on why nothing is hardcoded here).
     env.BLOCKED_TERMS ? env.BLOCKED_TERMS.split(',').map((term) => term.trim()) : [],
     checkMaliciousUrlsAgainstTestDomains,
+    // ROADMAP.md 3.3d — classify is the real (if simple) heuristic;
+    // applyAction/flagForReview are moderationService's own, structurally
+    // matched rather than imported (AutomaticModerationDeps's own comment).
+    {
+      classify: classifyContent,
+      applyAction: moderationService.applyModerationAction,
+      flagForReview: moderationService.flagForReview,
+    },
   )
-
-  const moderationRepository = createModerationRepository(app.db)
-  const moderationService = createModerationService({
-    repository: moderationRepository,
-    mailer,
-    publishNotification,
-    webUrl: env.WEB_URL,
-  })
 
   const mediaStorage = createMediaStorage({
     endpoint: env.S3_ENDPOINT,

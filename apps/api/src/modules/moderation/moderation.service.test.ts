@@ -214,6 +214,44 @@ describe('createModerationService', () => {
     })
   })
 
+  describe('flagForReview (ROADMAP.md 3.3d)', () => {
+    it('inserts a reporterId: null report, with priority taken directly from the classifier score', async () => {
+      const authorId = generateId()
+      const postId = generateId()
+      fake.seedUser(authorId)
+      fake.seedPost(postId, authorId)
+      const service = makeService()
+
+      const report = await service.flagForReview({
+        targetType: 'post',
+        targetId: postId,
+        category: 'harassment',
+        reason: 'flagged automatically by the toxicity classifier (score 0.82)',
+        score: 0.82,
+      })
+
+      expect(report.reporterId).toBeNull()
+      expect(report.priority).toBe(82)
+      expect(report.status).toBe('pending')
+
+      const [queued] = await service.listReportsQueue('pending', 10)
+      expect(queued?.id).toBe(report.id)
+    })
+
+    it('throws NotFoundError for a target that does not exist', async () => {
+      const service = makeService()
+      await expect(
+        service.flagForReview({
+          targetType: 'post',
+          targetId: generateId(),
+          category: 'spam',
+          reason: 'x',
+          score: 0.8,
+        }),
+      ).rejects.toThrow(/not found/)
+    })
+  })
+
   describe('applyModerationAction', () => {
     it('label sets moderatorLabel on the post and emails the author with the fragment', async () => {
       const authorId = generateId()

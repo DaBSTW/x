@@ -67,6 +67,37 @@ function containsBlockedTerm(text: string, blockedTerms: string[]): string | nul
   return blockedTerms.find((term) => lower.includes(term.toLowerCase())) ?? null
 }
 
+/**
+ * ROADMAP.md 3.3d — SPECS.md §12.1's automatic layer, threshold routing
+ * only: what the score *means* (>0.95 auto-hide, 0.70–0.95 human queue,
+ * <0.70 log-only) lives here, in createPostsService's own create(); what
+ * the score *is* (apps/api/src/lib/content-classifier.ts's real heuristic,
+ * or a future real model) and what an action/report *does*
+ * (moderation.service.ts) are both injected, kept structurally decoupled
+ * from posts.service.ts the same way FollowLookup/BlockLookup already are
+ * — this module has no import of, or type dependency on, the moderation
+ * module itself.
+ */
+export type AutomaticModerationDeps = {
+  classify?: (text: string, entities: ParsedEntity[]) => { toxicity: number; spam: number }
+  applyAction?: (input: {
+    targetType: 'post'
+    targetId: bigint
+    action: 'hide'
+    reason: string
+    policy: string
+    actorType: 'system'
+    actorId: null
+  }) => Promise<unknown>
+  flagForReview?: (input: {
+    targetType: 'post'
+    targetId: bigint
+    category: string
+    reason: string
+    score: number
+  }) => Promise<unknown>
+}
+
 /** Backs the block-visibility guard on every read below (ROADMAP.md 2.6) — same narrowing reasoning as FollowLookup. `SocialGraphRepository.findBlockedAuthorIds` already matches this shape, so app.ts passes it straight through with no adapter. */
 export type BlockLookup = {
   findBlockedAuthorIds(viewerId: bigint, authorIds: bigint[]): Promise<Set<bigint>>
@@ -237,6 +268,11 @@ export function createPostsService(
   // check entirely rather than failing a post over a dependency the
   // caller chose not to wire up (mirrors publishTrendIngest above).
   checkMaliciousUrls?: CheckMaliciousUrls,
+  // ROADMAP.md 3.3d — empty object by default, same posture as every
+  // optional dependency above: unset (or any one field of it unset) means
+  // that specific piece of the automatic layer never runs, not that it
+  // silently fails.
+  automaticModeration: AutomaticModerationDeps = {},
 ) {
   /**
    * `undefined` when there's no viewer (anonymous) or nothing wired up —
@@ -425,6 +461,60 @@ export function createPostsService(
     }
   }
 
+  /**
+   * SPECS.md §12.1's automatic layer, threshold routing — the >0.95 /
+   * 0.70–0.95 / <0.70 bands, in that order (a post can only land in one).
+   * Called detached (create()'s own comment on why) — never awaited by
+   * the request that published the content it's scoring.
+   */
+  async function runAutomaticModeration(
+    postId: bigint,
+    text: string,
+    entities: ParsedEntity[],
+  ): Promise<void> {
+    if (!automaticModeration.classify) return
+    const scores = automaticModeration.classify(text, entities)
+    const [label, score] =
+      scores.toxicity >= scores.spam
+        ? (['toxicity', scores.toxicity] as const)
+        : (['spam', scores.spam] as const)
+    const reason = `flagged automatically by the ${label} classifier (score ${score.toFixed(2)})`
+
+    if (score > 0.95) {
+      await automaticModeration.applyAction?.({
+        targetType: 'post',
+        targetId: postId,
+        action: 'hide',
+        reason,
+        policy: label,
+        actorType: 'system',
+        actorId: null,
+      })
+    } else if (score >= 0.7) {
+      await automaticModeration.flagForReview?.({
+        targetType: 'post',
+        targetId: postId,
+        // The two categories reports.category actually has that a text
+        // classifier's own two labels map onto directly — 'harassment'
+        // rather than 'hate_speech'/'violence'/'self_harm' since the
+        // toxicity heuristic itself doesn't distinguish between those
+        // (an aggression signal, not a category classifier).
+        category: label === 'toxicity' ? 'harassment' : 'spam',
+        reason,
+        score,
+      })
+    } else {
+      // SPECS.md's own wording for this tier is "sin acción, sólo
+      // registro" — deliberately not a DB row (moderation_actions/reports
+      // are both "something happened," and nothing did here), the same
+      // log-line-not-a-real-backend posture ROADMAP.md 3.1's consumer-lag
+      // warning already uses for the same reason (no alerting/metrics
+      // backend exists in this repo yet). console.warn, not .info: this
+      // repo's own eslint config (CODESTYLE.md) only allows warn/error.
+      console.warn(`post ${postId}: ${reason}, below the review threshold`)
+    }
+  }
+
   async function create(authorId: bigint, input: CreatePostServiceInput): Promise<Post> {
     await rejectIfReadOnly(authorId)
 
@@ -578,6 +668,18 @@ export function createPostsService(
         groupKey: null,
       })
     }
+
+    // SPECS.md §12.1's automatic layer is explicitly "asíncrona" — unlike
+    // every await above (each swallows its own error but still adds its
+    // own latency to this response), this one is genuinely detached: the
+    // classifier itself is a synchronous heuristic with nothing to await,
+    // but what happens with its score (an action or a queue insert) is a
+    // real DB write that has no business making the client wait for a
+    // decision about content that's already published either way.
+    void runAutomaticModeration(id, input.text, parsed).catch(() => {
+      // Swallowed intentionally — same posture as every other post-publish
+      // side effect in this function.
+    })
 
     return toPostDto(
       {

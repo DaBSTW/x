@@ -62,9 +62,13 @@ export const reports = pgTable(
   'reports',
   {
     id: bigint('id', { mode: 'bigint' }).primaryKey(),
-    reporterId: bigint('reporter_id', { mode: 'bigint' })
-      .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
+    // Nullable — ROADMAP.md 3.3d's automatic classifier layer inserts a
+    // row here too (SPECS.md §12.1's "0.70–0.95 → cola de revisión
+    // humana"), reusing this same queue instead of a parallel one, with no
+    // human reporter to attribute it to. `null` means system-generated.
+    reporterId: bigint('reporter_id', { mode: 'bigint' }).references(() => users.id, {
+      onDelete: 'cascade',
+    }),
     targetType: moderationTargetType('target_type').notNull(),
     // No FK: the target is either `users.id` or a partitioned `posts.id`
     // (which, like likes.postId/bookmarks.postId, can't be an FK target).

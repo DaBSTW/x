@@ -47,7 +47,8 @@ export type CreateReportRequest = z.infer<typeof createReportRequestSchema>
 
 export const reportSchema = z.object({
   id: snowflakeIdSchema,
-  reporterId: snowflakeIdSchema,
+  // null for a report the automatic classifier layer generated (ROADMAP.md 3.3d) — no human reporter.
+  reporterId: snowflakeIdSchema.nullable(),
   targetType: moderationTargetTypeSchema,
   targetId: snowflakeIdSchema,
   category: reportCategorySchema,

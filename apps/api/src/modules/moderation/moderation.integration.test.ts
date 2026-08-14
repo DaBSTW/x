@@ -10,6 +10,17 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { buildApp } from '../../app.js'
 import type { Env } from '../../env.js'
 
+/** ROADMAP.md 3.3d's automatic layer runs detached from the request that published the content (posts.service.ts's own create() comment on why) — its own effects need a poll, not a bare assertion right after the response comes back. Same reasoning as every other genuinely-async waitFor in this codebase. */
+async function waitFor<T>(check: () => Promise<T | false>, timeoutMs = 15_000): Promise<T> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const result = await check()
+    if (result !== false) return result
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  }
+  throw new Error(`waitFor: condition never became true within ${timeoutMs}ms`)
+}
+
 describe('moderation routes', () => {
   let postgresContainer: StartedPostgreSqlContainer
   let redisContainer: StartedRedisContainer
@@ -336,6 +347,73 @@ describe('moderation routes', () => {
       payload: { text: 'intento publicar en modo lectura' },
     })
     expect(createResponse.statusCode).toBe(403)
+  })
+
+  it('auto-hides a post the toxicity classifier scores above 0.95, logged as a system-actioned moderation_actions row (ROADMAP.md 3.3d)', async () => {
+    const author = await registerAndLogin('mod_auto_hide')
+    const moderator = await registerAndLogin('mod_reviewer4')
+    await makeModerator(moderator.userId)
+    const modAuth = { authorization: `Bearer ${moderator.accessToken}` }
+
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/v1/posts',
+      headers: { authorization: `Bearer ${author.accessToken}` },
+      payload: { text: 'ODIO MUERTE A TE VOY A MATAR!!!! ASCO DE PERSONAAAAA!!!!' },
+    })
+    expect(createResponse.statusCode).toBe(201)
+    const postId = createResponse.json().data.id as string
+
+    // The post is visible right after the response — the classifier runs
+    // detached, so hiding it is a real (if usually fast) race, not instant.
+    await waitFor(async () => {
+      const response = await app.inject({ method: 'GET', url: `/v1/posts/${postId}` })
+      return response.statusCode === 404
+    })
+
+    const actionsResponse = await app.inject({
+      method: 'GET',
+      url: `/v1/moderation/targets/post/${postId}/actions`,
+      headers: modAuth,
+    })
+    expect(actionsResponse.statusCode).toBe(200)
+    expect(actionsResponse.json().data).toContainEqual(
+      expect.objectContaining({ action: 'hide', actorType: 'system', actorId: null }),
+    )
+  })
+
+  it('queues a post the toxicity classifier scores between 0.70 and 0.95 for human review, without hiding it (ROADMAP.md 3.3d)', async () => {
+    const author = await registerAndLogin('mod_auto_queue')
+    const moderator = await registerAndLogin('mod_reviewer5')
+    await makeModerator(moderator.userId)
+    const modAuth = { authorization: `Bearer ${moderator.accessToken}` }
+
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/v1/posts',
+      headers: { authorization: `Bearer ${author.accessToken}` },
+      payload: { text: 'ODIO ESTO tanto de verdad!!' },
+    })
+    expect(createResponse.statusCode).toBe(201)
+    const postId = createResponse.json().data.id as string
+
+    const queuedReport = await waitFor(async () => {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/v1/moderation/reports',
+        headers: modAuth,
+      })
+      const match = (
+        response.json().data as Array<{ targetId: string; reporterId: string | null }>
+      ).find((report) => report.targetId === postId)
+      return match ?? false
+    })
+    expect(queuedReport.reporterId).toBeNull()
+
+    // Still fully visible — the 0.70–0.95 band queues for review, it
+    // doesn't act on its own (SPECS.md §12.1).
+    const stillThere = await app.inject({ method: 'GET', url: `/v1/posts/${postId}` })
+    expect(stillThere.statusCode).toBe(200)
   })
 })
 
