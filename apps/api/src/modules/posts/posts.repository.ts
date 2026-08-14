@@ -13,7 +13,7 @@ import {
   users,
 } from '@x/db'
 import { MEDIA_STATUS, ValidationError } from '@x/utils'
-import { and, desc, eq, exists, inArray, isNull, lt, ne, sql } from 'drizzle-orm'
+import { and, desc, eq, exists, gte, inArray, isNull, lt, ne, sql } from 'drizzle-orm'
 
 export type PostEntityRow = {
   postId: bigint
@@ -196,6 +196,17 @@ export function createPostsRepository(db: Database) {
         .where(eq(users.id, authorId))
         .limit(1)
       return row?.readOnlyUntil ?? null
+    },
+
+    /** ROADMAP.md 3.3e's "10 posts/día" for a new account — idx_posts_author (authorId, createdAt DESC) already covers this range scan. */
+    async countPostsByAuthorSince(authorId: bigint, since: Date): Promise<number> {
+      const [row] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(posts)
+        .where(
+          and(eq(posts.authorId, authorId), gte(posts.createdAt, since), isNull(posts.deletedAt)),
+        )
+      return row?.count ?? 0
     },
 
     /** Batch hydration for timeline reads — a single `WHERE id = ANY($1)` (SPECS.md §6.1), order is not guaranteed. */

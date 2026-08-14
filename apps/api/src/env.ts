@@ -37,6 +37,16 @@ const envSchema = z
     LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().positive().optional(),
     FORGOT_PASSWORD_RATE_LIMIT_MAX: z.coerce.number().int().positive().optional(),
 
+    // ROADMAP.md 3.3e / SPECS.md §12.3's new-account limit — optional,
+    // same reasoning and same fix as LOGIN_RATE_LIMIT_MAX above: a test
+    // file with one long-lived shared author reused across many `it`
+    // blocks (posts.integration.test.ts) can accumulate more than 10
+    // posts within a run that takes seconds, nowhere near the real 24h
+    // window this is meant to bound — raised there, not disabled, same
+    // "the production-sane ceiling is easy to hit by suite size alone"
+    // posture LOGIN_RATE_LIMIT_MAX's own comment already documents.
+    NEW_ACCOUNT_MAX_POSTS_PER_DAY: z.coerce.number().int().positive().optional(),
+
     // ROADMAP.md 3.3 / SPECS.md §12.1's preventive layer, "listas de
     // bloqueo" — comma-separated, optional same reasoning as the rate
     // limits above. Unset (the default everywhere but a real deployment)

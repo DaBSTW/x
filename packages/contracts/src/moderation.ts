@@ -123,3 +123,8 @@ export const resolveAppealRequestSchema = z.object({
   status: z.enum(['upheld', 'overturned']),
 })
 export type ResolveAppealRequest = z.infer<typeof resolveAppealRequestSchema>
+
+// GET /moderation/users/:id/trust-score — ROADMAP.md 3.3e.
+export const trustScoreResponseSchema = z.object({
+  data: z.object({ score: z.number().min(0).max(1) }),
+})

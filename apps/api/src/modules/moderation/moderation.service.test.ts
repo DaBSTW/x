@@ -32,7 +32,14 @@ function createFakeRepository() {
     bigint,
     { authorId: bigint; text: string | null; deletedAt: Date | null } & PostModerationStateUpdate
   >()
-  const userStates = new Map<bigint, { email: string } & UserModerationStateUpdate>()
+  type UserState = {
+    email: string
+    accountAgeMs: number
+    emailVerified: boolean
+    followersCount: number
+    followingCount: number
+  } & UserModerationStateUpdate
+  const userStates = new Map<bigint, UserState>()
 
   const repository: ModerationRepository = {
     async insertReport(data) {
@@ -133,6 +140,23 @@ function createFakeRepository() {
       // moderation.integration.test.ts instead.
       return false
     },
+    async findTrustScoreFacts(userId) {
+      const user = userStates.get(userId)
+      if (!user) return null
+      return {
+        accountAgeMs: user.accountAgeMs,
+        emailVerified: user.emailVerified,
+        followersCount: user.followersCount,
+        followingCount: user.followingCount,
+        // Derived live from the same reports/actions arrays every other
+        // method here reads and writes — not a separately-tracked count
+        // that could drift from what applyModerationAction/createReport
+        // actually did.
+        reportCount: reports.filter((r) => r.targetType === 'user' && r.targetId === userId).length,
+        actionedCount: actions.filter((a) => a.targetType === 'user' && a.targetId === userId)
+          .length,
+      }
+    },
   }
 
   return {
@@ -143,9 +167,21 @@ function createFakeRepository() {
     seedUser(
       id: bigint,
       email = `user${id}@example.com`,
-      extra: Partial<UserModerationStateUpdate> = {},
+      extra: Partial<Omit<UserState, 'email'>> = {},
     ) {
-      userStates.set(id, { email, ...extra })
+      userStates.set(id, {
+        email,
+        // A mid-of-the-road default (not brand new, not a year old;
+        // unverified; a neutral 1:1 ratio) — every existing seedUser call
+        // in this file predates trust scoring and doesn't care about
+        // these fields, only the tests under describe('getTrustScore')
+        // below override them.
+        accountAgeMs: 30 * 24 * 60 * 60 * 1000,
+        emailVerified: false,
+        followersCount: 10,
+        followingCount: 10,
+        ...extra,
+      })
     },
     getPost(id: bigint) {
       return postStates.get(id)
@@ -555,6 +591,53 @@ describe('createModerationService', () => {
       await expect(service.resolveAppeal(BigInt(appeal.id), 'upheld', resolverId)).rejects.toThrow(
         /already resolved/,
       )
+    })
+  })
+
+  describe('getTrustScore (ROADMAP.md 3.3e)', () => {
+    it('scores a mature, verified, well-behaved account higher than a fresh, unverified one', async () => {
+      const establishedId = generateId()
+      const freshId = generateId()
+      fake.seedUser(establishedId, undefined, {
+        accountAgeMs: 365 * 24 * 60 * 60 * 1000,
+        emailVerified: true,
+        followersCount: 200,
+        followingCount: 200,
+      })
+      fake.seedUser(freshId, undefined, { accountAgeMs: 0, emailVerified: false })
+      const service = makeService()
+
+      const established = await service.getTrustScore(establishedId)
+      const fresh = await service.getTrustScore(freshId)
+
+      expect(established.score).toBeGreaterThan(fresh.score)
+    })
+
+    it('reflects real report/action history, not a stored count that could drift', async () => {
+      const authorId = generateId()
+      const postId = generateId()
+      fake.seedUser(authorId)
+      fake.seedPost(postId, authorId)
+      const service = makeService()
+      const before = await service.getTrustScore(authorId)
+
+      await service.applyModerationAction({
+        targetType: 'user',
+        targetId: authorId,
+        action: 'suspend',
+        reason: 'harassment campaign',
+        policy: 'harassment',
+        actorType: 'moderator',
+        actorId: generateId(),
+      })
+
+      const after = await service.getTrustScore(authorId)
+      expect(after.score).toBeLessThan(before.score)
+    })
+
+    it('throws NotFoundError for an account that does not exist', async () => {
+      const service = makeService()
+      await expect(service.getTrustScore(generateId())).rejects.toThrow(/not found/)
     })
   })
 })

@@ -21,6 +21,11 @@ import {
 import { detectLanguage } from '@x/utils/language'
 import type { Redis } from 'ioredis'
 import { type CachedCounters, bumpCounter, zeroCounters } from '../../lib/post-counters-cache.js'
+import {
+  NEW_ACCOUNT_MAX_POSTS_PER_DAY,
+  NEW_ACCOUNT_WINDOW_MS,
+  isNewAccount,
+} from '../../lib/trust-score.js'
 import type { AuthorRow, PostEntityRow, PostMediaRow, PostRepository } from './posts.repository.js'
 import { ENTITY_KIND_CODES, ENTITY_KIND_NAMES } from './posts.types.js'
 
@@ -273,6 +278,10 @@ export function createPostsService(
   // that specific piece of the automatic layer never runs, not that it
   // silently fails.
   automaticModeration: AutomaticModerationDeps = {},
+  // ROADMAP.md 3.3e — defaults to the real SPECS.md §12.3 ceiling;
+  // env.ts's own comment on NEW_ACCOUNT_MAX_POSTS_PER_DAY explains the one
+  // test file (posts.integration.test.ts) that raises it, and why.
+  newAccountMaxPostsPerDay: number = NEW_ACCOUNT_MAX_POSTS_PER_DAY,
 ) {
   /**
    * `undefined` when there's no viewer (anonymous) or nothing wired up —
@@ -425,6 +434,34 @@ export function createPostsService(
     }
   }
 
+  /**
+   * ROADMAP.md 3.3e / SPECS.md §12.3's new-account limits — "10 posts/día,
+   * sin enlaces las primeras 24h". Account age comes straight out of
+   * `authorId` itself (a Snowflake id embeds its own creation timestamp,
+   * extractTimestamp — already used elsewhere in this file for trend
+   * ingest) rather than a fresh users.created_at lookup, the same
+   * "the id already carries this" reasoning safePublishTrendIngest's own
+   * createdAtMs uses for a post id.
+   */
+  async function rejectIfNewAccountLimitExceeded(
+    authorId: bigint,
+    hasUrls: boolean,
+  ): Promise<void> {
+    const accountAgeMs = Date.now() - extractTimestamp(authorId)
+    if (!isNewAccount(accountAgeMs)) return
+
+    if (hasUrls) {
+      throw new ForbiddenError('new accounts cannot post links for the first 24 hours')
+    }
+    const since = new Date(Date.now() - NEW_ACCOUNT_WINDOW_MS)
+    const recentCount = await repository.countPostsByAuthorSince(authorId, since)
+    if (recentCount >= newAccountMaxPostsPerDay) {
+      throw new ForbiddenError('new accounts have a daily posting limit', {
+        limit: newAccountMaxPostsPerDay,
+      })
+    }
+  }
+
   // Same failure posture as onPostCreated: a queue outage must never fail
   // the write that triggered the notification.
   async function safePublish(data: NotificationJobData): Promise<void> {
@@ -538,6 +575,7 @@ export function createPostsService(
         throw new ValidationError('post contains a known-malicious URL', { urls: malicious })
       }
     }
+    await rejectIfNewAccountLimitExceeded(authorId, urls.length > 0)
 
     let kind: 'original' | 'reply' | 'quote' = 'original'
     let conversationId: bigint | null = null
@@ -913,6 +951,10 @@ export function createPostsService(
   /** SPECS.md §4.3: a repost is its own post row, `text IS NULL`, `repost_of_id` set — it fans out like any other post. */
   async function repost(authorId: bigint, originalPostId: bigint): Promise<Post> {
     await rejectIfReadOnly(authorId)
+    // A repost is its own row in the same `posts` table (SPECS.md §4.3) —
+    // counts toward the same daily limit. No text of its own, so the
+    // "no links" half never applies here (hasUrls always false).
+    await rejectIfNewAccountLimitExceeded(authorId, false)
 
     const original = await repository.findPostById(originalPostId)
     if (!original) throw new NotFoundError('post', originalPostId.toString())

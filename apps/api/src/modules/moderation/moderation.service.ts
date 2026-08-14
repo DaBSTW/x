@@ -2,6 +2,7 @@ import type { ModerationAction, ModerationAppeal, Report } from '@x/db'
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError, generateId } from '@x/utils'
 import type { NotificationJobData } from '@x/utils'
 import type { Mailer } from '../../lib/mailer.js'
+import { computeTrustScore } from '../../lib/trust-score.js'
 import type { ModerationRepository } from './moderation.repository.js'
 
 type PublishNotification = (data: NotificationJobData) => Promise<void>
@@ -410,6 +411,13 @@ export function createModerationService(deps: ModerationServiceDeps) {
 
     async isModerator(userId: bigint): Promise<boolean> {
       return repository.findIsModerator(userId)
+    },
+
+    /** ROADMAP.md 3.3e — moderator-only (apps/admin's own account-review view is the intended reader). */
+    async getTrustScore(userId: bigint): Promise<{ score: number }> {
+      const facts = await repository.findTrustScoreFacts(userId)
+      if (!facts) throw new NotFoundError('user', userId.toString())
+      return { score: computeTrustScore(facts) }
     },
   }
 }

@@ -10,6 +10,7 @@ import {
   reportListResponseSchema,
   reportSchema,
   resolveAppealRequestSchema,
+  trustScoreResponseSchema,
 } from '@x/contracts'
 import { ForbiddenError } from '@x/utils'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
@@ -230,6 +231,25 @@ export async function registerModerationRoutes(
         moderator.id,
       )
       return reply.send({ data: appeal })
+    },
+  )
+
+  server.get(
+    '/moderation/users/:id/trust-score',
+    {
+      schema: {
+        params: z.object({ id: z.string() }),
+        response: {
+          200: trustScoreResponseSchema,
+          401: errorResponseSchema,
+          403: errorResponseSchema,
+        },
+      },
+      preHandler: [requireAuth, requireModerator],
+    },
+    async (request, reply) => {
+      const trustScore = await moderationService.getTrustScore(BigInt(request.params.id))
+      return reply.send({ data: trustScore })
     },
   )
 }

@@ -88,6 +88,13 @@ describe('posts routes', () => {
       // client, not this whole file's worth of `it` blocks sharing one IP
       // (see auth.integration.test.ts for the same reasoning).
       LOGIN_RATE_LIMIT_MAX: 100,
+      // ROADMAP.md 3.3e — this file's own `poster` (registered once in
+      // beforeAll below, reused across almost every `it` block) accumulates
+      // more than 10 posts across the whole file's run, seconds apart, not
+      // the 24h SPECS.md §12.3's limit is actually meant to bound — same
+      // "one shared identity, many `it` blocks" reasoning LOGIN_RATE_LIMIT_MAX
+      // above already has, see env.ts's own comment on this var.
+      NEW_ACCOUNT_MAX_POSTS_PER_DAY: 1000,
     }
     app = await buildApp(env)
 

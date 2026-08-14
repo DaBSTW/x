@@ -232,6 +232,9 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
       applyAction: moderationService.applyModerationAction,
       flagForReview: moderationService.flagForReview,
     },
+    // ROADMAP.md 3.3e — env.ts's own comment on this env var explains why
+    // it's overridable at all (test suites with one long-lived author).
+    env.NEW_ACCOUNT_MAX_POSTS_PER_DAY,
   )
 
   const mediaStorage = createMediaStorage({

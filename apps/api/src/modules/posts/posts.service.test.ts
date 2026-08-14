@@ -1,7 +1,8 @@
 import type { Post, PostCounters } from '@x/db'
-import { generateId } from '@x/utils'
+import { createSnowflakeGenerator, generateId } from '@x/utils'
 import type { Redis } from 'ioredis'
 import { beforeEach, describe, expect, it } from 'vitest'
+import { NEW_ACCOUNT_WINDOW_MS } from '../../lib/trust-score.js'
 import type { AuthorRow, PostEntityRow, PostRepository } from './posts.repository.js'
 import { checkMaliciousUrlsAgainstTestDomains, createPostsService } from './posts.service.js'
 
@@ -181,6 +182,14 @@ function createFakeRepository() {
     async findReadOnlyUntil() {
       return null
     },
+    // ROADMAP.md 3.3e — `author` (the shared fixture every test in this
+    // file posts as) is seeded well before any account-age math below
+    // would call this at all, so 0 is the right "no history yet" default;
+    // the real 24h/10-per-day limit is exercised against Postgres in
+    // posts.integration.test.ts.
+    async countPostsByAuthorSince() {
+      return 0
+    },
     async findAuthorsByIds(ids) {
       return ids
         .map((id) => authorsById.get(id))
@@ -315,6 +324,21 @@ function addAuthor(
   }
   authorsById.set(author.id, author)
   return author
+}
+
+/**
+ * ROADMAP.md 3.3e's new-account gate reads an account's age straight out of
+ * its Snowflake id (posts.service.ts's own extractTimestamp(authorId)) —
+ * so `generateId()` above, a *real* generator timestamped "now", makes
+ * every `addAuthor`'d fixture in this file "new" for this test run's whole
+ * lifetime. Nearly all of them predate 3.3e and don't care either way (the
+ * fake countPostsByAuthorSince stub always returns 0, so only the
+ * "no links" branch can ever fire) — this backdates just the one id a test
+ * needs to post a URL without tripping it, the same "id already carries
+ * the timestamp" trick generateId() itself relies on.
+ */
+function generateEstablishedId(): bigint {
+  return createSnowflakeGenerator(0, () => Date.now() - NEW_ACCOUNT_WINDOW_MS - 1000).nextId()
 }
 
 // Backs "reply_policy: following" (createThread and reply-policy tests
@@ -585,8 +609,13 @@ describe('createPostsService', () => {
 
     it('does not check a URL at all when checkMaliciousUrls is not configured', async () => {
       const service = createPostsService(repository)
+      // An established author, not `author` — this test is specifically
+      // about the malicious-URL check being skipped, not about ROADMAP.md
+      // 3.3e's separate new-account link restriction (generateEstablishedId's
+      // own comment explains why `author.id` itself would trip that one).
+      const established = addAuthor(authorsById, { id: generateEstablishedId() })
 
-      const post = await service.create(author.id, {
+      const post = await service.create(established.id, {
         text: 'mira esto http://malware.testing.google.test/testing/malware/',
         replyPolicy: 'everyone',
         isSensitive: false,

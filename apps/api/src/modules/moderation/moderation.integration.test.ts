@@ -141,6 +141,11 @@ describe('moderation routes', () => {
       }),
       app.inject({ method: 'GET', url: '/v1/moderation/actions', headers: auth }),
       app.inject({ method: 'GET', url: '/v1/moderation/appeals', headers: auth }),
+      app.inject({
+        method: 'GET',
+        url: `/v1/moderation/users/${alice.userId}/trust-score`,
+        headers: auth,
+      }),
     ])
     for (const response of responses) {
       expect(response.statusCode).toBe(403)
@@ -414,6 +419,73 @@ describe('moderation routes', () => {
     // doesn't act on its own (SPECS.md §12.1).
     const stillThere = await app.inject({ method: 'GET', url: `/v1/posts/${postId}` })
     expect(stillThere.statusCode).toBe(200)
+  })
+
+  // This file (unlike posts.integration.test.ts) never raises
+  // NEW_ACCOUNT_MAX_POSTS_PER_DAY in its env above, and every test here
+  // registers its own fresh author — so, unlike that file's one long-lived
+  // shared `poster`, these two tests exercise the real, unraised limit
+  // (trust-score.ts's own default of 10) end to end rather than just
+  // proving it doesn't get in the way.
+  it("rejects a link in a brand-new account's first 24 hours, but allows the same account to post without one (ROADMAP.md 3.3e / SPECS.md §12.3)", async () => {
+    const newcomer = await registerAndLogin('mod_new_link')
+
+    const withLink = await app.inject({
+      method: 'POST',
+      url: '/v1/posts',
+      headers: { authorization: `Bearer ${newcomer.accessToken}` },
+      // A benign, non-malicious URL — posts.service.test.ts's own
+      // checkMaliciousUrlsAgainstTestDomains fixture already establishes
+      // example.com passes that check — so this isolates the new-account
+      // link restriction from the unrelated malicious-URL check that
+      // runs ahead of it in create().
+      payload: { text: 'mira esto https://example.com/algo' },
+    })
+    expect(withLink.statusCode).toBe(403)
+
+    const withoutLink = await app.inject({
+      method: 'POST',
+      url: '/v1/posts',
+      headers: { authorization: `Bearer ${newcomer.accessToken}` },
+      payload: { text: 'sin enlaces, esto sí debería publicarse' },
+    })
+    expect(withoutLink.statusCode).toBe(201)
+  })
+
+  it('caps a brand-new account at 10 posts/day, rejecting the 11th (ROADMAP.md 3.3e / SPECS.md §12.3)', async () => {
+    const newcomer = await registerAndLogin('mod_new_cap')
+
+    for (let i = 0; i < 10; i++) {
+      await createPost(newcomer.accessToken, `post número ${i} de la cuenta nueva`)
+    }
+
+    const eleventh = await app.inject({
+      method: 'POST',
+      url: '/v1/posts',
+      headers: { authorization: `Bearer ${newcomer.accessToken}` },
+      payload: { text: 'este debería exceder el límite diario' },
+    })
+    expect(eleventh.statusCode).toBe(403)
+  })
+
+  it("a moderator can read a real account's trust score (ROADMAP.md 3.3e)", async () => {
+    const target = await registerAndLogin('mod_trustee')
+    const moderator = await registerAndLogin('mod_reviewer6')
+    await makeModerator(moderator.userId)
+
+    // trust-score.ts's own formula is already exercised value-by-value
+    // against a fake repository in moderation.service.test.ts — this only
+    // needs to prove the route wires a *real* users/userCounters/reports/
+    // moderationActions join through computeTrustScore end to end.
+    const response = await app.inject({
+      method: 'GET',
+      url: `/v1/moderation/users/${target.userId}/trust-score`,
+      headers: { authorization: `Bearer ${moderator.accessToken}` },
+    })
+    expect(response.statusCode).toBe(200)
+    const { score } = response.json().data as { score: number }
+    expect(score).toBeGreaterThanOrEqual(0)
+    expect(score).toBeLessThanOrEqual(1)
   })
 })
 

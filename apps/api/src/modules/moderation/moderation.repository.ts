@@ -209,5 +209,41 @@ export function createModerationRepository(db: Database) {
         .limit(1)
       return row?.isModerator ?? false
     },
+
+    /** ROADMAP.md 3.3e — the raw facts trust-score.ts's computeTrustScore turns into a number; `null` if the account doesn't exist. */
+    async findTrustScoreFacts(userId: bigint) {
+      const [row] = await db
+        .select({
+          createdAt: users.createdAt,
+          emailVerified: users.emailVerified,
+          followersCount: userCounters.followersCount,
+          followingCount: userCounters.followingCount,
+        })
+        .from(users)
+        .innerJoin(userCounters, eq(userCounters.userId, users.id))
+        .where(eq(users.id, userId))
+        .limit(1)
+      if (!row) return null
+
+      const [reportCountRow] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(reports)
+        .where(and(eq(reports.targetType, 'user'), eq(reports.targetId, userId)))
+      const [actionedCountRow] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(moderationActions)
+        .where(
+          and(eq(moderationActions.targetType, 'user'), eq(moderationActions.targetId, userId)),
+        )
+
+      return {
+        accountAgeMs: Date.now() - row.createdAt.getTime(),
+        emailVerified: row.emailVerified,
+        followersCount: row.followersCount,
+        followingCount: row.followingCount,
+        reportCount: reportCountRow?.count ?? 0,
+        actionedCount: actionedCountRow?.count ?? 0,
+      }
+    },
   }
 }
