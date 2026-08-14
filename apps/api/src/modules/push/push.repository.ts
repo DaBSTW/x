@@ -1,5 +1,6 @@
+import type { DevicePlatform } from '@x/contracts'
 import type { Database } from '@x/db'
-import { pushSubscriptions } from '@x/db'
+import { deviceTokens, pushSubscriptions } from '@x/db'
 import { generateId } from '@x/utils'
 import { and, eq } from 'drizzle-orm'
 
@@ -34,6 +35,28 @@ export function createPushRepository(db: Database) {
       await db
         .delete(pushSubscriptions)
         .where(and(eq(pushSubscriptions.userId, userId), eq(pushSubscriptions.endpoint, endpoint)))
+    },
+
+    /** Same re-point-not-duplicate posture as upsertSubscription above, keyed on the token instead of an endpoint URL. */
+    async upsertDeviceToken(input: {
+      userId: bigint
+      platform: DevicePlatform
+      token: string
+    }): Promise<void> {
+      await db
+        .insert(deviceTokens)
+        .values({ id: generateId(), ...input })
+        .onConflictDoUpdate({
+          target: deviceTokens.token,
+          set: { userId: input.userId, platform: input.platform },
+        })
+    },
+
+    /** Scoped to the caller's own userId, same reasoning as deleteSubscription. */
+    async deleteDeviceToken(userId: bigint, token: string): Promise<void> {
+      await db
+        .delete(deviceTokens)
+        .where(and(eq(deviceTokens.userId, userId), eq(deviceTokens.token, token)))
     },
   }
 }

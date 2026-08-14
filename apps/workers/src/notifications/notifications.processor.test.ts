@@ -2,7 +2,11 @@ import { generateId } from '@x/utils'
 import type { Redis } from 'ioredis'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createNotificationsProcessor } from './notifications.processor.js'
-import type { NotificationsRepository, PushSubscriptionRow } from './notifications.repository.js'
+import type {
+  DeviceTokenRow,
+  NotificationsRepository,
+  PushSubscriptionRow,
+} from './notifications.repository.js'
 import type { PushPayload, PushSubscriptionTarget, SendPushResult } from './push-sender.js'
 
 function createFakeRedis() {
@@ -28,6 +32,8 @@ function createFakeRepository(
     isPushEnabled: async () => false,
     findPushSubscriptions: async () => [],
     deleteSubscriptionByEndpoint: async () => {},
+    findDeviceTokens: async () => [],
+    deleteDeviceTokenByToken: async () => {},
     findUsername: async () => null,
     ...overrides,
   }
@@ -286,5 +292,159 @@ describe('createNotificationsProcessor', () => {
     })
 
     expect(sent[0]?.url).toBe('/ana')
+  })
+
+  // ROADMAP.md 2.9's FCM/APNs bullet.
+  describe('device tokens (FCM/APNs)', () => {
+    it('never attempts a push when neither sendPush, sendFcmPush, nor sendApnsPush is configured', async () => {
+      const userId = generateId()
+      const process = createNotificationsProcessor({
+        repository: createFakeRepository({
+          isPushEnabled: async () => true,
+          findDeviceTokens: async () => [{ platform: 'fcm', token: 't' }],
+        }),
+        redis: redis.redis,
+        // every sender omitted
+      })
+
+      await expect(
+        process({
+          userId: userId.toString(),
+          kind: 'follow',
+          actorId: '1',
+          postId: null,
+          groupKey: null,
+        }),
+      ).resolves.toBeUndefined()
+    })
+
+    it('dispatches an fcm token to sendFcmPush and an apns token to sendApnsPush', async () => {
+      const userId = generateId()
+      const tokens: DeviceTokenRow[] = [
+        { platform: 'fcm', token: 'fcm-token' },
+        { platform: 'apns', token: 'apns-token' },
+      ]
+      const fcmSent: string[] = []
+      const apnsSent: string[] = []
+      const process = createNotificationsProcessor({
+        repository: createFakeRepository({
+          isPushEnabled: async () => true,
+          findDeviceTokens: async () => tokens,
+          findUsername: async () => 'ana',
+        }),
+        redis: redis.redis,
+        sendFcmPush: async (token) => {
+          fcmSent.push(token)
+          return { expired: false }
+        },
+        sendApnsPush: async (token) => {
+          apnsSent.push(token)
+          return { expired: false }
+        },
+      })
+
+      await process({
+        userId: userId.toString(),
+        kind: 'mention',
+        actorId: '1',
+        postId: '42',
+        groupKey: null,
+      })
+
+      expect(fcmSent).toEqual(['fcm-token'])
+      expect(apnsSent).toEqual(['apns-token'])
+    })
+
+    it("skips a token whose platform isn't configured on this server, without deleting it (unconfigured, not dead)", async () => {
+      const userId = generateId()
+      const deleted: string[] = []
+      const process = createNotificationsProcessor({
+        repository: createFakeRepository({
+          isPushEnabled: async () => true,
+          findDeviceTokens: async () => [{ platform: 'apns', token: 'apns-token' }],
+          deleteDeviceTokenByToken: async (token) => {
+            deleted.push(token)
+          },
+        }),
+        redis: redis.redis,
+        // Only FCM configured on this server — the apns token above has
+        // nowhere to go, but that's not the same as being invalid.
+        sendFcmPush: async () => ({ expired: false }),
+      })
+
+      await process({
+        userId: userId.toString(),
+        kind: 'follow',
+        actorId: '1',
+        postId: null,
+        groupKey: null,
+      })
+
+      expect(deleted).toEqual([])
+    })
+
+    it('deletes a device token the sender reports as expired', async () => {
+      const userId = generateId()
+      const deleted: string[] = []
+      const process = createNotificationsProcessor({
+        repository: createFakeRepository({
+          isPushEnabled: async () => true,
+          findDeviceTokens: async () => [
+            { platform: 'fcm', token: 'stale-token' },
+            { platform: 'fcm', token: 'fresh-token' },
+          ],
+          deleteDeviceTokenByToken: async (token) => {
+            deleted.push(token)
+          },
+        }),
+        redis: redis.redis,
+        sendFcmPush: async (token): Promise<SendPushResult> => ({
+          expired: token === 'stale-token',
+        }),
+      })
+
+      await process({
+        userId: userId.toString(),
+        kind: 'follow',
+        actorId: '1',
+        postId: null,
+        groupKey: null,
+      })
+
+      expect(deleted).toEqual(['stale-token'])
+    })
+
+    it('sends to Web Push subscriptions and device tokens together in the same job', async () => {
+      const userId = generateId()
+      const webPushSent: string[] = []
+      const fcmSent: string[] = []
+      const process = createNotificationsProcessor({
+        repository: createFakeRepository({
+          isPushEnabled: async () => true,
+          findPushSubscriptions: async () => [{ endpoint: 'e', p256dh: 'p', authKey: 'a' }],
+          findDeviceTokens: async () => [{ platform: 'fcm', token: 'fcm-token' }],
+        }),
+        redis: redis.redis,
+        sendPush: async (subscription) => {
+          webPushSent.push(subscription.endpoint)
+          return { expired: false }
+        },
+        sendFcmPush: async (token) => {
+          fcmSent.push(token)
+          return { expired: false }
+        },
+      })
+
+      await process({
+        userId: userId.toString(),
+        kind: 'follow',
+        actorId: '1',
+        postId: null,
+        groupKey: null,
+      })
+
+      expect(webPushSent).toEqual(['e'])
+      expect(fcmSent).toEqual(['fcm-token'])
+    })
   })
 })

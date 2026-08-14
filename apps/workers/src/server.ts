@@ -9,6 +9,8 @@ import { createFanoutWorker } from './fanout/fanout.worker.js'
 import { createMediaStorage } from './lib/media-storage.js'
 import { createMediaRepository } from './media/media.repository.js'
 import { createMediaWorker } from './media/media.worker.js'
+import { createApnsPushSender } from './notifications/apns-sender.js'
+import { createFcmPushSender } from './notifications/fcm-sender.js'
 import { createNotificationsRepository } from './notifications/notifications.repository.js'
 import { createNotificationsWorker } from './notifications/notifications.worker.js'
 import { createWebPushSender } from './notifications/push-sender.js'
@@ -34,6 +36,39 @@ if (!sendPush) {
   console.warn('VAPID keys not configured — web push notifications are disabled')
 }
 
+// FCM (Android) — ROADMAP.md 2.9's last bullet. All three or none, same
+// posture as VAPID above. `\n` un-escaped: a PEM private key needs real
+// newlines, but most .env/process-manager configs can only carry a
+// single-line string, so the conventional fix (also how Firebase's own
+// docs describe deploying a service account key as an env var) is to
+// escape them going in and undo it here.
+const sendFcmPush =
+  env.FCM_PROJECT_ID && env.FCM_CLIENT_EMAIL && env.FCM_PRIVATE_KEY
+    ? createFcmPushSender({
+        projectId: env.FCM_PROJECT_ID,
+        clientEmail: env.FCM_CLIENT_EMAIL,
+        privateKey: env.FCM_PRIVATE_KEY.replace(/\\n/g, '\n'),
+      })
+    : undefined
+if (!sendFcmPush) {
+  console.warn('FCM service account not configured — Android push notifications are disabled')
+}
+
+// APNs (iOS) — same posture, same `\n` un-escaping reasoning as FCM above.
+const sendApnsPush =
+  env.APNS_KEY && env.APNS_KEY_ID && env.APNS_TEAM_ID && env.APNS_BUNDLE_ID
+    ? createApnsPushSender({
+        key: env.APNS_KEY.replace(/\\n/g, '\n'),
+        keyId: env.APNS_KEY_ID,
+        teamId: env.APNS_TEAM_ID,
+        bundleId: env.APNS_BUNDLE_ID,
+        production: env.APNS_PRODUCTION,
+      })
+    : undefined
+if (!sendApnsPush) {
+  console.warn('APNs credentials not configured — iOS push notifications are disabled')
+}
+
 const fanoutWorker = createFanoutWorker({
   repository: createFanoutRepository(db),
   redisUrl: env.REDIS_URL,
@@ -48,6 +83,8 @@ const notificationsWorker = createNotificationsWorker({
   redisUrl: env.REDIS_URL,
   concurrency: env.NOTIFICATIONS_WORKER_CONCURRENCY,
   ...(sendPush && { sendPush }),
+  ...(sendFcmPush && { sendFcmPush }),
+  ...(sendApnsPush && { sendApnsPush }),
 })
 notificationsWorker.worker.on('failed', (job, error) => {
   console.error(`notification job ${job?.id ?? '(unknown)'} failed:`, error)

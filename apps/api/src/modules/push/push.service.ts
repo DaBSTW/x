@@ -1,3 +1,4 @@
+import type { DevicePlatform } from '@x/contracts'
 import type { PushRepository } from './push.repository.js'
 
 export type CreatePushServiceOptions = {
@@ -25,6 +26,17 @@ export function createPushService(options: CreatePushServiceOptions) {
 
     async unsubscribe(userId: bigint, endpoint: string): Promise<void> {
       await repository.deleteSubscription(userId, endpoint)
+    },
+
+    async registerDeviceToken(
+      userId: bigint,
+      input: { platform: DevicePlatform; token: string },
+    ): Promise<void> {
+      await repository.upsertDeviceToken({ userId, ...input })
+    },
+
+    async unregisterDeviceToken(userId: bigint, token: string): Promise<void> {
+      await repository.deleteDeviceToken(userId, token)
     },
   }
 }

@@ -16,6 +16,8 @@ export default defineConfig({
         'src/media/video-transcoder.ts',
         'src/notifications/notifications.processor.ts',
         'src/notifications/push-text.ts',
+        'src/notifications/fcm-token-errors.ts',
+        'src/notifications/apns-token-errors.ts',
         'src/search/cdc.ts',
         'src/search/document-builders.ts',
         'src/trends/rank-hashtags.ts',

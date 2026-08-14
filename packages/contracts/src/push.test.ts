@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   pushSubscribeRequestSchema,
   pushUnsubscribeRequestSchema,
+  registerDeviceTokenRequestSchema,
+  unregisterDeviceTokenRequestSchema,
   vapidPublicKeyResponseSchema,
 } from './push.js'
 
@@ -47,5 +49,34 @@ describe('vapidPublicKeyResponseSchema', () => {
 
   it('accepts null when push is not configured', () => {
     expect(vapidPublicKeyResponseSchema.safeParse({ data: { publicKey: null } }).success).toBe(true)
+  })
+})
+
+describe('registerDeviceTokenRequestSchema', () => {
+  it.each(['fcm', 'apns'])('accepts platform %s with a token', (platform) => {
+    const result = registerDeviceTokenRequestSchema.safeParse({ platform, token: 'a-real-token' })
+    expect(result.success).toBe(true)
+  })
+
+  it('rejects an unrecognized platform', () => {
+    expect(
+      registerDeviceTokenRequestSchema.safeParse({ platform: 'windows-phone', token: 't' }).success,
+    ).toBe(false)
+  })
+
+  it('rejects an empty token', () => {
+    expect(registerDeviceTokenRequestSchema.safeParse({ platform: 'fcm', token: '' }).success).toBe(
+      false,
+    )
+  })
+})
+
+describe('unregisterDeviceTokenRequestSchema', () => {
+  it('requires just the token', () => {
+    expect(unregisterDeviceTokenRequestSchema.safeParse({ token: 'abc' }).success).toBe(true)
+  })
+
+  it('rejects an empty token', () => {
+    expect(unregisterDeviceTokenRequestSchema.safeParse({ token: '' }).success).toBe(false)
   })
 })

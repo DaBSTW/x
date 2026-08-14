@@ -2,6 +2,8 @@ import {
   errorResponseSchema,
   pushSubscribeRequestSchema,
   pushUnsubscribeRequestSchema,
+  registerDeviceTokenRequestSchema,
+  unregisterDeviceTokenRequestSchema,
   vapidPublicKeyResponseSchema,
 } from '@x/contracts'
 import type { FastifyInstance } from 'fastify'
@@ -65,6 +67,43 @@ export async function registerPushRoutes(app: FastifyInstance, options: PushRout
     async (request, reply) => {
       const user = getAuthenticatedUser(request)
       await pushService.unsubscribe(user.id, request.body.endpoint)
+      return reply.status(204).send(null)
+    },
+  )
+
+  // ROADMAP.md 2.9's FCM/APNs bullet — same shape as /push/subscriptions
+  // above, for a native device token instead of a browser subscription.
+  // Nothing in apps/web calls these; they exist for the mobile app
+  // ROADMAP.md 4 will build, tested here against the real API/DB in the
+  // meantime so the surface is genuinely ready, not just planned.
+  server.post(
+    '/push/device-tokens',
+    {
+      schema: {
+        body: registerDeviceTokenRequestSchema,
+        response: { 204: z.null(), 401: errorResponseSchema },
+      },
+      preHandler: [requireAuth],
+    },
+    async (request, reply) => {
+      const user = getAuthenticatedUser(request)
+      await pushService.registerDeviceToken(user.id, request.body)
+      return reply.status(204).send(null)
+    },
+  )
+
+  server.delete(
+    '/push/device-tokens',
+    {
+      schema: {
+        body: unregisterDeviceTokenRequestSchema,
+        response: { 204: z.null(), 401: errorResponseSchema },
+      },
+      preHandler: [requireAuth],
+    },
+    async (request, reply) => {
+      const user = getAuthenticatedUser(request)
+      await pushService.unregisterDeviceToken(user.id, request.body.token)
       return reply.status(204).send(null)
     },
   )

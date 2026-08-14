@@ -20,6 +20,7 @@
   "dependencies": {
     "@clickhouse/client": "^1.23.1",
     "@opensearch-project/opensearch": "^3.6.0",
+    "@parse/node-apn": "^8.1.0",
     "@x/config": "workspace:*",
     "@x/contracts": "workspace:*",
     "@x/db": "workspace:*",
@@ -27,6 +28,7 @@
     "blurhash": "^2.0.5",
     "bullmq": "^5.34.2",
     "drizzle-orm": "^0.38.3",
+    "firebase-admin": "^14.2.0",
     "ioredis": "^5.4.2",
     "json-bigint": "^1.0.0",
     "kafkajs": "^2.2.4",

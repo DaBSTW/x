@@ -1,3 +1,4 @@
+import type { DevicePlatform } from '@x/contracts'
 import { generateId } from '@x/utils'
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { PushRepository } from './push.repository.js'
@@ -11,12 +12,20 @@ type StoredSubscription = {
   userAgent: string | null
 }
 
+type StoredDeviceToken = {
+  userId: bigint
+  platform: DevicePlatform
+  token: string
+}
+
 describe('createPushService', () => {
   let subscriptions: StoredSubscription[]
+  let deviceTokens: StoredDeviceToken[]
   let repository: PushRepository
 
   beforeEach(() => {
     subscriptions = []
+    deviceTokens = []
     repository = {
       async upsertSubscription(input) {
         const existing = subscriptions.find((row) => row.endpoint === input.endpoint)
@@ -30,6 +39,17 @@ describe('createPushService', () => {
         subscriptions = subscriptions.filter(
           (row) => !(row.userId === userId && row.endpoint === endpoint),
         )
+      },
+      async upsertDeviceToken(input) {
+        const existing = deviceTokens.find((row) => row.token === input.token)
+        if (existing) {
+          Object.assign(existing, input)
+        } else {
+          deviceTokens.push(input)
+        }
+      },
+      async deleteDeviceToken(userId, token) {
+        deviceTokens = deviceTokens.filter((row) => !(row.userId === userId && row.token === token))
       },
     }
   })
@@ -101,6 +121,53 @@ describe('createPushService', () => {
       await service.unsubscribe(otherUserId, endpoint)
 
       expect(subscriptions).toHaveLength(1)
+    })
+  })
+
+  describe('registerDeviceToken', () => {
+    it('stores a new device token', async () => {
+      const userId = generateId()
+      const service = createPushService({ repository, vapidPublicKey: 'abc' })
+
+      await service.registerDeviceToken(userId, { platform: 'fcm', token: 'fcm-token-1' })
+
+      expect(deviceTokens).toHaveLength(1)
+      expect(deviceTokens[0]).toEqual({ userId, platform: 'fcm', token: 'fcm-token-1' })
+    })
+
+    it('re-registering the same token updates it in place rather than duplicating', async () => {
+      const userId = generateId()
+      const otherUserId = generateId()
+      const service = createPushService({ repository, vapidPublicKey: 'abc' })
+
+      await service.registerDeviceToken(userId, { platform: 'apns', token: 'shared-token' })
+      await service.registerDeviceToken(otherUserId, { platform: 'apns', token: 'shared-token' })
+
+      expect(deviceTokens).toHaveLength(1)
+      expect(deviceTokens[0]?.userId).toBe(otherUserId)
+    })
+  })
+
+  describe('unregisterDeviceToken', () => {
+    it('removes the token for that user', async () => {
+      const userId = generateId()
+      const service = createPushService({ repository, vapidPublicKey: 'abc' })
+      await service.registerDeviceToken(userId, { platform: 'fcm', token: 't' })
+
+      await service.unregisterDeviceToken(userId, 't')
+
+      expect(deviceTokens).toHaveLength(0)
+    })
+
+    it("does not remove another user's token", async () => {
+      const userId = generateId()
+      const otherUserId = generateId()
+      const service = createPushService({ repository, vapidPublicKey: 'abc' })
+      await service.registerDeviceToken(userId, { platform: 'fcm', token: 't' })
+
+      await service.unregisterDeviceToken(otherUserId, 't')
+
+      expect(deviceTokens).toHaveLength(1)
     })
   })
 })

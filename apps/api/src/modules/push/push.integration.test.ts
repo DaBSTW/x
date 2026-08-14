@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url'
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql'
 import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis'
-import { createDatabase, migrationsFolderUrl, pushSubscriptions } from '@x/db'
+import { createDatabase, deviceTokens, migrationsFolderUrl, pushSubscriptions } from '@x/db'
 import { eq } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
 import type { FastifyInstance } from 'fastify'
@@ -164,5 +164,111 @@ describe('push routes', () => {
       .from(pushSubscriptions)
       .where(eq(pushSubscriptions.endpoint, endpoint))
     expect(gone).toHaveLength(0)
+  })
+
+  // ROADMAP.md 2.9's FCM/APNs bullet — no mobile app exists yet to call
+  // these for real (Phase 4), but the routes themselves are real and this
+  // proves them against a real Postgres, same rigor as the Web Push
+  // routes above.
+  describe('device tokens', () => {
+    it('requires authentication to register or unregister', async () => {
+      const register = await app.inject({
+        method: 'POST',
+        url: '/v1/push/device-tokens',
+        payload: { platform: 'fcm', token: 'a-device-token' },
+      })
+      const unregister = await app.inject({
+        method: 'DELETE',
+        url: '/v1/push/device-tokens',
+        payload: { token: 'a-device-token' },
+      })
+      expect([register.statusCode, unregister.statusCode]).toEqual([401, 401])
+    })
+
+    it('rejects an unrecognized platform', async () => {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/v1/push/device-tokens',
+        headers: { authorization: `Bearer ${aliceToken}` },
+        payload: { platform: 'windows-phone', token: 't' },
+      })
+      expect(response.statusCode).toBe(400)
+    })
+
+    it('registers an FCM token, re-registering the same token re-points it, then unregisters', async () => {
+      const db = createDatabase(postgresContainer.getConnectionUri())
+      const token = 'shared-device-token'
+
+      const aliceRegister = await app.inject({
+        method: 'POST',
+        url: '/v1/push/device-tokens',
+        headers: { authorization: `Bearer ${aliceToken}` },
+        payload: { platform: 'fcm', token },
+      })
+      expect(aliceRegister.statusCode).toBe(204)
+
+      let rows = await db.select().from(deviceTokens).where(eq(deviceTokens.token, token))
+      expect(rows).toHaveLength(1)
+      expect(rows[0]?.platform).toBe('fcm')
+
+      // Same token re-registered under a different account (e.g. alice
+      // logged out, bob logged in on the same device) — re-points, not a
+      // second row.
+      const bobRegister = await app.inject({
+        method: 'POST',
+        url: '/v1/push/device-tokens',
+        headers: { authorization: `Bearer ${bobToken}` },
+        payload: { platform: 'fcm', token },
+      })
+      expect(bobRegister.statusCode).toBe(204)
+
+      rows = await db.select().from(deviceTokens).where(eq(deviceTokens.token, token))
+      expect(rows).toHaveLength(1)
+
+      // alice can't unregister a device that's now bob's.
+      const aliceUnregister = await app.inject({
+        method: 'DELETE',
+        url: '/v1/push/device-tokens',
+        headers: { authorization: `Bearer ${aliceToken}` },
+        payload: { token },
+      })
+      expect(aliceUnregister.statusCode).toBe(204) // succeeds as a request, but...
+      const stillThere = await db.select().from(deviceTokens).where(eq(deviceTokens.token, token))
+      expect(stillThere).toHaveLength(1) // ...nothing was deleted — it wasn't alice's row.
+
+      const bobUnregister = await app.inject({
+        method: 'DELETE',
+        url: '/v1/push/device-tokens',
+        headers: { authorization: `Bearer ${bobToken}` },
+        payload: { token },
+      })
+      expect(bobUnregister.statusCode).toBe(204)
+      const gone = await db.select().from(deviceTokens).where(eq(deviceTokens.token, token))
+      expect(gone).toHaveLength(0)
+    })
+
+    it('registers an APNs token independently of an FCM one for the same user', async () => {
+      const db = createDatabase(postgresContainer.getConnectionUri())
+
+      await app.inject({
+        method: 'POST',
+        url: '/v1/push/device-tokens',
+        headers: { authorization: `Bearer ${aliceToken}` },
+        payload: { platform: 'fcm', token: 'alice-android' },
+      })
+      await app.inject({
+        method: 'POST',
+        url: '/v1/push/device-tokens',
+        headers: { authorization: `Bearer ${aliceToken}` },
+        payload: { platform: 'apns', token: 'alice-iphone' },
+      })
+
+      const rows = await db
+        .select()
+        .from(deviceTokens)
+        .where(eq(deviceTokens.token, 'alice-iphone'))
+      expect(rows).toHaveLength(1)
+      expect(rows[0]?.platform).toBe('apns')
+    })
   })
 })

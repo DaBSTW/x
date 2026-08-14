@@ -5,6 +5,7 @@ import {
   type Database,
   blocks,
   createDatabase,
+  deviceTokens,
   migrationsFolderUrl,
   mutes,
   notificationPreferences,
@@ -310,6 +311,65 @@ describe('notifications worker', () => {
       .from(pushSubscriptions)
       .where(eq(pushSubscriptions.userId, recipient))
     expect(remaining).toEqual([{ endpoint: 'https://push.example.com/fresh' }])
+
+    await queue.close()
+    await handle.close()
+  }, 30_000)
+
+  it('pushes to a real FCM/APNs device token for a push-enabled kind, and cleans up an expired one (ROADMAP.md 2.9)', async () => {
+    const recipient = await insertUser('rcpt')
+    const actor = await insertUser('actr')
+    await db.insert(deviceTokens).values([
+      { id: generateId(), userId: recipient, platform: 'fcm', token: 'fcm-fresh' },
+      { id: generateId(), userId: recipient, platform: 'fcm', token: 'fcm-stale' },
+      { id: generateId(), userId: recipient, platform: 'apns', token: 'apns-fresh' },
+    ])
+
+    // Fake transports — same reasoning as the Web Push test above: no real
+    // Firebase project or Apple provider exists in this environment, so
+    // this proves the worker's own decision-making (lookup across both
+    // platforms, per-token dispatch, expired-token cleanup) against real
+    // Postgres, not a real FCM/APNs round trip.
+    const fcmSent: string[] = []
+    const apnsSent: string[] = []
+    const handle = createNotificationsWorker({
+      repository: createNotificationsRepository(db),
+      redisUrl,
+      concurrency: 1,
+      sendFcmPush: async (token) => {
+        fcmSent.push(token)
+        return { expired: token === 'fcm-stale' }
+      },
+      sendApnsPush: async (token) => {
+        apnsSent.push(token)
+        return { expired: false }
+      },
+    })
+    const queue = new Queue<NotificationJobData>(NOTIFICATIONS_QUEUE_NAME, {
+      connection: new Redis(redisUrl, { maxRetriesPerRequest: null }),
+    })
+
+    const completed = new Promise<void>((resolve, reject) => {
+      handle.worker.on('completed', () => resolve())
+      handle.worker.on('failed', (_job, error) => reject(error))
+    })
+    await queue.add('notify', {
+      userId: recipient.toString(),
+      kind: 'follow',
+      actorId: actor.toString(),
+      postId: null,
+      groupKey: 'follow',
+    })
+    await completed
+
+    expect(fcmSent.sort()).toEqual(['fcm-fresh', 'fcm-stale'])
+    expect(apnsSent).toEqual(['apns-fresh'])
+
+    const remaining = await db
+      .select({ token: deviceTokens.token })
+      .from(deviceTokens)
+      .where(eq(deviceTokens.userId, recipient))
+    expect(remaining.map((row) => row.token).sort()).toEqual(['apns-fresh', 'fcm-fresh'])
 
     await queue.close()
     await handle.close()

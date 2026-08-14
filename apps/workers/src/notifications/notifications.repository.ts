@@ -1,6 +1,8 @@
+import type { DevicePlatform } from '@x/contracts'
 import type { Database } from '@x/db'
 import {
   blocks,
+  deviceTokens,
   mutes,
   notificationPreferences,
   notifications,
@@ -19,6 +21,11 @@ export type PushSubscriptionRow = {
   endpoint: string
   p256dh: string
   authKey: string
+}
+
+export type DeviceTokenRow = {
+  platform: DevicePlatform
+  token: string
 }
 
 export type NotificationsRepository = ReturnType<typeof createNotificationsRepository>
@@ -110,6 +117,19 @@ export function createNotificationsRepository(db: Database) {
     /** Cleanup after web-push reports a subscription as expired (404/410) — the browser revoked it, so keeping it around would just fail again next time. */
     async deleteSubscriptionByEndpoint(endpoint: string): Promise<void> {
       await db.delete(pushSubscriptions).where(eq(pushSubscriptions.endpoint, endpoint))
+    },
+
+    /** ROADMAP.md 2.9's FCM/APNs bullet — mirrors findPushSubscriptions above for native device tokens. */
+    async findDeviceTokens(userId: bigint): Promise<DeviceTokenRow[]> {
+      return db
+        .select({ platform: deviceTokens.platform, token: deviceTokens.token })
+        .from(deviceTokens)
+        .where(eq(deviceTokens.userId, userId))
+    },
+
+    /** Cleanup after FCM/APNs reports a token as dead — same reasoning as deleteSubscriptionByEndpoint. */
+    async deleteDeviceTokenByToken(token: string): Promise<void> {
+      await db.delete(deviceTokens).where(eq(deviceTokens.token, token))
     },
 
     async findUsername(userId: bigint): Promise<string | null> {

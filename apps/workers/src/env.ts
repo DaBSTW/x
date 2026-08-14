@@ -36,6 +36,33 @@ const envSchema = z.object({
   VAPID_PRIVATE_KEY: z.string().optional(),
   VAPID_SUBJECT: z.string().default('mailto:security@x.example.com'),
 
+  // FCM (Android, ROADMAP.md 2.9's last bullet) — a Firebase service
+  // account's three identifying fields, same "all optional, unset means
+  // disabled" posture as VAPID_* above. `PRIVATE_KEY` carries literal
+  // `\n` sequences the way Firebase's own downloaded JSON key file does
+  // (a real newline can't survive most .env / process-manager config
+  // formats intact) — server.ts un-escapes it before handing it to
+  // `firebase-admin`.
+  FCM_PROJECT_ID: z.string().optional(),
+  FCM_CLIENT_EMAIL: z.string().optional(),
+  FCM_PRIVATE_KEY: z.string().optional(),
+
+  // APNs (iOS, ROADMAP.md 2.9's last bullet) — Apple's modern
+  // token-based (P8 key) auth, not the older per-app .p12 certificate
+  // scheme; same "all optional together" posture. `APNS_KEY` is the P8
+  // key's own PEM contents (same `\n`-escaping note as FCM_PRIVATE_KEY
+  // above), not a filesystem path.
+  APNS_KEY: z.string().optional(),
+  APNS_KEY_ID: z.string().optional(),
+  APNS_TEAM_ID: z.string().optional(),
+  APNS_BUNDLE_ID: z.string().optional(),
+  // Sandbox (development-signed app builds) vs. production APNs — Apple
+  // runs genuinely separate services for each, so this can't be inferred
+  // from NODE_ENV (a `production` *server* commonly still needs to push to
+  // TestFlight/sandbox-signed builds during development of the mobile app
+  // itself).
+  APNS_PRODUCTION: z.coerce.boolean().default(false),
+
   // ClickHouse (ROADMAP.md 2.4) — analytics-only, so unlike DATABASE_URL/
   // REDIS_URL this isn't allowed to be empty but every field still has a
   // docker-compose.yml-matching default, same posture as S3_* above: no

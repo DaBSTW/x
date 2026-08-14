@@ -1,6 +1,8 @@
 import type { NotificationJobData } from '@x/utils'
 import { unreadCountKey } from '@x/utils'
 import type { Redis } from 'ioredis'
+import type { SendApnsPush } from './apns-sender.js'
+import type { SendFcmPush } from './fcm-sender.js'
 import type { NotificationsRepository } from './notifications.repository.js'
 import type { SendPush } from './push-sender.js'
 import { buildPushText } from './push-text.js'
@@ -10,6 +12,10 @@ export type NotificationsProcessorDeps = {
   redis: Redis
   /** `undefined` when no VAPID keypair is configured — push is then skipped entirely (env.ts). */
   sendPush?: SendPush
+  /** `undefined` when no FCM service account is configured — ROADMAP.md 2.9. */
+  sendFcmPush?: SendFcmPush
+  /** `undefined` when no APNs credentials are configured — ROADMAP.md 2.9. */
+  sendApnsPush?: SendApnsPush
 }
 
 export type NotificationsProcessor = (data: NotificationJobData) => Promise<void>
@@ -27,29 +33,45 @@ function buildNotificationPath(
 export function createNotificationsProcessor(
   deps: NotificationsProcessorDeps,
 ): NotificationsProcessor {
-  const { repository, redis, sendPush } = deps
+  const { repository, redis, sendPush, sendFcmPush, sendApnsPush } = deps
 
   async function sendPushForJob(userId: bigint, data: NotificationJobData): Promise<void> {
-    if (!sendPush) return
+    // Cheap to check before either lookup below — neither is worth doing
+    // at all when nothing on this server can act on the result (no
+    // transport configured) or the recipient doesn't want this kind
+    // pushed regardless of transport.
+    if (!sendPush && !sendFcmPush && !sendApnsPush) return
     if (!(await repository.isPushEnabled(userId, data.kind))) return
 
-    const subscriptions = await repository.findPushSubscriptions(userId)
-    if (subscriptions.length === 0) return
+    // Independent lookups (Web Push subscriptions vs. FCM/APNs device
+    // tokens live in separate tables, ROADMAP.md 2.9) — run together
+    // rather than one after the other.
+    const [subscriptions, tokens] = await Promise.all([
+      sendPush ? repository.findPushSubscriptions(userId) : Promise.resolve([]),
+      sendFcmPush || sendApnsPush ? repository.findDeviceTokens(userId) : Promise.resolve([]),
+    ])
+    if (subscriptions.length === 0 && tokens.length === 0) return
 
     const actorUsername = data.actorId ? await repository.findUsername(BigInt(data.actorId)) : null
     const { title, body } = buildPushText(data.kind, actorUsername)
     const url = buildNotificationPath(data, actorUsername)
+    const payload = { title, body, url }
 
-    // A handful of devices per user at most — sent concurrently rather than
-    // one round trip at a time.
-    await Promise.all(
-      subscriptions.map(async (subscription) => {
-        const result = await sendPush(subscription, { title, body, url })
-        if (result.expired) {
-          await repository.deleteSubscriptionByEndpoint(subscription.endpoint)
-        }
+    // A handful of devices per user at most across every transport — sent
+    // concurrently rather than one round trip at a time.
+    await Promise.all([
+      ...subscriptions.map(async (subscription) => {
+        if (!sendPush) return // narrowed already by the lookup above, but keeps TS happy without a `!`
+        const result = await sendPush(subscription, payload)
+        if (result.expired) await repository.deleteSubscriptionByEndpoint(subscription.endpoint)
       }),
-    )
+      ...tokens.map(async (deviceToken) => {
+        const sendToken = deviceToken.platform === 'fcm' ? sendFcmPush : sendApnsPush
+        if (!sendToken) return // this token's platform isn't configured on this server — not "dead," just unreachable from here
+        const result = await sendToken(deviceToken.token, payload)
+        if (result.expired) await repository.deleteDeviceTokenByToken(deviceToken.token)
+      }),
+    ])
   }
 
   return async function processNotificationJob(data: NotificationJobData): Promise<void> {
