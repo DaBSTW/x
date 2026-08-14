@@ -1,19 +1,13 @@
 import { realtimeClientMessageSchema } from '@x/contracts'
-import { realtimeTicketKey, sha256Hex } from '@x/utils'
-import type { FastifyBaseLogger, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import type { FastifyBaseLogger, FastifyInstance } from 'fastify'
 import type { Redis } from 'ioredis'
 import type { WebSocket } from 'ws'
 import type { ConnectionRegistry } from './connection-registry.js'
+import { createDeliveryHub } from './delivery-hub.js'
 import type { RealtimeRepository } from './realtime.repository.js'
-import { isStreamIdNewer } from './stream-id.js'
+import { registerSseRoute } from './sse.plugin.js'
 import { createSubscriptionHandler } from './subscription-handler.js'
-
-declare module 'fastify' {
-  interface FastifyRequest {
-    /** Set by the ticket preHandler below once redeemed — never read before it runs, since an unresolved ticket rejects the upgrade outright. */
-    realtimeUserId?: bigint
-  }
-}
+import { createTicketPreHandler } from './ticket-auth.js'
 
 export type GatewayPluginOptions = {
   /** General-purpose connection — ticket redemption (`GETDEL`), stream replay (`XRANGE`). */
@@ -26,45 +20,6 @@ export type GatewayPluginOptions = {
   heartbeatIntervalMs: number
   heartbeatTimeoutMs: number
   backpressureLimitBytes: number
-}
-
-/**
- * Redeems the one-time connection ticket — SPECS.md §8.1 — before the
- * WebSocket upgrade happens at all. `@fastify/websocket` only hijacks the
- * route *handler*; a `{ websocket: true }` route still runs the normal
- * Fastify `preHandler` lifecycle first, so rejecting here sends a plain
- * HTTP 401/403 and the upgrade never occurs (verified against the plugin's
- * own source — `routeOptions.handler` is what gets wrapped, not the whole
- * route lifecycle).
- */
-function createTicketPreHandler(redis: Redis, corsOrigin: string) {
-  return async function verifyTicket(request: FastifyRequest, reply: FastifyReply): Promise<void> {
-    // Not a hard requirement (a non-browser client may send no Origin at
-    // all), only a rejection when one is present and wrong — defense in
-    // depth on top of the ticket itself, which is the real access control.
-    const origin = request.headers.origin
-    if (origin !== undefined && origin !== corsOrigin) {
-      await reply.code(403).send({ error: { code: 'FORBIDDEN', message: 'origin not allowed' } })
-      return
-    }
-
-    const query = request.query as Record<string, unknown>
-    const ticket = typeof query.ticket === 'string' ? query.ticket : undefined
-    if (!ticket) {
-      await reply.code(401).send({ error: { code: 'UNAUTHENTICATED', message: 'missing ticket' } })
-      return
-    }
-
-    const rawUserId = await redis.getdel(realtimeTicketKey(sha256Hex(ticket)))
-    if (!rawUserId) {
-      await reply
-        .code(401)
-        .send({ error: { code: 'UNAUTHENTICATED', message: 'invalid or expired ticket' } })
-      return
-    }
-
-    request.realtimeUserId = BigInt(rawUserId)
-  }
 }
 
 /** Sends a pre-serialized message, closing the connection instead if its write queue is already backed up — SPECS.md §8.3's backpressure rule. */
@@ -85,6 +40,14 @@ function sendRaw(
   socket.send(message)
 }
 
+/**
+ * Registers both of this service's realtime routes — `/v1` (WebSocket) and
+ * `/v1/sse` (ROADMAP.md 2.2's fallback, sse.plugin.ts) — sharing one
+ * `DeliveryHub` between them so a channel with listeners of both protocols
+ * on this process still issues exactly one real Redis `SUBSCRIBE`
+ * (delivery-hub.ts's own comment on why that has to be a single shared
+ * instance, not one per route).
+ */
 export async function registerGatewayRoutes(
   app: FastifyInstance,
   options: GatewayPluginOptions,
@@ -100,57 +63,9 @@ export async function registerGatewayRoutes(
     backpressureLimitBytes,
   } = options
 
+  const hub = createDeliveryHub({ registry, subscriber, logger: app.log })
   const subscriptions = createSubscriptionHandler({ registry, repository, subscriber, redis })
-  const socketsByConnectionId = new Map<string, WebSocket>()
-  // Per connection, the newest eventId already delivered on each channel —
-  // the one thing a live PUBLISH and a replayed XRANGE entry for the same
-  // event have in common, so this single guard, applied on both paths,
-  // is what keeps a reconnect's replay-then-live handoff from ever
-  // delivering the same event twice or skipping one (SPECS.md §8.3's
-  // "sin duplicados ni huecos", ROADMAP.md 2.2).
-  const lastDeliveredEventIdByConnection = new Map<string, Map<string, string>>()
   let nextConnectionId = 0
-
-  function deliverEvent(connectionId: string, channel: string, eventId: string, raw: string): void {
-    const socket = socketsByConnectionId.get(connectionId)
-    if (!socket) return
-
-    const perChannel = lastDeliveredEventIdByConnection.get(connectionId)
-    const lastId = perChannel?.get(channel)
-    if (lastId !== undefined && !isStreamIdNewer(eventId, lastId)) return // already delivered
-
-    if (perChannel) {
-      perChannel.set(channel, eventId)
-    } else {
-      lastDeliveredEventIdByConnection.set(connectionId, new Map([[channel, eventId]]))
-    }
-    sendRaw(socket, raw, backpressureLimitBytes, app.log)
-  }
-
-  // One shared Redis subscriber connection dispatches every incoming
-  // pub/sub message to whichever of *this process's* connections currently
-  // care about that channel — SPECS.md §8.3's "cada instancia mantiene un
-  // mapa channel → Set<connection>." The publisher (apps/workers' fan-out)
-  // is trusted to have already built a wire-format-correct envelope, the
-  // same trust boundary this codebase already gives BullMQ job payloads —
-  // but `eventId` specifically has to be read out of it here, not just
-  // relayed blind, for the dedup guard above to work at all.
-  subscriber.on('message', (channel: string, raw: string) => {
-    let eventId: unknown
-    try {
-      eventId = (JSON.parse(raw) as { eventId?: unknown }).eventId
-    } catch {
-      app.log.warn({ channel }, 'discarding a non-JSON realtime pub/sub message')
-      return
-    }
-    if (typeof eventId !== 'string') {
-      app.log.warn({ channel }, 'discarding a realtime pub/sub message with no eventId')
-      return
-    }
-    for (const connectionId of registry.connectionsFor(channel)) {
-      deliverEvent(connectionId, channel, eventId, raw)
-    }
-  })
 
   app.get(
     '/v1',
@@ -168,9 +83,13 @@ export async function registerGatewayRoutes(
       // property access, not a local binding.
       const userId: bigint = request.realtimeUserId
 
-      const connectionId = String(nextConnectionId++)
-      socketsByConnectionId.set(connectionId, socket)
+      // Prefixed, not a bare counter: this id is also a DeliveryHub key the
+      // SSE route (its own, independently-counted `sse-N` ids) shares —
+      // without the prefix, a WS connection "0" and an SSE connection "0"
+      // in the same process would collide in the hub's and registry's maps.
+      const connectionId = `ws-${nextConnectionId++}`
       const send = (message: string) => sendRaw(socket, message, backpressureLimitBytes, app.log)
+      hub.register(connectionId, send)
 
       // --- Heartbeat (SPECS.md §8.3): ping every heartbeatIntervalMs;
       // close if heartbeatTimeoutMs pass with no pong. A single timer
@@ -190,8 +109,7 @@ export async function registerGatewayRoutes(
       socket.on('close', () => {
         clearTimeout(heartbeatTimeout)
         clearInterval(pingInterval)
-        socketsByConnectionId.delete(connectionId)
-        lastDeliveredEventIdByConnection.delete(connectionId)
+        hub.unregister(connectionId)
         void subscriptions
           .disconnect(connectionId)
           .catch((error: unknown) =>
@@ -239,7 +157,7 @@ export async function registerGatewayRoutes(
           // After the ack, not before — the client learns "you're
           // subscribed" before backlog starts arriving on top of it.
           for (const { channel, events } of replay) {
-            for (const event of events) deliverEvent(connectionId, channel, event.id, event.raw)
+            for (const event of events) hub.deliverEvent(connectionId, channel, event.id, event.raw)
           }
         } else {
           const removed = await subscriptions.unsubscribe(connectionId, result.data.channels)
@@ -248,4 +166,15 @@ export async function registerGatewayRoutes(
       }
     },
   )
+
+  await registerSseRoute(app, {
+    redis,
+    subscriber,
+    registry,
+    repository,
+    hub,
+    corsOrigin,
+    heartbeatIntervalMs,
+    backpressureLimitBytes,
+  })
 }

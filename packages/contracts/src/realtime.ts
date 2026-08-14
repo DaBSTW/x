@@ -93,3 +93,42 @@ export const realtimeServerMessageSchema = z.discriminatedUnion('op', [
   realtimeServerEventSchema,
 ])
 export type RealtimeServerMessage = z.infer<typeof realtimeServerMessageSchema>
+
+// --- GET /realtime/poll (ROADMAP.md 2.2's "último caso, polling
+// adaptativo") -------------------------------------------------------------
+// A last-resort fallback for a client that can't hold either a WebSocket
+// (apps/ws-gateway's `/v1`) or an SSE stream (`/v1/sse`) open at all — some
+// corporate proxies block both. Plain JWT-authenticated REST, deliberately
+// *not* the ticket scheme those two use: a ticket exists so a bearer token
+// never sits in a URL a proxy/access log records (SPECS.md §8.1), but a
+// polling GET already carries its token in an Authorization header like
+// every other REST call in this API, so that risk never applies here.
+
+export const realtimePollQuerySchema = z.object({
+  channel: realtimeChannelSchema,
+  // Omitted on a client's first-ever poll for this channel — same "just
+  // tell me where the tip of the stream is, nothing to replay yet"
+  // semantics as the WS/SSE paths' own first subscribe.
+  since: z.string().optional(),
+})
+export type RealtimePollQuery = z.infer<typeof realtimePollQuerySchema>
+
+/** One missed event — `channel` isn't repeated per item since it's already the query's own `channel`, unlike realtimeServerEventSchema's WS/SSE envelope which multiplexes several channels over one connection. */
+export const realtimePolledEventSchema = z.object({
+  eventId: z.string(),
+  event: z.string(),
+  data: z.unknown(),
+})
+export type RealtimePolledEvent = z.infer<typeof realtimePolledEventSchema>
+
+export const realtimePollResponseSchema = z.object({
+  data: z.object({
+    events: z.array(realtimePolledEventSchema),
+    // The stream id to send back as `since` on the *next* poll — echoes the
+    // last item of `events` when there were any, otherwise the previous
+    // `since` un-advanced, or null when the channel has never had a single
+    // event published on it (nothing to advance to yet).
+    latestEventId: z.string().nullable(),
+  }),
+})
+export type RealtimePollResponse = z.infer<typeof realtimePollResponseSchema>

@@ -29,6 +29,8 @@ export default defineConfig({
         'lib/notification-text.ts',
         'lib/notification-grouping.ts',
         'lib/realtime-backoff.ts',
+        'lib/realtime-transports/realtime-tier.ts',
+        'lib/realtime-transports/sse-url.ts',
         'lib/shortcuts-dialog-store.ts',
         // A hook, unlike the data-fetching ones this file's own comment
         // excludes above — but no network/React Query involved, just a

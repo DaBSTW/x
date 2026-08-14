@@ -2,7 +2,13 @@ import { fileURLToPath } from 'node:url'
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql'
 import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis'
 import { createDatabase, migrationsFolderUrl } from '@x/db'
-import { realtimeTicketKey, sha256Hex } from '@x/utils'
+import {
+  REALTIME_STREAM_FIELD_DATA,
+  REALTIME_STREAM_FIELD_EVENT,
+  realtimeStreamKey,
+  realtimeTicketKey,
+  sha256Hex,
+} from '@x/utils'
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
 import type { FastifyInstance } from 'fastify'
 import { Redis } from 'ioredis'
@@ -122,5 +128,86 @@ describe('realtime routes', () => {
       headers: { authorization: `Bearer ${aliceToken}` },
     })
     expect(first.json().data.ticket).not.toBe(second.json().data.ticket)
+  })
+
+  // ROADMAP.md 2.2's "último caso, polling adaptativo" fallback — plain
+  // JWT REST, unlike /realtime/ticket above (realtime.ts's own comment on
+  // why), so every one of these goes through the same Bearer auth as any
+  // other route in this app rather than a ticket.
+  describe('GET /realtime/poll', () => {
+    it('requires authentication', async () => {
+      const response = await app.inject({ method: 'GET', url: '/v1/realtime/poll?channel=user:1' })
+      expect(response.statusCode).toBe(401)
+    })
+
+    it('rejects a malformed channel', async () => {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/v1/realtime/poll?channel=not-a-channel',
+        headers: { authorization: `Bearer ${aliceToken}` },
+      })
+      expect(response.statusCode).toBe(400)
+    })
+
+    it("rejects polling someone else's user: channel", async () => {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/v1/realtime/poll?channel=user:${BigInt(aliceId) + 1n}`,
+        headers: { authorization: `Bearer ${aliceToken}` },
+      })
+      expect(response.statusCode).toBe(403)
+      expect(response.json().error.code).toBe('FORBIDDEN')
+    })
+
+    it('returns a null cursor and no events for a channel that has never had one published', async () => {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/v1/realtime/poll?channel=user:${aliceId}`,
+        headers: { authorization: `Bearer ${aliceToken}` },
+      })
+      expect(response.statusCode).toBe(200)
+      expect(response.json().data).toEqual({ events: [], latestEventId: null })
+    })
+
+    it('returns events published after `since`, and none of what came before it', async () => {
+      const channel = `user:${aliceId}`
+      const streamKey = realtimeStreamKey(channel)
+      const firstId = await redis.xadd(
+        streamKey,
+        '*',
+        REALTIME_STREAM_FIELD_EVENT,
+        'notification.new',
+        REALTIME_STREAM_FIELD_DATA,
+        JSON.stringify({ id: 'a' }),
+      )
+      if (firstId === null) throw new Error('XADD unexpectedly returned null')
+      const secondId = await redis.xadd(
+        streamKey,
+        '*',
+        REALTIME_STREAM_FIELD_EVENT,
+        'notification.new',
+        REALTIME_STREAM_FIELD_DATA,
+        JSON.stringify({ id: 'b' }),
+      )
+      if (secondId === null) throw new Error('XADD unexpectedly returned null')
+
+      const baseline = await app.inject({
+        method: 'GET',
+        url: `/v1/realtime/poll?channel=${channel}`,
+        headers: { authorization: `Bearer ${aliceToken}` },
+      })
+      expect(baseline.json().data).toEqual({ events: [], latestEventId: secondId })
+
+      const response = await app.inject({
+        method: 'GET',
+        url: `/v1/realtime/poll?channel=${channel}&since=${firstId}`,
+        headers: { authorization: `Bearer ${aliceToken}` },
+      })
+      expect(response.statusCode).toBe(200)
+      expect(response.json().data).toEqual({
+        events: [{ eventId: secondId, event: 'notification.new', data: { id: 'b' } }],
+        latestEventId: secondId,
+      })
+    })
   })
 })

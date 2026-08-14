@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { nextReconnectDelayMs } from './realtime-backoff.js'
+import { MAX_CONSECUTIVE_TRANSPORT_FAILURES, nextReconnectDelayMs } from './realtime-backoff.js'
 
 describe('nextReconnectDelayMs', () => {
   it('starts around 1s on the first attempt', () => {
@@ -29,5 +29,12 @@ describe('nextReconnectDelayMs', () => {
 
   it('never returns a negative delay', () => {
     expect(nextReconnectDelayMs(0, () => 0)).toBeGreaterThanOrEqual(0)
+  })
+})
+
+describe('MAX_CONSECUTIVE_TRANSPORT_FAILURES', () => {
+  it('is a positive integer — 0 would give a transport no chance to connect at all', () => {
+    expect(Number.isInteger(MAX_CONSECUTIVE_TRANSPORT_FAILURES)).toBe(true)
+    expect(MAX_CONSECUTIVE_TRANSPORT_FAILURES).toBeGreaterThan(0)
   })
 })

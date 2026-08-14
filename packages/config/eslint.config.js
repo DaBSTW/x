@@ -73,7 +73,7 @@ export default tseslint.config(
       '**/src/middleware/require-auth.ts',
       '**/src/plugins/db.ts',
       '**/src/plugins/redis.ts',
-      '**/src/gateway/gateway.plugin.ts',
+      '**/src/gateway/ticket-auth.ts',
     ],
     rules: {
       '@typescript-eslint/consistent-type-definitions': 'off',

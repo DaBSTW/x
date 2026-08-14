@@ -252,7 +252,17 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
     vapidPublicKey: env.VAPID_PUBLIC_KEY ?? null,
   })
 
-  const realtimeService = createRealtimeService(app.redis, REALTIME_TICKET_TTL_SECONDS)
+  const realtimeService = createRealtimeService(app.redis, REALTIME_TICKET_TTL_SECONDS, {
+    // Same adapter shape as apps/ws-gateway's own realtime.repository.ts,
+    // wired to the real repository directly instead — this app already has
+    // it for the actual conversations feature, so unlike that other
+    // process there's no need to even duplicate the query, only the tiny
+    // authorizeChannel switch itself (CODESTYLE.md §7).
+    conversationMembership: {
+      isMember: (conversationId, userId) =>
+        conversationsRepository.findMember(conversationId, userId).then((row) => row !== null),
+    },
+  })
 
   const trendsRepository = createTrendsRepository(app.db)
   const trendsService = createTrendsService(trendsRepository)

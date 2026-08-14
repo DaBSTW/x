@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   realtimeChannelSchema,
   realtimeClientMessageSchema,
+  realtimePollQuerySchema,
+  realtimePollResponseSchema,
   realtimeServerMessageSchema,
   realtimeTicketResponseSchema,
 } from './realtime.js'
@@ -107,6 +109,40 @@ describe('realtimeServerMessageSchema', () => {
     const result = realtimeServerMessageSchema.safeParse({
       op: 'error',
       message: 'unauthorized channel',
+    })
+    expect(result.success).toBe(true)
+  })
+})
+
+describe('realtimePollQuerySchema', () => {
+  it('accepts a channel with no since (a first-ever poll)', () => {
+    expect(realtimePollQuerySchema.safeParse({ channel: 'timeline:123' }).success).toBe(true)
+  })
+
+  it('accepts a channel with a since cursor', () => {
+    const result = realtimePollQuerySchema.safeParse({ channel: 'timeline:123', since: '1723-0' })
+    expect(result.success).toBe(true)
+  })
+
+  it('rejects a malformed channel', () => {
+    expect(realtimePollQuerySchema.safeParse({ channel: 'not-a-channel' }).success).toBe(false)
+  })
+})
+
+describe('realtimePollResponseSchema', () => {
+  it('accepts an empty baseline response', () => {
+    const result = realtimePollResponseSchema.safeParse({
+      data: { events: [], latestEventId: null },
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it('accepts a response carrying missed events', () => {
+    const result = realtimePollResponseSchema.safeParse({
+      data: {
+        events: [{ eventId: '1723-0', event: 'post.available', data: { postId: '1' } }],
+        latestEventId: '1723-0',
+      },
     })
     expect(result.success).toBe(true)
   })
