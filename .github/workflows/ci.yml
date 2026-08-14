@@ -63,8 +63,9 @@ jobs:
       # real ffmpeg/ffprobe, isolated per-run via prlimit(1) — already part
       # of util-linux on this runner, ffmpeg itself is not.
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      # Runner ships Docker — Testcontainers spins up real Postgres, Redis and
-      # Mailpit per suite; CODESTYLE.md §14 forbids mocking them.
+      # Runner ships Docker — Testcontainers spins up real Postgres, Redis,
+      # Redpanda (ROADMAP.md 3.1) and Mailpit per suite; CODESTYLE.md §14
+      # forbids mocking them.
       - run: pnpm --filter @x/api test:integration
       - run: pnpm --filter @x/workers test:integration
       - run: pnpm --filter @x/ws-gateway test:integration

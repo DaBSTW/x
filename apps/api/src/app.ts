@@ -4,7 +4,13 @@ import helmet from '@fastify/helmet'
 import swagger from '@fastify/swagger'
 import { Client as OpenSearchClient } from '@opensearch-project/opensearch'
 import scalarApiReference from '@scalar/fastify-api-reference'
-import { REALTIME_TICKET_TTL_SECONDS } from '@x/utils'
+import {
+  INTERACTION_EVENTS_TOPIC,
+  type NotificationJobData,
+  POST_CREATED_TOPIC,
+  REALTIME_TICKET_TTL_SECONDS,
+  generateId,
+} from '@x/utils'
 import Fastify, { type FastifyInstance } from 'fastify'
 import {
   type ZodTypeProvider,
@@ -13,11 +19,10 @@ import {
   validatorCompiler,
 } from 'fastify-type-provider-zod'
 import type { Env } from './env.js'
-import { createFanoutQueue } from './lib/fanout-queue.js'
+import { createKafkaEventTopic } from './lib/kafka-event-topic.js'
 import { createMailer } from './lib/mailer.js'
 import { createMediaQueue } from './lib/media-queue.js'
 import { createMediaStorage } from './lib/media-storage.js'
-import { createNotificationsQueue } from './lib/notifications-queue.js'
 import { createTrendIngestQueue } from './lib/trend-ingest-queue.js'
 import { createAuthRepository } from './modules/auth/auth.repository.js'
 import { registerAuthRoutes } from './modules/auth/auth.routes.js'
@@ -119,19 +124,41 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
     refreshTokenTtlDays: env.REFRESH_TOKEN_TTL_DAYS,
   })
 
-  const fanoutQueue = createFanoutQueue(env.REDIS_URL)
-  const notificationsQueue = createNotificationsQueue(env.REDIS_URL)
+  // ROADMAP.md 3.1 — Kafka replaces BullMQ for these two specifically
+  // (SPECS.md §3.2's own architecture diagram and §13.1 both name them as
+  // Kafka's own flows); media/trend-ingest below stay on BullMQ, the
+  // "mantener BullMQ para jobs de baja frecuencia" half of the same bullet.
+  const fanoutTopic = createKafkaEventTopic<{ postId: string; authorId: string }>({
+    brokers: env.KAFKA_BROKERS,
+    clientId: 'x-api',
+    topic: POST_CREATED_TOPIC,
+    // authorId, not postId: fan-out's own consumer (apps/workers) reads
+    // "who posted" to look up followers, and partitioning by the same key
+    // a reader groups by is what actually preserves per-author ordering
+    // (SPECS.md 3.1's "particionado por user_id").
+    partitionKey: (data) => data.authorId,
+  })
+  const notificationsTopic = createKafkaEventTopic<NotificationJobData & { eventId: string }>({
+    brokers: env.KAFKA_BROKERS,
+    clientId: 'x-api',
+    topic: INTERACTION_EVENTS_TOPIC,
+    // The notification *recipient* — preserves per-recipient ordering,
+    // the order that actually matters to the worker grouping these into
+    // "Ana and 12 others liked your post" within a single time window.
+    partitionKey: (data) => data.userId,
+  })
   const mediaQueue = createMediaQueue(env.REDIS_URL)
   const trendIngestQueue = createTrendIngestQueue(env.REDIS_URL)
   app.addHook('onClose', async () => {
     await Promise.all([
-      fanoutQueue.close(),
-      notificationsQueue.close(),
+      fanoutTopic.close(),
+      notificationsTopic.close(),
       mediaQueue.close(),
       trendIngestQueue.close(),
     ])
   })
-  const publishNotification = notificationsQueue.enqueue
+  const publishNotification = (data: NotificationJobData) =>
+    notificationsTopic.enqueue({ ...data, eventId: generateId().toString() })
 
   // Shared by posts (embedding media in a post) and media (the standalone
   // /media/:id resource) so both agree on how a storage key becomes a URL.
@@ -152,7 +179,7 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   const postsService = createPostsService(
     postsRepository,
     async (postId, authorId) => {
-      await fanoutQueue.enqueue({ postId: postId.toString(), authorId: authorId.toString() })
+      await fanoutTopic.enqueue({ postId: postId.toString(), authorId: authorId.toString() })
     },
     publishNotification,
     mediaUrlConfig,

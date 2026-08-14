@@ -21,6 +21,7 @@
     "@aws-sdk/s3-request-presigner": "^3.716.0",
     "@node-rs/argon2": "^2.0.2",
     "franc-min": "^6.2.0",
+    "kafkajs": "^2.2.4",
     "otplib": "^13.4.1"
   },
   "devDependencies": {

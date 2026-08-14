@@ -58,6 +58,13 @@ const envSchema = z
     // never writes to OpenSearch (apps/workers' search-indexer.worker.ts
     // owns that), so this is the only OpenSearch config this app needs.
     OPENSEARCH_URL: z.string().url().default('http://localhost:9200'),
+
+    // Kafka/Redpanda (ROADMAP.md 3.1) — apps/api is a *producer* only here
+    // (post.created, interaction.events; kafka-event-topic.ts), same
+    // "always has a docker-compose.yml-matching default" posture as
+    // OPENSEARCH_URL above. apps/workers' own KAFKA_BROKERS (env.ts there)
+    // is the consumer side of the same two topics.
+    KAFKA_BROKERS: z.string().default('localhost:9092'),
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV !== 'production') return

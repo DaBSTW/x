@@ -1,7 +1,7 @@
 // Shared between apps/api (producer) and apps/workers (consumer), same
 // reason queues.ts and timeline-constants.ts are shared — SPECS.md §3.
-
-export const NOTIFICATIONS_QUEUE_NAME = 'notifications'
+// Kafka since ROADMAP.md 3.1 (kafka-events.ts's INTERACTION_EVENTS_TOPIC) —
+// this was BullMQ's queue name before that migration.
 
 export const NOTIFICATION_KINDS = [
   'like',

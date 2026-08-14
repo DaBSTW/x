@@ -31,22 +31,29 @@ export function createFanoutProcessor({ repository, redis }: FanoutProcessorDeps
     const postId = BigInt(data.postId)
     const authorId = BigInt(data.authorId)
 
-    // A job can be retried after already completing (worker crash between
-    // finishing the last batch and BullMQ recording success). SET NX makes
-    // that retry a no-op instead of double-pushing every follower timeline.
-    const claimed = await redis.set(
-      `fanout:processed:${data.postId}`,
-      '1',
-      'EX',
-      PROCESSED_TTL_SECONDS,
-      'NX',
-    )
-    if (claimed === null) return
+    // A job can be retried after already *successfully* completing (worker
+    // crash, or an upstream redelivery, between finishing the last batch
+    // and the caller recording success) — checked up front so that retry
+    // is a no-op instead of double-pushing every follower timeline.
+    //
+    // Marked done only at the very end (below), deliberately: this used to
+    // claim the key up front with SET NX, before any of the real work
+    // below ran. That turned a genuine failure (getFollowersCount, or
+    // anything in the loop, rejecting) into a false "already done" on the
+    // very next retry — kafka-consumer.ts's in-process retry loop calls
+    // this function again for the same message, found the early claim
+    // already in place, and returned success without ever redoing the
+    // work, so the DLQ path this guard was never meant to interfere with
+    // could never be reached. A plain existence check has no such failure
+    // mode: it only ever reflects a run that actually finished.
+    const processedKey = `fanout:processed:${data.postId}`
+    if (await redis.exists(processedKey)) return
 
     const followersCount = await repository.getFollowersCount(authorId)
     if (followersCount >= CELEBRITY_FOLLOWER_THRESHOLD) {
       // Celebrity accounts skip write fan-out; readers merge their recent
       // posts in at read time instead (fan-out on read).
+      await redis.set(processedKey, '1', 'EX', PROCESSED_TTL_SECONDS)
       return
     }
 
@@ -125,5 +132,7 @@ export function createFanoutProcessor({ repository, redis }: FanoutProcessorDeps
       if (followerIds.length < FANOUT_BATCH_SIZE) break
       afterId = followerIds.at(-1) ?? null
     }
+
+    await redis.set(processedKey, '1', 'EX', PROCESSED_TTL_SECONDS)
   }
 }

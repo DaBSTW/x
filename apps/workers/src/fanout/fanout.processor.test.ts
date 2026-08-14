@@ -28,6 +28,9 @@ function createFakeRedis() {
       strings.set(key, value)
       return 'OK'
     },
+    async exists(key: string) {
+      return strings.has(key) ? 1 : 0
+    },
     pipeline() {
       const batch: PipelineCommand[] = []
       const api = {

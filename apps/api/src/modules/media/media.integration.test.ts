@@ -121,6 +121,11 @@ describe('media routes', () => {
       WORKER_ID: 5,
       DATABASE_URL: postgresContainer.getConnectionUri(),
       REDIS_URL: redisContainer.getConnectionUrl(),
+      // Placeholder — none of this file's tests exercise a Kafka-producing
+      // route in a way that asserts on the message, so an unreachable broker
+      // is fine (posts.service.ts/social-graph.service.ts already treat a
+      // produce failure as non-fatal — ROADMAP.md 3.1).
+      KAFKA_BROKERS: 'localhost:9092',
       JWT_ACCESS_TTL_MINUTES: 15,
       REFRESH_TOKEN_TTL_DAYS: 30,
       SMTP_HOST: mailpitContainer.getHost(),

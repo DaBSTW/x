@@ -32,6 +32,7 @@
     "fastify-type-provider-zod": "^4.0.2",
     "ioredis": "^5.4.2",
     "jose": "^5.9.6",
+    "kafkajs": "^2.2.4",
     "nodemailer": "^6.9.16",
     "qrcode": "^1.5.4",
     "react": "^19.2.8",

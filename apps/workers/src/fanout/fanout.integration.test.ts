@@ -11,19 +11,65 @@ import {
 } from '@x/db'
 import {
   CELEBRITY_FOLLOWER_THRESHOLD,
+  POST_CREATED_TOPIC,
   TIMELINE_RETENTION_SIZE,
   generateId,
   realtimeStreamKey,
   timelineChannel,
   timelineKey,
 } from '@x/utils'
-import { Queue } from 'bullmq'
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
 import { Redis } from 'ioredis'
+import { Kafka, type Producer, logLevel } from 'kafkajs'
+import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createFanoutProcessor } from './fanout.processor.js'
 import { createFanoutRepository } from './fanout.repository.js'
 import { createFanoutWorker } from './fanout.worker.js'
+
+// Same fixed external port / Redpanda-not-Confluent / real-healthcheck
+// reasoning as search-indexer.worker.integration.test.ts's own
+// createRedpandaContainer — duplicated rather than shared (CODESTYLE.md
+// §7 covers apps/*, not test helpers within one, but there's still no
+// existing "test infra" package this repo shares between spec files
+// today, so a small, stable helper like this one is duplicated the same
+// way channel-authorization.ts is duplicated between apps/api and
+// apps/ws-gateway).
+const REDPANDA_EXTERNAL_PORT = 29193
+
+function createRedpandaContainer(): GenericContainer {
+  return new GenericContainer('redpandadata/redpanda:latest')
+    .withExposedPorts({ container: REDPANDA_EXTERNAL_PORT, host: REDPANDA_EXTERNAL_PORT })
+    .withCommand([
+      'redpanda',
+      'start',
+      '--smp',
+      '1',
+      '--memory',
+      '512M',
+      '--overprovisioned',
+      '--node-id',
+      '0',
+      '--check=false',
+      '--kafka-addr',
+      `PLAINTEXT://0.0.0.0:${REDPANDA_EXTERNAL_PORT}`,
+      '--advertise-kafka-addr',
+      `PLAINTEXT://localhost:${REDPANDA_EXTERNAL_PORT}`,
+    ])
+    .withWaitStrategy(Wait.forSuccessfulCommand('rpk cluster health | grep -q "Healthy:.*true"'))
+    .withStartupTimeout(120_000)
+}
+
+/** Same reasoning as search-indexer.worker.integration.test.ts's own waitFor — the produce→consume path here is genuinely asynchronous, so a single assertion right after producing would be racy by construction. */
+async function waitFor<T>(check: () => Promise<T | false>, timeoutMs = 15_000): Promise<T> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const result = await check()
+    if (result !== false) return result
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  }
+  throw new Error(`waitFor: condition never became true within ${timeoutMs}ms`)
+}
 
 async function insertUser(
   db: Database,
@@ -49,23 +95,35 @@ async function insertUser(
 describe('fan-out worker', () => {
   let postgresContainer: StartedPostgreSqlContainer
   let redisContainer: StartedRedisContainer
+  let redpandaContainer: StartedTestContainer
   let db: Database
   let redis: Redis
+  let kafkaBrokers: string[]
+  let dlqProducer: Producer
 
   beforeAll(async () => {
-    ;[postgresContainer, redisContainer] = await Promise.all([
+    ;[postgresContainer, redisContainer, redpandaContainer] = await Promise.all([
       new PostgreSqlContainer('postgres:17-alpine').start(),
       new RedisContainer('redis:7-alpine').start(),
+      createRedpandaContainer().start(),
     ])
 
     db = createDatabase(postgresContainer.getConnectionUri())
     await migrate(db, { migrationsFolder: fileURLToPath(migrationsFolderUrl()) })
     redis = new Redis(redisContainer.getConnectionUrl())
+    kafkaBrokers = [`localhost:${REDPANDA_EXTERNAL_PORT}`]
+    dlqProducer = new Kafka({
+      clientId: 'fanout-test-dlq',
+      brokers: kafkaBrokers,
+      logLevel: logLevel.ERROR,
+    }).producer({ idempotent: true })
+    await dlqProducer.connect()
   }, 120_000)
 
   afterAll(async () => {
     redis.disconnect()
-    await Promise.all([postgresContainer.stop(), redisContainer.stop()])
+    await dlqProducer.disconnect()
+    await Promise.all([postgresContainer.stop(), redisContainer.stop(), redpandaContainer.stop()])
   })
 
   it('pushes a post onto every follower timeline and sets a 7-day TTL', async () => {
@@ -204,32 +262,109 @@ describe('fan-out worker', () => {
     expect(await redis.exists(timelineKey(follower))).toBe(0)
   })
 
-  it('processes a queued job end-to-end through a real BullMQ worker', async () => {
+  it('processes a produced Kafka message end-to-end through a real consumer (ROADMAP.md 3.1)', async () => {
     const author = await insertUser(db, { prefix: 'a' })
     const follower = await insertUser(db, { prefix: 'f' })
     await db.insert(follows).values({ followerId: follower, followeeId: author })
 
     const repository = createFanoutRepository(db)
-    const redisUrl = `redis://${redisContainer.getHost()}:${redisContainer.getMappedPort(6379)}`
-    const handle = createFanoutWorker({ repository, redisUrl, concurrency: 1 })
-    const queue = new Queue(handle.worker.name, {
-      connection: new Redis(redisUrl, { maxRetriesPerRequest: null }),
+    const kafka = new Kafka({
+      clientId: 'fanout-test-consumer',
+      brokers: kafkaBrokers,
+      logLevel: logLevel.ERROR,
     })
+    const workerRedis = new Redis(redisContainer.getConnectionUrl())
+    const handle = createFanoutWorker({
+      repository,
+      kafka,
+      producer: dlqProducer,
+      redis: workerRedis,
+      concurrency: 1,
+      groupId: `fanout-test-${generateId()}`,
+    })
+    await handle.start()
+
+    const producer = kafka.producer({ idempotent: true })
+    await producer.connect()
     const postId = generateId()
-
-    const completed = new Promise<void>((resolve, reject) => {
-      handle.worker.on('completed', (job) => {
-        if (job.data.postId === postId.toString()) resolve()
+    try {
+      await producer.send({
+        topic: POST_CREATED_TOPIC,
+        messages: [
+          {
+            key: author.toString(),
+            value: JSON.stringify({ postId: postId.toString(), authorId: author.toString() }),
+          },
+        ],
       })
-      handle.worker.on('failed', (_job, error) => reject(error))
+
+      const members = await waitFor(async () => {
+        const current = await redis.zrange(timelineKey(follower), 0, -1)
+        return current.length > 0 ? current : false
+      })
+      expect(members).toEqual([postId.toString()])
+    } finally {
+      await producer.disconnect()
+      await handle.close()
+      workerRedis.disconnect()
+    }
+  }, 30_000)
+
+  it("sends a message this consumer can't process to the topic's own DLQ after retrying, without wedging the partition (ROADMAP.md 3.1)", async () => {
+    const kafka = new Kafka({
+      clientId: 'fanout-test-dlq-consumer',
+      brokers: kafkaBrokers,
+      logLevel: logLevel.ERROR,
     })
-    await queue.add('fanout', { postId: postId.toString(), authorId: author.toString() })
-    await completed
+    // A repository whose getFollowersCount always throws — every attempt
+    // at handling this message fails, forcing the DLQ path for real
+    // instead of asserting against mocked internals.
+    const brokenRepository = createFanoutRepository(db)
+    brokenRepository.getFollowersCount = () => Promise.reject(new Error('simulated failure'))
+    const workerRedis = new Redis(redisContainer.getConnectionUrl())
+    const handle = createFanoutWorker({
+      repository: brokenRepository,
+      kafka,
+      producer: dlqProducer,
+      redis: workerRedis,
+      concurrency: 1,
+      groupId: `fanout-test-dlq-${generateId()}`,
+    })
+    await handle.start()
 
-    const members = await redis.zrange(timelineKey(follower), 0, -1)
-    expect(members).toEqual([postId.toString()])
+    const dlqConsumer = kafka.consumer({ groupId: `fanout-test-dlq-reader-${generateId()}` })
+    await dlqConsumer.connect()
+    await dlqConsumer.subscribe({ topic: `${POST_CREATED_TOPIC}.dlq`, fromBeginning: true })
+    const dlqMessages: unknown[] = []
+    const dlqConsuming = dlqConsumer.run({
+      eachMessage: async ({ message }) => {
+        if (message.value) dlqMessages.push(JSON.parse(message.value.toString('utf8')))
+      },
+    })
 
-    await queue.close()
-    await handle.close()
+    const producer = kafka.producer({ idempotent: true })
+    await producer.connect()
+    const authorId = generateId()
+    const postId = generateId()
+    try {
+      await producer.send({
+        topic: POST_CREATED_TOPIC,
+        messages: [
+          {
+            key: authorId.toString(),
+            value: JSON.stringify({ postId: postId.toString(), authorId: authorId.toString() }),
+          },
+        ],
+      })
+
+      await waitFor(async () => (dlqMessages.length > 0 ? dlqMessages : false))
+      expect(dlqMessages).toEqual([{ postId: postId.toString(), authorId: authorId.toString() }])
+    } finally {
+      await producer.disconnect()
+      await dlqConsumer.disconnect()
+      await dlqConsuming.catch(() => {})
+      await handle.close()
+      workerRedis.disconnect()
+    }
   }, 30_000)
 })

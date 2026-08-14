@@ -1,4 +1,11 @@
-import { createS3Client, ensurePublicBucket } from '@x/utils'
+import {
+  INTERACTION_EVENTS_TOPIC,
+  POST_CREATED_TOPIC,
+  createS3Client,
+  ensureKafkaTopics,
+  ensurePublicBucket,
+} from '@x/utils'
+import { Kafka, logLevel } from 'kafkajs'
 import { buildApp } from './app.js'
 import { EnvValidationError, parseEnv } from './env.js'
 
@@ -38,6 +45,27 @@ try {
 } catch (error) {
   console.error('failed to ensure the media bucket exists with a public-read policy:', error)
   process.exit(1)
+}
+
+// ROADMAP.md 3.1 — unlike the bucket above, non-fatal: fanoutTopic/
+// notificationsTopic (app.ts) already treat a produce failure as
+// never-fail-the-request (posts.service.ts/social-graph.service.ts), so an
+// unreachable broker at boot should degrade the same way (fan-out and
+// notifications unavailable) rather than take the whole API down with it.
+try {
+  await ensureKafkaTopics(
+    new Kafka({
+      clientId: 'x-api-admin',
+      brokers: env.KAFKA_BROKERS.split(','),
+      logLevel: logLevel.ERROR,
+    }),
+    [POST_CREATED_TOPIC, INTERACTION_EVENTS_TOPIC],
+  )
+} catch (error) {
+  console.warn(
+    'Kafka/Redpanda unreachable at boot — topics may fall back to the broker default partition count:',
+    error,
+  )
 }
 
 const app = await buildApp(env)

@@ -2,21 +2,65 @@ import { fileURLToPath } from 'node:url'
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql'
 import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis'
 import { createDatabase, migrationsFolderUrl, notifications } from '@x/db'
-import { NOTIFICATIONS_QUEUE_NAME, generateId } from '@x/utils'
-import { Queue } from 'bullmq'
+import { INTERACTION_EVENTS_TOPIC, generateId } from '@x/utils'
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
 import type { FastifyInstance } from 'fastify'
-import { Redis } from 'ioredis'
+import { Kafka, logLevel } from 'kafkajs'
 import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { buildApp } from '../../app.js'
 import type { Env } from '../../env.js'
 
+// Same fixed external port / Redpanda-not-Confluent / real-healthcheck
+// reasoning as apps/workers/src/fanout/fanout.integration.test.ts's own
+// createRedpandaContainer — duplicated rather than shared (CODESTYLE.md §7
+// covers apps/*, not test helpers within one). A distinct port from every
+// other file's fixed Redpanda port (search-indexer's 29192, fanout's
+// 29193, notifications worker's 29194, register-cdc-connector's 29292) so
+// all could run concurrently without colliding.
+const REDPANDA_EXTERNAL_PORT = 29195
+
+function createRedpandaContainer(): GenericContainer {
+  return new GenericContainer('redpandadata/redpanda:latest')
+    .withExposedPorts({ container: REDPANDA_EXTERNAL_PORT, host: REDPANDA_EXTERNAL_PORT })
+    .withCommand([
+      'redpanda',
+      'start',
+      '--smp',
+      '1',
+      '--memory',
+      '512M',
+      '--overprovisioned',
+      '--node-id',
+      '0',
+      '--check=false',
+      '--kafka-addr',
+      `PLAINTEXT://0.0.0.0:${REDPANDA_EXTERNAL_PORT}`,
+      '--advertise-kafka-addr',
+      `PLAINTEXT://localhost:${REDPANDA_EXTERNAL_PORT}`,
+    ])
+    .withWaitStrategy(Wait.forSuccessfulCommand('rpk cluster health | grep -q "Healthy:.*true"'))
+    .withStartupTimeout(120_000)
+}
+
+/** Same reasoning as fanout.integration.test.ts's own waitFor — a separate observing consumer catching up to a real produce is genuinely asynchronous, so a single assertion right after the request returns would be racy by construction. */
+async function waitFor<T>(check: () => Promise<T | false>, timeoutMs = 15_000): Promise<T> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const result = await check()
+    if (result !== false) return result
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  }
+  throw new Error(`waitFor: condition never became true within ${timeoutMs}ms`)
+}
+
 describe('notifications routes', () => {
   let postgresContainer: StartedPostgreSqlContainer
   let redisContainer: StartedRedisContainer
   let mailpitContainer: StartedTestContainer
+  let redpandaContainer: StartedTestContainer
   let app: FastifyInstance
+  let kafkaBrokers: string[]
   let aliceToken: string
   let aliceId: string
   let bobId: string
@@ -40,14 +84,16 @@ describe('notifications routes', () => {
   }
 
   beforeAll(async () => {
-    ;[postgresContainer, redisContainer, mailpitContainer] = await Promise.all([
+    ;[postgresContainer, redisContainer, mailpitContainer, redpandaContainer] = await Promise.all([
       new PostgreSqlContainer('postgres:17-alpine').start(),
       new RedisContainer('redis:7-alpine').start(),
       new GenericContainer('axllent/mailpit:latest')
         .withExposedPorts(1025, 8025)
         .withWaitStrategy(Wait.forListeningPorts())
         .start(),
+      createRedpandaContainer().start(),
     ])
+    kafkaBrokers = [`localhost:${REDPANDA_EXTERNAL_PORT}`]
 
     const migrationDb = createDatabase(postgresContainer.getConnectionUri())
     await migrate(migrationDb, { migrationsFolder: fileURLToPath(migrationsFolderUrl()) })
@@ -60,6 +106,11 @@ describe('notifications routes', () => {
       WORKER_ID: 7,
       DATABASE_URL: postgresContainer.getConnectionUri(),
       REDIS_URL: redisContainer.getConnectionUrl(),
+      // A real broker this time (unlike every other file's placeholder) —
+      // the "produces a real Kafka interaction.events message" test below
+      // asserts on the actual produced message, not just that the request
+      // itself succeeds.
+      KAFKA_BROKERS: kafkaBrokers.join(','),
       JWT_ACCESS_TTL_MINUTES: 15,
       REFRESH_TOKEN_TTL_DAYS: 30,
       SMTP_HOST: mailpitContainer.getHost(),
@@ -87,7 +138,12 @@ describe('notifications routes', () => {
 
   afterAll(async () => {
     await app.close()
-    await Promise.all([postgresContainer.stop(), redisContainer.stop(), mailpitContainer.stop()])
+    await Promise.all([
+      postgresContainer.stop(),
+      redisContainer.stop(),
+      mailpitContainer.stop(),
+      redpandaContainer.stop(),
+    ])
   })
 
   it('requires authentication on every route', async () => {
@@ -188,28 +244,45 @@ describe('notifications routes', () => {
     expect(response.json().data).toEqual([])
   })
 
-  it('enqueues a real BullMQ notification job when bob follows alice', async () => {
-    const redisUrl = redisContainer.getConnectionUrl()
-    const queue = new Queue(NOTIFICATIONS_QUEUE_NAME, {
-      connection: new Redis(redisUrl, { maxRetriesPerRequest: null }),
+  it('produces a real Kafka interaction.events message when bob follows alice (ROADMAP.md 3.1)', async () => {
+    const kafka = new Kafka({
+      clientId: 'notifications-route-test',
+      brokers: kafkaBrokers,
+      logLevel: logLevel.ERROR,
     })
-    const before = await queue.getJobCountByTypes('waiting', 'completed')
-
-    // social-graph.service.ts's follow() awaits publishNotification (inside
-    // a try/catch, but still awaited) before returning — by the time this
-    // response comes back, the job is durably in Redis. No worker needs to
-    // run, and no polling is needed either.
-    const response = await app.inject({
-      method: 'POST',
-      url: `/v1/users/${aliceId}/follow`,
-      headers: { authorization: `Bearer ${bobToken}` },
+    const consumer = kafka.consumer({ groupId: `notifications-route-test-${generateId()}` })
+    await consumer.connect()
+    await consumer.subscribe({ topic: INTERACTION_EVENTS_TOPIC, fromBeginning: true })
+    const received: unknown[] = []
+    const consuming = consumer.run({
+      eachMessage: async ({ message }) => {
+        if (message.value) received.push(JSON.parse(message.value.toString('utf8')))
+      },
     })
-    expect(response.statusCode).toBe(200)
 
-    const after = await queue.getJobCountByTypes('waiting', 'completed')
-    expect(after).toBeGreaterThan(before)
+    try {
+      // social-graph.service.ts's follow() awaits publishNotification
+      // (inside a try/catch, but still awaited) before returning —
+      // kafkajs's idempotent producer only resolves send() once the broker
+      // has acknowledged the write, so by the time this response comes
+      // back the message is already durably in Kafka. Only *observing* it
+      // here needs a poll (a separate consumer catching up is inherently
+      // asynchronous); producing it doesn't.
+      const response = await app.inject({
+        method: 'POST',
+        url: `/v1/users/${aliceId}/follow`,
+        headers: { authorization: `Bearer ${bobToken}` },
+      })
+      expect(response.statusCode).toBe(200)
 
-    await queue.close()
+      const events = await waitFor(async () => (received.length > 0 ? received : false))
+      expect(events).toContainEqual(
+        expect.objectContaining({ userId: aliceId, kind: 'follow', actorId: bobId }),
+      )
+    } finally {
+      await consumer.disconnect()
+      await consuming.catch(() => {})
+    }
   })
 
   it('returns the default preference matrix, then persists an override (ROADMAP.md 2.9)', async () => {

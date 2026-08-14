@@ -23,7 +23,7 @@ export {
   zeroCounterValues,
 } from './counters.js'
 export type { CounterField, CounterValues } from './counters.js'
-export { FANOUT_QUEUE_NAME, TREND_INGEST_QUEUE_NAME } from './queues.js'
+export { TREND_INGEST_QUEUE_NAME } from './queues.js'
 export type { FanoutJobData, TrendIngestJobData } from './queues.js'
 export {
   CELEBRITY_FOLLOWER_THRESHOLD,
@@ -36,7 +36,6 @@ export {
   CONFIGURABLE_NOTIFICATION_KINDS,
   NOTIFICATION_CHANNELS,
   NOTIFICATION_KINDS,
-  NOTIFICATIONS_QUEUE_NAME,
   defaultChannelEnabled,
   unreadCountKey,
 } from './notifications.js'
@@ -143,3 +142,12 @@ export {
   USERS_SEARCH_INDEX,
   cdcTopicName,
 } from './search.js'
+export {
+  DEFAULT_KAFKA_TOPIC_PARTITIONS,
+  FANOUT_CONSUMER_GROUP,
+  INTERACTION_EVENTS_TOPIC,
+  NOTIFICATIONS_CONSUMER_GROUP,
+  POST_CREATED_TOPIC,
+  dlqTopicName,
+  ensureKafkaTopics,
+} from './kafka-events.js'

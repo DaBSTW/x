@@ -1,6 +1,16 @@
 import { createDatabase } from '@x/db'
-import { COUNTER_FLUSH_INTERVAL_MS, SEARCH_INDEXER_CONSUMER_GROUP } from '@x/utils'
+import {
+  COUNTER_FLUSH_INTERVAL_MS,
+  FANOUT_CONSUMER_GROUP,
+  INTERACTION_EVENTS_TOPIC,
+  NOTIFICATIONS_CONSUMER_GROUP,
+  POST_CREATED_TOPIC,
+  SEARCH_INDEXER_CONSUMER_GROUP,
+  dlqTopicName,
+  ensureKafkaTopics,
+} from '@x/utils'
 import { Redis } from 'ioredis'
+import { Kafka, logLevel } from 'kafkajs'
 import { createCountersFlushWorker } from './counters/counters.flush-worker.js'
 import { createCountersRepository } from './counters/counters.repository.js'
 import { parseEnv } from './env.js'
@@ -69,26 +79,78 @@ if (!sendApnsPush) {
   console.warn('APNs credentials not configured — iOS push notifications are disabled')
 }
 
-const fanoutWorker = createFanoutWorker({
-  repository: createFanoutRepository(db),
-  redisUrl: env.REDIS_URL,
-  concurrency: env.FANOUT_WORKER_CONCURRENCY,
-})
-fanoutWorker.worker.on('failed', (job, error) => {
-  console.error(`fan-out job ${job?.id ?? '(unknown)'} failed:`, error)
+// ROADMAP.md 3.1 — one Kafka client, one connected Producer, shared by both
+// consumers below purely for their DLQ writes (kafka-consumer.ts's own
+// `producer` option); each still gets its own `consumer()` (a kafkajs
+// consumer already owns its group membership/partition assignment, so
+// there's nothing to share there the way a DLQ connection benefits from
+// being one real TCP connection instead of two).
+const workersKafka = new Kafka({
+  clientId: 'x-workers',
+  brokers: env.KAFKA_BROKERS.split(','),
+  logLevel: logLevel.ERROR,
 })
 
+// Same non-fatal "ensure the infra this process depends on exists, but
+// degrade rather than crash if it doesn't" posture as ClickHouse/
+// OpenSearch below — an unreachable broker already means fan-out/
+// notifications/search-indexing are unavailable regardless, and shouldn't
+// take counters/media/trend-ingest down with it either. Covers this
+// process's own DLQ topics too (apps/api's own boot-time ensure, server.ts
+// there, only knows about the two topics it produces to).
+try {
+  await ensureKafkaTopics(workersKafka, [
+    POST_CREATED_TOPIC,
+    INTERACTION_EVENTS_TOPIC,
+    dlqTopicName(POST_CREATED_TOPIC),
+    dlqTopicName(INTERACTION_EVENTS_TOPIC),
+  ])
+} catch (error) {
+  console.warn(
+    'Kafka/Redpanda unreachable at boot — topics may fall back to the broker default partition count:',
+    error,
+  )
+}
+
+const dlqProducer = workersKafka.producer({ idempotent: true })
+await dlqProducer.connect()
+
+const fanoutRedis = new Redis(env.REDIS_URL)
+const fanoutWorker = createFanoutWorker({
+  repository: createFanoutRepository(db),
+  kafka: workersKafka,
+  producer: dlqProducer,
+  redis: fanoutRedis,
+  concurrency: env.FANOUT_WORKER_CONCURRENCY,
+  groupId: FANOUT_CONSUMER_GROUP,
+})
+try {
+  await fanoutWorker.start()
+} catch (error) {
+  // Non-fatal, same posture as search-indexer's own Kafka connect below:
+  // an unreachable broker degrades timeline fan-out (posts still persist —
+  // posts.service.ts writes to Postgres before this ever runs) rather than
+  // crashing media/counters/trend-ingest along with it.
+  console.warn('Kafka/Redpanda unreachable at boot — fan-out will be unavailable:', error)
+}
+
+const notificationsRedis = new Redis(env.REDIS_URL)
 const notificationsWorker = createNotificationsWorker({
   repository: createNotificationsRepository(db),
-  redisUrl: env.REDIS_URL,
+  kafka: workersKafka,
+  producer: dlqProducer,
+  redis: notificationsRedis,
   concurrency: env.NOTIFICATIONS_WORKER_CONCURRENCY,
+  groupId: NOTIFICATIONS_CONSUMER_GROUP,
   ...(sendPush && { sendPush }),
   ...(sendFcmPush && { sendFcmPush }),
   ...(sendApnsPush && { sendApnsPush }),
 })
-notificationsWorker.worker.on('failed', (job, error) => {
-  console.error(`notification job ${job?.id ?? '(unknown)'} failed:`, error)
-})
+try {
+  await notificationsWorker.start()
+} catch (error) {
+  console.warn('Kafka/Redpanda unreachable at boot — notifications will be unavailable:', error)
+}
 
 const countersRedis = new Redis(env.REDIS_URL)
 const countersFlushWorker = createCountersFlushWorker(
@@ -195,6 +257,9 @@ async function shutdown(): Promise<void> {
     trendIngestWorker.close(),
     searchIndexer.stop(),
   ])
+  fanoutRedis.disconnect()
+  notificationsRedis.disconnect()
+  await dlqProducer.disconnect()
   await Promise.all([clickhouseClient.close(), openSearchClient.close()])
   process.exit(0)
 }
