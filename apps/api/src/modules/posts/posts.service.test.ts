@@ -80,6 +80,9 @@ function makePost(overrides: Partial<Post> & Pick<Post, 'id' | 'authorId'>): Pos
     clientName: null,
     createdAt: new Date(),
     deletedAt: null,
+    moderatorLabel: null,
+    reducedReach: false,
+    moderatorHiddenAt: null,
     ...overrides,
   }
 }
@@ -171,6 +174,12 @@ function createFakeRepository() {
     },
     async findAuthorById(id) {
       return authorsById.get(id) ?? null
+    },
+    // ROADMAP.md 3.3 — no test in this file puts an author in read-only
+    // mode, so always-unrestricted is the right default here; a real
+    // restriction is exercised against Postgres in posts.integration.test.ts.
+    async findReadOnlyUntil() {
+      return null
     },
     async findAuthorsByIds(ids) {
       return ids

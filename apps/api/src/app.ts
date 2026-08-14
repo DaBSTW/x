@@ -39,6 +39,9 @@ import { createListsService } from './modules/lists/lists.service.js'
 import { createMediaRepository } from './modules/media/media.repository.js'
 import { registerMediaRoutes } from './modules/media/media.routes.js'
 import { createMediaService } from './modules/media/media.service.js'
+import { createModerationRepository } from './modules/moderation/moderation.repository.js'
+import { registerModerationRoutes } from './modules/moderation/moderation.routes.js'
+import { createModerationService } from './modules/moderation/moderation.service.js'
 import { createNotificationsRepository } from './modules/notifications/notifications.repository.js'
 import { registerNotificationsRoutes } from './modules/notifications/notifications.routes.js'
 import { createNotificationsService } from './modules/notifications/notifications.service.js'
@@ -199,6 +202,14 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
       findRepostedPostIds: postsRepository.findRepostedPostIds,
     },
   )
+
+  const moderationRepository = createModerationRepository(app.db)
+  const moderationService = createModerationService({
+    repository: moderationRepository,
+    mailer,
+    publishNotification,
+    webUrl: env.WEB_URL,
+  })
 
   const mediaStorage = createMediaStorage({
     endpoint: env.S3_ENDPOINT,
@@ -416,6 +427,13 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   await app.register(
     async (instance) => {
       await registerRealtimeRoutes(instance, { realtimeService, tokenService })
+    },
+    { prefix: '/v1' },
+  )
+
+  await app.register(
+    async (instance) => {
+      await registerModerationRoutes(instance, { moderationService, tokenService })
     },
     { prefix: '/v1' },
   )

@@ -85,6 +85,22 @@ const dummyPasswordHashPromise = hashPassword('correct horse battery staple plac
 const TWO_FACTOR_CHALLENGE_TTL_MINUTES = 5
 const RECOVERY_CODE_COUNT = 10
 
+/**
+ * ROADMAP.md 3.3 / SPECS.md §12.2 — called from both login and refresh, the
+ * only two places a request can turn into a usable access token. A token
+ * already issued before a suspension keeps working until it naturally
+ * expires (JWT_ACCESS_TTL_MINUTES, 15 by default) or the caller refreshes,
+ * whichever comes first — not blanket per-request enforcement on every
+ * route. Documented as a deliberate, bounded gap (worst case ~15 minutes
+ * of staleness), not a silent one: closing it fully would mean threading a
+ * moderation-status lookup through createRequireAuth and therefore every
+ * module that builds one, a wider change than this checkpoint's own scope.
+ */
+function rejectIfBlocked(user: { isSuspended: boolean; isBanned: boolean }): void {
+  if (user.isBanned) throw new UnauthenticatedError('account banned')
+  if (user.isSuspended) throw new UnauthenticatedError('account suspended')
+}
+
 export type AuthService = ReturnType<typeof createAuthService>
 
 export function createAuthService(options: CreateAuthServiceOptions) {
@@ -250,6 +266,15 @@ export function createAuthService(options: CreateAuthServiceOptions) {
     if (!passwordValid) {
       throw new UnauthenticatedError('invalid email or password')
     }
+
+    // ROADMAP.md 3.3 / SPECS.md §12.2: "cuenta inaccesible" — checked after
+    // the password (never leaks whether an email/password pair is valid
+    // for a suspended account, same non-disclosure posture as the unknown-
+    // email branch above), before a token is ever issued. read_only isn't
+    // checked here on purpose: SPECS.md's own wording is "cuenta no puede
+    // publicar", not "cuenta inaccesible" — a read-only account can still
+    // log in and browse, only posting is blocked (posts.service.ts).
+    rejectIfBlocked(user)
 
     if (needsRehash(user.passwordHash)) {
       await repository.updatePasswordHash(user.id, await hashPassword(input.password))
@@ -458,6 +483,14 @@ export function createAuthService(options: CreateAuthServiceOptions) {
     if (record.expiresAt < new Date()) {
       throw new UnauthenticatedError('refresh token expired')
     }
+
+    // ROADMAP.md 3.3 — same check as login's, reached far more often across
+    // a session's life (every access-token expiry, ≤ JWT_ACCESS_TTL_MINUTES
+    // apart) — see rejectIfBlocked's own comment for why this, not blanket
+    // per-request enforcement, is this checkpoint's bound.
+    const user = await repository.findUserById(record.userId)
+    if (!user) throw new UnauthenticatedError('invalid refresh token')
+    rejectIfBlocked(user)
 
     const { row, rawToken } = buildRefreshTokenRow(record.userId, record.sessionId, meta)
     await repository.rotateRefreshToken(tokenHash, row)

@@ -188,6 +188,16 @@ export function createPostsRepository(db: Database) {
       return row ?? null
     },
 
+    /** ROADMAP.md 3.3 / SPECS.md §12.2's "Modo lectura" — checked at the top of create()/repost(). `null` means not currently restricted (including a past, expired timestamp — no cleanup job needed, this is just `> now()`). */
+    async findReadOnlyUntil(authorId: bigint): Promise<Date | null> {
+      const [row] = await db
+        .select({ readOnlyUntil: users.readOnlyUntil })
+        .from(users)
+        .where(eq(users.id, authorId))
+        .limit(1)
+      return row?.readOnlyUntil ?? null
+    },
+
     /** Batch hydration for timeline reads — a single `WHERE id = ANY($1)` (SPECS.md §6.1), order is not guaranteed. */
     async findPostsByIds(ids: bigint[]) {
       if (ids.length === 0) return []

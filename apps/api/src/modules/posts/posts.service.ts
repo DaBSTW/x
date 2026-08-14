@@ -332,6 +332,16 @@ export function createPostsService(
     return true
   }
 
+  /** ROADMAP.md 3.3 / SPECS.md §12.2's "Modo lectura" — SPECS.md's own wording is "cuenta no puede publicar", so this guards create()/repost() specifically, not every write this service has (a reply is still a post, already covered by create(); liking/following/etc. live in other services entirely, out of this checkpoint's scope — see ROADMAP.md 3.3's own note). */
+  async function rejectIfReadOnly(authorId: bigint): Promise<void> {
+    const readOnlyUntil = await repository.findReadOnlyUntil(authorId)
+    if (readOnlyUntil && readOnlyUntil > new Date()) {
+      throw new ForbiddenError('account is in read-only mode', {
+        readOnlyUntil: readOnlyUntil.toISOString(),
+      })
+    }
+  }
+
   // Same failure posture as onPostCreated: a queue outage must never fail
   // the write that triggered the notification.
   async function safePublish(data: NotificationJobData): Promise<void> {
@@ -369,6 +379,8 @@ export function createPostsService(
   }
 
   async function create(authorId: bigint, input: CreatePostServiceInput): Promise<Post> {
+    await rejectIfReadOnly(authorId)
+
     const mediaIds = input.mediaIds ?? []
     const { graphemeCount, entities: parsed } = validateAndParseText(input.text)
     if (graphemeCount === 0 && mediaIds.length === 0) {
@@ -697,6 +709,10 @@ export function createPostsService(
     if ((await findHiddenAuthorIds(viewerId, [post.authorId])).size > 0) {
       throw new NotFoundError('post', id.toString())
     }
+    // ROADMAP.md 3.3 — same check and posture as getManyByIds's own.
+    if (post.moderatorHiddenAt && post.authorId !== viewerId) {
+      throw new NotFoundError('post', id.toString())
+    }
 
     const [author, counters, entities, mediaRows, quotedPostsById] = await Promise.all([
       repository.findAuthorById(post.authorId),
@@ -732,6 +748,8 @@ export function createPostsService(
 
   /** SPECS.md §4.3: a repost is its own post row, `text IS NULL`, `repost_of_id` set — it fans out like any other post. */
   async function repost(authorId: bigint, originalPostId: bigint): Promise<Post> {
+    await rejectIfReadOnly(authorId)
+
     const original = await repository.findPostById(originalPostId)
     if (!original) throw new NotFoundError('post', originalPostId.toString())
     if (await repository.findActiveRepost(authorId, originalPostId)) {
@@ -892,6 +910,10 @@ export function createPostsService(
       const row = rowsById.get(id)
       const author = row && authorsById.get(row.authorId)
       if (!row || !author || hiddenAuthorIds.has(row.authorId)) continue
+      // ROADMAP.md 3.3 / SPECS.md §12.2's "Ocultación" — simplified to
+      // "author only" (posts.ts's own moderatorHiddenAt comment explains
+      // why), same silent-drop posture as a block or soft-delete above.
+      if (row.moderatorHiddenAt && row.authorId !== viewerId) continue
       items.push(
         toPostDto(
           row,

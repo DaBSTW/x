@@ -1,11 +1,19 @@
 import nodemailer, { type Transporter } from 'nodemailer'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { Resend } from 'resend'
+import { ModerationActionEmail } from '../emails/moderation-action-email.js'
 import { PasswordResetEmail } from '../emails/password-reset-email.js'
 import { SecurityAlertEmail } from '../emails/security-alert-email.js'
 import { VerificationEmail } from '../emails/verification-email.js'
 
 export type SecurityAlertKind = 'new_login' | 'password_changed' | 'two_factor_enabled'
+
+export type ModerationActionEmailInput = {
+  action: 'label' | 'reduce_reach' | 'hide' | 'delete' | 'read_only' | 'suspend' | 'ban'
+  reason: string
+  fragment: string | null
+  appealUrl: string
+}
 
 export type Mailer = {
   sendVerificationEmail: (to: string, token: string) => Promise<void>
@@ -20,6 +28,8 @@ export type Mailer = {
     kind: SecurityAlertKind,
     meta: { ipAddress: string | null; userAgent: string | null },
   ) => Promise<void>
+  /** ROADMAP.md 3.3 / SPECS.md §12.2 — same non-preference-gated posture as sendSecurityAlertEmail above: a moderation action isn't optional to hear about either. */
+  sendModerationActionEmail: (to: string, input: ModerationActionEmailInput) => Promise<void>
 }
 
 // Structurally compatible with both Fastify's `app.log` and a bare pino
@@ -57,6 +67,28 @@ const SECURITY_ALERT_COPY: Record<SecurityAlertKind, { subject: string; heading:
     subject: 'Activaste la verificación en dos pasos en tu cuenta de X',
     heading: 'Verificación en dos pasos activada',
   },
+}
+
+// ROADMAP.md 3.3 — SPECS.md §12.2's graduated-action table, in the same
+// order, translated to a subject/heading pair the same way SECURITY_ALERT_COPY
+// does above.
+const MODERATION_ACTION_COPY: Record<
+  ModerationActionEmailInput['action'],
+  { subject: string; heading: string }
+> = {
+  label: { subject: 'Uno de tus posts fue etiquetado', heading: 'Post etiquetado' },
+  reduce_reach: {
+    subject: 'Se redujo el alcance de uno de tus posts',
+    heading: 'Alcance reducido',
+  },
+  hide: { subject: 'Uno de tus posts fue ocultado', heading: 'Post ocultado' },
+  delete: { subject: 'Uno de tus posts fue eliminado', heading: 'Post eliminado' },
+  read_only: {
+    subject: 'Tu cuenta está en modo lectura',
+    heading: 'Cuenta en modo lectura',
+  },
+  suspend: { subject: 'Tu cuenta fue suspendida', heading: 'Cuenta suspendida' },
+  ban: { subject: 'Tu cuenta fue baneada permanentemente', heading: 'Cuenta baneada' },
 }
 
 /**
@@ -128,6 +160,24 @@ export function createMailer(options: CreateMailerOptions): Mailer {
             heading={heading}
             ipAddress={meta.ipAddress}
             userAgent={meta.userAgent}
+          />,
+        ),
+      )
+    },
+
+    async sendModerationActionEmail(to, input) {
+      const { subject, heading } = MODERATION_ACTION_COPY[input.action]
+      const fragmentText = input.fragment ? `\n\n"${input.fragment}"` : ''
+      await send(
+        to,
+        subject,
+        `${heading}\nMotivo: ${input.reason}${fragmentText}\n\nApelar: ${input.appealUrl}`,
+        renderToStaticMarkup(
+          <ModerationActionEmail
+            heading={heading}
+            reason={input.reason}
+            fragment={input.fragment}
+            appealUrl={input.appealUrl}
           />,
         ),
       )

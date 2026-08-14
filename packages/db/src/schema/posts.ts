@@ -41,6 +41,23 @@ export const posts = pgTable(
     clientName: varchar('client_name', { length: 50 }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    // ROADMAP.md 3.3 — distinct from author-set isSensitive above: a
+    // moderator's own label (SPECS.md §12.2's "Etiqueta"), which the
+    // author can't remove by toggling their own sensitive-content flag.
+    // Non-null means labeled; the string is the category/reason shown.
+    moderatorLabel: varchar('moderator_label', { length: 100 }),
+    // SPECS.md §12.2's "Reducción de alcance" — excluded from search
+    // indexing and trending; still fully visible to anyone who already
+    // follows the author or opens the post directly.
+    reducedReach: boolean('reduced_reach').notNull().default(false),
+    // SPECS.md §12.2's "Ocultación". Simplified to "author only" rather
+    // than the spec's "autor y sus seguidores": this app has no existing
+    // "is this viewer a follower of the author" visibility rule to extend
+    // (blocks/protected-account checks are the closest precedent, and
+    // neither is "any follower") — documented here rather than silently
+    // narrowed. Distinct from deletedAt: hidden is reversible and doesn't
+    // free the post's engagement counters/urls the way a delete does.
+    moderatorHiddenAt: timestamp('moderator_hidden_at', { withTimezone: true }),
   },
   (table) => [
     primaryKey({ columns: [table.id, table.createdAt] }),

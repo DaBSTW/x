@@ -32,6 +32,9 @@ function makeUser(overrides: Partial<User> = {}): User {
     dmPrivacy: 0,
     isVerified: false,
     isSuspended: false,
+    readOnlyUntil: null,
+    isBanned: false,
+    isModerator: false,
     lang: 'es',
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -332,6 +335,11 @@ function createFakeMailer(): FakeMailer {
     },
     async sendSecurityAlertEmail(to, kind) {
       securityAlerts.push({ to, kind })
+    },
+    async sendModerationActionEmail() {
+      // ROADMAP.md 3.3 — no auth.service.ts test exercises this path (it's
+      // moderation.service.ts's own send, not auth's); present only to
+      // satisfy the Mailer interface this fake implements in full.
     },
   }
 }
