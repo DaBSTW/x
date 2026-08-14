@@ -37,6 +37,14 @@ const envSchema = z
     LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().positive().optional(),
     FORGOT_PASSWORD_RATE_LIMIT_MAX: z.coerce.number().int().positive().optional(),
 
+    // ROADMAP.md 3.3 / SPECS.md §12.1's preventive layer, "listas de
+    // bloqueo" — comma-separated, optional same reasoning as the rate
+    // limits above. Unset (the default everywhere but a real deployment)
+    // means no term is ever blocked, not that the check is skipped —
+    // there's nothing to hardcode here a real deployment wouldn't
+    // configure for itself (SPECS.md never names an actual wordlist).
+    BLOCKED_TERMS: z.string().optional(),
+
     // Web Push (ROADMAP.md 2.9) — optional, same reasoning as the rate
     // limits above: apps/api only ever reads the public half (it serves
     // GET /push/vapid-public-key so the browser can subscribe); signing

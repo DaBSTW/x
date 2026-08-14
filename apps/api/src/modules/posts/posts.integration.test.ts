@@ -168,6 +168,16 @@ describe('posts routes', () => {
     expect(response.statusCode).toBe(400)
   })
 
+  it("rejects a post containing one of Google's own Safe Browsing testing URLs (ROADMAP.md 3.3 preventive layer)", async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/posts',
+      headers: authHeader(),
+      payload: { text: 'cuidado con http://malware.testing.google.test/testing/malware/' },
+    })
+    expect(response.statusCode).toBe(400)
+  })
+
   it('attaches ready media to a text-only post and embeds it in the response', async () => {
     const mediaId = generateId()
     await app.db.insert(media).values({

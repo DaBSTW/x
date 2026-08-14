@@ -29,6 +29,44 @@ export type FollowLookup = {
   isFollowing(followerId: bigint, followeeId: bigint): Promise<boolean>
 }
 
+/**
+ * ROADMAP.md 3.3 / SPECS.md §12.1's preventive layer, "detección de URLs
+ * maliciosas (Safe Browsing)" — returns the subset of `urls` considered
+ * malicious. No real Google Safe Browsing API key exists in this
+ * environment (the same class of honest simplification 2.7's PhotoDNA/
+ * SHA-256 stood in for a real CSAM-scanning vendor), so the default
+ * implementation below checks against Google's own published Safe
+ * Browsing *testing* domains (developers.google.com/safe-browsing/v4/testing)
+ * — real domains Google documents specifically so an integration can be
+ * exercised without a live API key, not invented placeholders. A
+ * production deployment swaps this injected function for a real API call
+ * behind the same shape; nothing else in create() below would need to change.
+ */
+export type CheckMaliciousUrls = (urls: string[]) => Promise<string[]>
+
+const SAFE_BROWSING_TEST_DOMAINS = new Set([
+  'malware.testing.google.test',
+  'phishing.testing.google.test',
+])
+
+export const checkMaliciousUrlsAgainstTestDomains: CheckMaliciousUrls = async (urls) =>
+  urls.filter((url) => {
+    try {
+      return SAFE_BROWSING_TEST_DOMAINS.has(new URL(url).hostname)
+    } catch {
+      // parseEntities already matched this as URL-shaped text; an
+      // unparseable hostname here isn't this check's job to also flag.
+      return false
+    }
+  })
+
+/** SPECS.md §12.1's preventive layer, "listas de bloqueo" — a plain case-insensitive substring match, checked ahead of any DB work (the whole layer's own <100ms budget). `blockedTerms` empty by default (createPostsService's own parameter) means nothing is ever blocked, not that the check is skipped. */
+function containsBlockedTerm(text: string, blockedTerms: string[]): string | null {
+  if (blockedTerms.length === 0) return null
+  const lower = text.toLowerCase()
+  return blockedTerms.find((term) => lower.includes(term.toLowerCase())) ?? null
+}
+
 /** Backs the block-visibility guard on every read below (ROADMAP.md 2.6) — same narrowing reasoning as FollowLookup. `SocialGraphRepository.findBlockedAuthorIds` already matches this shape, so app.ts passes it straight through with no adapter. */
 export type BlockLookup = {
   findBlockedAuthorIds(viewerId: bigint, authorIds: bigint[]): Promise<Set<bigint>>
@@ -190,6 +228,15 @@ export function createPostsService(
   // from the response, same "absent, not false" contract postSchema
   // documents for GET /timeline/home's own use of this.
   viewerState?: ViewerStateLookup,
+  // ROADMAP.md 3.3 preventive layer — empty by default, same posture as
+  // every optional dependency above: the ~90 existing tests in this file
+  // that never configure a blocklist get "nothing is ever blocked," not a
+  // skipped check with different semantics.
+  blockedTerms: string[] = [],
+  // Also optional, same posture again: unset skips the malicious-URL
+  // check entirely rather than failing a post over a dependency the
+  // caller chose not to wire up (mirrors publishTrendIngest above).
+  checkMaliciousUrls?: CheckMaliciousUrls,
 ) {
   /**
    * `undefined` when there's no viewer (anonymous) or nothing wired up —
@@ -385,6 +432,21 @@ export function createPostsService(
     const { graphemeCount, entities: parsed } = validateAndParseText(input.text)
     if (graphemeCount === 0 && mediaIds.length === 0) {
       throw new ValidationError('post text or at least one media attachment is required')
+    }
+
+    // SPECS.md §12.1's preventive layer — synchronous and cheap enough
+    // (a Set lookup, an injected check over a handful of URLs at most) to
+    // sit ahead of every DB call below, matching its own "< 100 ms" budget.
+    const blockedTerm = containsBlockedTerm(input.text, blockedTerms)
+    if (blockedTerm) {
+      throw new ValidationError('post text contains a blocked term', { term: blockedTerm })
+    }
+    const urls = parsed.filter((entity) => entity.kind === 'url').map((entity) => entity.value)
+    if (urls.length > 0 && checkMaliciousUrls) {
+      const malicious = await checkMaliciousUrls(urls)
+      if (malicious.length > 0) {
+        throw new ValidationError('post contains a known-malicious URL', { urls: malicious })
+      }
     }
 
     let kind: 'original' | 'reply' | 'quote' = 'original'

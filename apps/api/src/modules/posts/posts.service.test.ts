@@ -3,7 +3,7 @@ import { generateId } from '@x/utils'
 import type { Redis } from 'ioredis'
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { AuthorRow, PostEntityRow, PostRepository } from './posts.repository.js'
-import { createPostsService } from './posts.service.js'
+import { checkMaliciousUrlsAgainstTestDomains, createPostsService } from './posts.service.js'
 
 // Hand-rolled — models only the hash operations post-counters-cache.ts
 // actually issues (HGETALL, HSETNX, HINCRBY), matching the fake-Redis
@@ -509,6 +509,89 @@ describe('createPostsService', () => {
           isSensitive: false,
         }),
       ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+    })
+
+    it('rejects a post containing a blocked term (ROADMAP.md 3.3 preventive layer)', async () => {
+      const service = createPostsService(
+        repository,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        ['bloqueada'],
+      )
+
+      await expect(
+        service.create(author.id, {
+          text: 'esta es una palabra Bloqueada en el medio',
+          replyPolicy: 'everyone',
+          isSensitive: false,
+        }),
+      ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+    })
+
+    it('allows a post whose text does not contain any blocked term', async () => {
+      const service = createPostsService(
+        repository,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        ['bloqueada'],
+      )
+
+      const post = await service.create(author.id, {
+        text: 'un post normal',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      expect(post.text).toBe('un post normal')
+    })
+
+    it('rejects a post whose URL checkMaliciousUrls flags (ROADMAP.md 3.3 preventive layer)', async () => {
+      const service = createPostsService(
+        repository,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        [],
+        async (urls) => urls.filter((url) => url.includes('malware.testing.google.test')),
+      )
+
+      await expect(
+        service.create(author.id, {
+          text: 'mira esto http://malware.testing.google.test/testing/malware/',
+          replyPolicy: 'everyone',
+          isSensitive: false,
+        }),
+      ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+    })
+
+    it('does not check a URL at all when checkMaliciousUrls is not configured', async () => {
+      const service = createPostsService(repository)
+
+      const post = await service.create(author.id, {
+        text: 'mira esto http://malware.testing.google.test/testing/malware/',
+        replyPolicy: 'everyone',
+        isSensitive: false,
+      })
+      expect(post.text).toContain('malware.testing.google.test')
     })
 
     it('rejects more than 10 mentions', async () => {
@@ -2073,5 +2156,29 @@ describe('createPostsService', () => {
 
       expect(items[0]?.quotedPost).toMatchObject({ id: quoted.id, text: 'post citable' })
     })
+  })
+})
+
+describe('checkMaliciousUrlsAgainstTestDomains', () => {
+  it("flags Google's own published Safe Browsing testing domains (ROADMAP.md 3.3)", async () => {
+    const flagged = await checkMaliciousUrlsAgainstTestDomains([
+      'http://malware.testing.google.test/testing/malware/',
+      'https://phishing.testing.google.test/',
+      'https://example.com',
+    ])
+    expect(flagged.sort()).toEqual(
+      [
+        'http://malware.testing.google.test/testing/malware/',
+        'https://phishing.testing.google.test/',
+      ].sort(),
+    )
+  })
+
+  it('flags nothing for an ordinary URL', async () => {
+    expect(await checkMaliciousUrlsAgainstTestDomains(['https://example.com/post'])).toEqual([])
+  })
+
+  it('never throws on an unparseable "URL" — just does not flag it', async () => {
+    await expect(checkMaliciousUrlsAgainstTestDomains(['not a real url'])).resolves.toEqual([])
   })
 })

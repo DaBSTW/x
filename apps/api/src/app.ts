@@ -47,7 +47,10 @@ import { registerNotificationsRoutes } from './modules/notifications/notificatio
 import { createNotificationsService } from './modules/notifications/notifications.service.js'
 import { createPostsRepository } from './modules/posts/posts.repository.js'
 import { registerPostsRoutes } from './modules/posts/posts.routes.js'
-import { createPostsService } from './modules/posts/posts.service.js'
+import {
+  checkMaliciousUrlsAgainstTestDomains,
+  createPostsService,
+} from './modules/posts/posts.service.js'
 import { createProfilesRepository } from './modules/profiles/profiles.repository.js'
 import { registerProfilesRoutes } from './modules/profiles/profiles.routes.js'
 import { createProfilesService } from './modules/profiles/profiles.service.js'
@@ -201,6 +204,10 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
       findBookmarkedPostIds: interactionsRepository.findBookmarkedPostIds,
       findRepostedPostIds: postsRepository.findRepostedPostIds,
     },
+    // ROADMAP.md 3.3 preventive layer — empty unless BLOCKED_TERMS is set
+    // (env.ts's own comment on why nothing is hardcoded here).
+    env.BLOCKED_TERMS ? env.BLOCKED_TERMS.split(',').map((term) => term.trim()) : [],
+    checkMaliciousUrlsAgainstTestDomains,
   )
 
   const moderationRepository = createModerationRepository(app.db)
