@@ -24,6 +24,60 @@ services:
       timeout: 5s
       retries: 10
 
+  # SPECS.md §14.2: "PgBouncer en modo transaction, 100 conexiones por
+  # instancia" — sits in front of postgres above, on its own port so
+  # migrations/seeds (CREATE INDEX CONCURRENTLY, ALTER TYPE ... ADD VALUE —
+  # session-level DDL transaction-mode pooling can't safely proxy) keep
+  # using postgres:5432 directly while apps/api and apps/workers' own
+  # runtime query traffic (their DATABASE_URL) points here instead —
+  # packages/db/src/client.ts's own `prepare: false` is what actually
+  # makes that swap safe (transaction-mode pooling can hand two statements
+  # from the same "session" to two different physical Postgres connections,
+  # which breaks postgres.js's default auto-prepare). Not the local dev
+  # default in .env.example — a single local Postgres never gets near its
+  # own max_connections, so this only earns its keep once there's more than
+  # one apps/api/apps/workers instance sharing the same database, same
+  # posture as replica-postgres below.
+  #
+  # packages/db/src/client.ts's own `prepare: false` is what actually makes
+  # pointing an app at this instead of postgres above safe: transaction-mode
+  # pooling can hand two statements from the same "session" to two different
+  # physical Postgres connections, which stale-invalidates postgres.js's
+  # default auto-prepared statements. client.ts's own comment and
+  # client.pgbouncer.integration.test.ts's top comment have the full,
+  # empirically-verified story (it's a silent extra-round-trip tax under
+  # real load, not a reliable hard crash — two separate safety nets already
+  # paper over it, and prepare: false is what avoids depending on either).
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://x:x@postgres:5432/x
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: "100"
+      DEFAULT_POOL_SIZE: "20"
+      # Not "trust": postgres above uses Postgres 17's default
+      # password_encryption=scram-sha-256, and pg_hba.conf demands
+      # scram-sha-256 for any non-local connection — including this
+      # container's own backend leg to postgres. edoburu/pgbouncer's
+      # entrypoint script only stores the *plaintext* DATABASE_URL password
+      # (needed to complete a real SCRAM handshake against the backend)
+      # when AUTH_TYPE is "plain" or "scram-sha-256"; anything else,
+      # including "trust", makes it pre-hash the password to MD5 instead,
+      # which cannot complete SCRAM — confirmed empirically (a manually
+      # started container with AUTH_TYPE=trust fails every backend
+      # connection with "cannot do SCRAM authentication: wrong password
+      # type"; switching to scram-sha-256 fixed it, verified with 10
+      # repeated queries through the proxy). This governs both legs:
+      # clients connecting to this pgbouncer now also do real SCRAM (the
+      # same x:x credentials already used everywhere else in this file).
+      AUTH_TYPE: scram-sha-256
+    ports:
+      - "6432:5432"
+
   redis:
     image: redis:7-alpine
     restart: unless-stopped

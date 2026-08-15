@@ -69,6 +69,7 @@ jobs:
       - run: pnpm --filter @x/api test:integration
       - run: pnpm --filter @x/workers test:integration
       - run: pnpm --filter @x/ws-gateway test:integration
+      - run: pnpm --filter @x/db test:integration
 
   e2e:
     name: E2E (Playwright)

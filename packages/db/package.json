@@ -10,6 +10,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run --coverage",
+    "test:integration": "vitest run --coverage --config vitest.integration.config.ts",
     "db:generate": "tsx node_modules/drizzle-kit/bin.cjs generate",
     "db:migrate": "tsx src/migrate.ts",
     "db:studio": "tsx node_modules/drizzle-kit/bin.cjs studio",
@@ -22,10 +23,12 @@
   },
   "devDependencies": {
     "@faker-js/faker": "^9.3.0",
+    "@testcontainers/postgresql": "^10.16.0",
     "@types/node": "^22.10.5",
     "@vitest/coverage-v8": "^2.1.8",
     "@x/config": "workspace:*",
     "drizzle-kit": "^0.30.1",
+    "testcontainers": "^10.16.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
