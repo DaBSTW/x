@@ -56,6 +56,7 @@ export default tseslint.config(
     // console.log ban to services.
     files: [
       '**/scripts/**/*.ts',
+      '**/scripts/**/*.mjs',
       '**/load-tests/**/*.ts',
       '**/src/migrate.ts',
       '**/src/seed/run.ts',

@@ -169,6 +169,11 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      # ROADMAP.md 3.4f / SPECS.md §14 — fails the build if the initial
+      # route (apps/web's landing page, an anonymous visitor's real entry
+      # point) exceeds 180 KB gzip. Reads pnpm build's own `next build`
+      # output above (apps/web/.next/), not a separate build of its own.
+      - run: pnpm --filter @x/web check-bundle-budget
 
   docker:
     name: Docker build & scan (${{ matrix.app }})

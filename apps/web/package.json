@@ -10,7 +10,8 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --coverage",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "check-bundle-budget": "node scripts/check-bundle-budget.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",
