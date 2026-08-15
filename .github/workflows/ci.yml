@@ -93,8 +93,21 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: playwright-report
+          name: playwright-report-web
           path: apps/web/playwright-report/
+          retention-days: 7
+      # apps/admin/e2e/global-setup.ts's own comment explains why this one's
+      # leaner than apps/web's above (real apps/api only, no apps/workers/
+      # ws-gateway — moderation lives entirely in apps/api). Sequential with
+      # the step above, not parallel — same runner, same ports (3001 for
+      # apps/api in both) — but that's fine: apps/web's own global-setup
+      # already tore its stack all the way down before this one starts.
+      - run: pnpm --filter @x/admin test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report-admin
+          path: apps/admin/playwright-report/
           retention-days: 7
 
   contracts:
@@ -162,7 +175,7 @@ jobs:
     needs: [quality, test, integration, e2e, contracts]
     strategy:
       matrix:
-        app: [api, web, workers, ws-gateway]
+        app: [api, web, admin, workers, ws-gateway]
     permissions:
       contents: read
       packages: write
