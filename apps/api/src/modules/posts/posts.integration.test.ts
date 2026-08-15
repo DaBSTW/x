@@ -16,6 +16,7 @@ import { MEDIA_STATUS, createS3Client, generateId } from '@x/utils'
 import { and, eq, isNull, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
 import type { FastifyInstance } from 'fastify'
+import { Redis } from 'ioredis'
 import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { buildApp } from '../../app.js'
@@ -163,6 +164,33 @@ describe('posts routes', () => {
 
     const getAfterDelete = await app.inject({ method: 'GET', url: `/v1/posts/${post.id}` })
     expect(getAfterDelete.statusCode).toBe(404)
+
+    // SPECS.md §14.1's negative cache (60s) — a genuine "this id doesn't
+    // exist" 404 (a soft-deleted post, same as findPostById sees a brand
+    // new id that was never inserted) marks it in Redis so a repeated
+    // lookup short-circuits without hitting Postgres again.
+    const redis = new Redis(redisContainer.getConnectionUrl())
+    const ttl = await redis.ttl(`notfound:post:${post.id}`)
+    expect(ttl).toBeGreaterThan(0) // key exists with a real TTL, not -1/-2
+    expect(ttl).toBeLessThanOrEqual(66) // 60s + the ±10% jitter's own ceiling
+    await redis.quit()
+  })
+
+  it('negative-caches a post id that never existed at all, not just a deleted one', async () => {
+    const neverExistedId = generateId().toString()
+
+    const first = await app.inject({ method: 'GET', url: `/v1/posts/${neverExistedId}` })
+    expect(first.statusCode).toBe(404)
+
+    const redis = new Redis(redisContainer.getConnectionUrl())
+    expect(await redis.exists(`notfound:post:${neverExistedId}`)).toBe(1)
+    await redis.quit()
+
+    // Still 404 the second time too — the cached branch and the real
+    // lookup branch have to agree on the outcome, not just "cache
+    // something, anything".
+    const second = await app.inject({ method: 'GET', url: `/v1/posts/${neverExistedId}` })
+    expect(second.statusCode).toBe(404)
   })
 
   it('returns 400 for a post with no text', async () => {

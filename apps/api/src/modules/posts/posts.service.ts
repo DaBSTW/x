@@ -20,6 +20,7 @@ import {
 } from '@x/utils'
 import { detectLanguage } from '@x/utils/language'
 import type { Redis } from 'ioredis'
+import { isMarkedNotFound, markNotFound } from '../../lib/negative-cache.js'
 import { type CachedCounters, bumpCounter, zeroCounters } from '../../lib/post-counters-cache.js'
 import {
   NEW_ACCOUNT_MAX_POSTS_PER_DAY,
@@ -906,8 +907,19 @@ export function createPostsService(
    * protected specifically because of them (ROADMAP.md 2.6).
    */
   async function getById(id: bigint, viewerId?: bigint): Promise<Post> {
+    // SPECS.md §14.1's negative cache (60s) — only ever for this branch,
+    // never the viewer-dependent 404s below (hidden author, moderator
+    // hide): those are 404 for *some* viewers and 200 for others, so
+    // caching them here would incorrectly 404 a viewer who should be able
+    // to see the post, since this cache has no idea who's asking.
+    if (redis && (await isMarkedNotFound(redis, 'post', id))) {
+      throw new NotFoundError('post', id.toString())
+    }
     const post = await repository.findPostById(id)
-    if (!post) throw new NotFoundError('post', id.toString())
+    if (!post) {
+      if (redis) await markNotFound(redis, 'post', id)
+      throw new NotFoundError('post', id.toString())
+    }
     if ((await findHiddenAuthorIds(viewerId, [post.authorId])).size > 0) {
       throw new NotFoundError('post', id.toString())
     }
