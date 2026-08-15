@@ -19,6 +19,8 @@ import { createFanoutWorker } from './fanout/fanout.worker.js'
 import { createMediaStorage } from './lib/media-storage.js'
 import { createMediaRepository } from './media/media.repository.js'
 import { createMediaWorker } from './media/media.worker.js'
+import { createCoordinationSweepWorker } from './moderation/coordination-sweep.worker.js'
+import { createCoordinationRepository } from './moderation/coordination.repository.js'
 import { createApnsPushSender } from './notifications/apns-sender.js'
 import { createFcmPushSender } from './notifications/fcm-sender.js'
 import { createNotificationsRepository } from './notifications/notifications.repository.js'
@@ -160,6 +162,16 @@ const countersFlushWorker = createCountersFlushWorker(
 )
 countersFlushWorker.start()
 
+// ROADMAP.md 3.3f — same "own Redis connection per worker" posture as
+// countersRedis above (each worker's own idempotency guard, not shared
+// connection pooling across unrelated workers).
+const coordinationRedis = new Redis(env.REDIS_URL)
+const coordinationSweepWorker = createCoordinationSweepWorker(
+  createCoordinationRepository(db),
+  coordinationRedis,
+)
+coordinationSweepWorker.start()
+
 const mediaStorage = createMediaStorage({
   endpoint: env.S3_ENDPOINT,
   region: env.S3_REGION,
@@ -244,12 +256,14 @@ try {
 }
 
 console.info(
-  'workers: fan-out, notifications, media, counters flush, trend-ingest, and search-indexer workers ready',
+  'workers: fan-out, notifications, media, counters flush, coordination sweep, trend-ingest, and search-indexer workers ready',
 )
 
 async function shutdown(): Promise<void> {
   countersFlushWorker.stop()
   countersRedis.disconnect()
+  coordinationSweepWorker.stop()
+  coordinationRedis.disconnect()
   await Promise.all([
     fanoutWorker.close(),
     notificationsWorker.close(),

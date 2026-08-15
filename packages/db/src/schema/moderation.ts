@@ -18,6 +18,10 @@ export const moderationTargetType = pgEnum('moderation_target_type', ['post', 'u
 // A concrete, real-world set (matches what SPECS.md §12.1 calls "categoría")
 // — SPECS.md itself never enumerates one, so this is this checkpoint's own
 // call, not read from the spec.
+// 'coordinated_activity' (ROADMAP.md 3.3f) is distinct from 'spam': that's
+// one account's own behavior (SPECS.md §12.3's new-account limits already
+// cover it), this is a *multi-account* pattern — apps/workers'
+// coordination-sweep.worker.ts is the only thing that ever inserts it.
 export const reportCategory = pgEnum('report_category', [
   'spam',
   'harassment',
@@ -26,6 +30,7 @@ export const reportCategory = pgEnum('report_category', [
   'nsfw',
   'misinformation',
   'self_harm',
+  'coordinated_activity',
   'other',
 ])
 

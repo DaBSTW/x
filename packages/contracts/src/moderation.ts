@@ -15,6 +15,7 @@ export const reportCategorySchema = z.enum([
   'nsfw',
   'misinformation',
   'self_harm',
+  'coordinated_activity',
   'other',
 ])
 export type ReportCategory = z.infer<typeof reportCategorySchema>
