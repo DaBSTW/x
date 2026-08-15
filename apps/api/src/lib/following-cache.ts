@@ -1,3 +1,4 @@
+import { jitterTtlSeconds } from '@x/utils'
 import type { Redis } from 'ioredis'
 
 // SPECS.md §6.1: the timeline read path needs "who does this user follow"
@@ -15,7 +16,11 @@ export async function addToFollowingCache(
   followeeId: bigint,
 ): Promise<void> {
   await redis.sadd(followingKey(followerId), followeeId.toString())
-  await redis.expire(followingKey(followerId), TTL_SECONDS)
+  // SPECS.md §14.1's TTL jitter (±10%) — many accounts warming this cache
+  // around the same time (a follow-back wave after a popular post, a mass
+  // import) would otherwise all expire together and stampede the Postgres
+  // fallback in isFollowingCached below at once.
+  await redis.expire(followingKey(followerId), jitterTtlSeconds(TTL_SECONDS))
 }
 
 export async function removeFromFollowingCache(

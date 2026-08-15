@@ -115,8 +115,11 @@ async function resolvePrecomputedIds(
   if (ids.length > 0 || (await repository.timelineExists(userId))) return ids
 
   // Empty AND missing entirely: a cold timeline (SPECS.md §6.1), not a user
-  // with nothing to show. Rebuild it from Postgres before giving up.
-  const rebuilt = await repository.reconstructFromPostgres(userId)
+  // with nothing to show. Rebuild it from Postgres before giving up — the
+  // locked variant (SPECS.md §14.1's anti-stampede reconstruction lock)
+  // since concurrent requests for this exact user's cold timeline are the
+  // realistic case this needs to handle, not the exception.
+  const rebuilt = await repository.reconstructFromPostgresLocked(userId)
   const page = cursor === null ? rebuilt : rebuilt.filter((id) => id < cursor)
   return page.slice(0, limit)
 }

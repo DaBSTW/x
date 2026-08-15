@@ -37,7 +37,11 @@ function createFakeRepository(overrides: Partial<TimelineRepository> = {}): Time
   return {
     timelineExists: async () => true,
     readPrecomputed: async () => [],
+    // timeline.service.ts only ever calls the *locked* variant below — this
+    // plain one stays in the fake purely so TimelineRepository's shape
+    // matches the real repository; no test needs to override it directly.
     reconstructFromPostgres: async () => [],
+    reconstructFromPostgresLocked: async () => [],
     listRecentFromCelebrityFollowees: async () => [],
     ...overrides,
   }
@@ -82,32 +86,32 @@ describe('createTimelineService', () => {
   })
 
   it('reconstructs from Postgres only when the timeline is both empty and missing', async () => {
-    const reconstructFromPostgres = vi.fn(async () => [50n, 40n])
+    const reconstructFromPostgresLocked = vi.fn(async () => [50n, 40n])
     const repository = createFakeRepository({
       readPrecomputed: async () => [],
       timelineExists: async () => false,
-      reconstructFromPostgres,
+      reconstructFromPostgresLocked,
     })
     const service = createTimelineService(repository, createFakeHydrator())
 
     const { items } = await service.getHome(1n, 20, null)
 
-    expect(reconstructFromPostgres).toHaveBeenCalledOnce()
+    expect(reconstructFromPostgresLocked).toHaveBeenCalledOnce()
     expect(items.map((post) => post.id)).toEqual(['50', '40'])
   })
 
   it('does not reconstruct when an empty read means "nothing left", not "cold"', async () => {
-    const reconstructFromPostgres = vi.fn(async () => [50n, 40n])
+    const reconstructFromPostgresLocked = vi.fn(async () => [50n, 40n])
     const repository = createFakeRepository({
       readPrecomputed: async () => [],
       timelineExists: async () => true,
-      reconstructFromPostgres,
+      reconstructFromPostgresLocked,
     })
     const service = createTimelineService(repository, createFakeHydrator())
 
     const { items } = await service.getHome(1n, 20, null)
 
-    expect(reconstructFromPostgres).not.toHaveBeenCalled()
+    expect(reconstructFromPostgresLocked).not.toHaveBeenCalled()
     expect(items).toEqual([])
   })
 
@@ -115,7 +119,7 @@ describe('createTimelineService', () => {
     const repository = createFakeRepository({
       readPrecomputed: async () => [],
       timelineExists: async () => false,
-      reconstructFromPostgres: async () => [50n, 40n, 30n],
+      reconstructFromPostgresLocked: async () => [50n, 40n, 30n],
     })
     const service = createTimelineService(repository, createFakeHydrator())
 

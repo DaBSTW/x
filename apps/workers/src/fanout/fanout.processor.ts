@@ -9,6 +9,7 @@ import {
   REALTIME_STREAM_RETENTION_MS,
   TIMELINE_RETENTION_SIZE,
   TIMELINE_TTL_SECONDS,
+  jitterTtlSeconds,
   realtimeStreamKey,
   timelineChannel,
   timelineKey,
@@ -82,7 +83,13 @@ export function createFanoutProcessor({ repository, redis }: FanoutProcessorDeps
         const key = timelineKey(followerId)
         timelinePipeline.zadd(key, postId.toString(), data.postId)
         timelinePipeline.zremrangebyrank(key, 0, -(TIMELINE_RETENTION_SIZE + 1))
-        timelinePipeline.expire(key, TIMELINE_TTL_SECONDS)
+        // SPECS.md §14.1's TTL jitter (±10%), independently per follower —
+        // every active timeline gets its TTL reset here on essentially
+        // every post from someone they follow, so without jitter this
+        // (not timeline.repository.ts's own, far less common, cold-start
+        // reconstruction) is the call site that would actually synchronize
+        // a huge number of keys onto the exact same expiry instant.
+        timelinePipeline.expire(key, jitterTtlSeconds(TIMELINE_TTL_SECONDS))
 
         // "Badge de N posts nuevos" + lost-event recovery (ROADMAP.md 2.2,
         // SPECS.md §8.2/§8.3). The event's own type and data are stored
