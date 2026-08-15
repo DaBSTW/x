@@ -1,7 +1,9 @@
 import { fileURLToPath } from 'node:url'
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql'
 import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis'
-import { createDatabase, migrationsFolderUrl } from '@x/db'
+import { type Database, createDatabase, migrationsFolderUrl, userCounters, users } from '@x/db'
+import { generateId } from '@x/utils'
+import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
 import type { FastifyInstance } from 'fastify'
 import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers'
@@ -489,5 +491,123 @@ describe('social graph routes', () => {
 
     const muteResponse = await app.inject({ method: 'POST', url: `/v1/users/${bobId}/mute` })
     expect(muteResponse.statusCode).toBe(401)
+  })
+
+  /**
+   * ROADMAP.md 3.4e's query audit. findSuggestions' ORDER BY has no other
+   * selective filter (the follow/block anti-joins exclude rows, they don't
+   * narrow by a value an index could seek on), so it's the one query in
+   * that audit whose cost scales with total registered users rather than a
+   * per-entity fan-out/count — and the only one this audit found where a
+   * naive index (plain .desc(), drizzle's own default of NULLS LAST) made
+   * *no* difference at all: a plain SQL `ORDER BY x DESC` means NULLS
+   * FIRST (Postgres's own default when no NULLS clause is given), and an
+   * index built NULLS LAST cannot satisfy that ordering no matter how well
+   * it otherwise matches (packages/db's user_counters schema has the full
+   * story on user_counters.followersCount's idx_user_counters_followers).
+   *
+   * A tiny seed can't exercise this: for a table small enough to fit in a
+   * handful of pages, Postgres's own cost model correctly prefers a full
+   * scan-and-sort over random-access index probes regardless of whether
+   * the index's sort order matches — confirmed empirically while building
+   * this fix, the same way client.pgbouncer.integration.test.ts and
+   * replicated-client.integration.test.ts's own top comments describe for
+   * their own findings. 8,000 rows is the smallest scale this file's own
+   * investigation found the effect at reliably.
+   */
+  describe('findSuggestions performance at realistic scale (roadmap 3.4e)', () => {
+    const CANDIDATE_COUNT = 8000
+
+    it('does not fall back to a full table scan once user_counters has enough rows for it to matter', async () => {
+      const db: Database = createDatabase(postgresContainer.getConnectionUri())
+
+      const candidateRows: (typeof users.$inferInsert)[] = []
+      const counterRows: (typeof userCounters.$inferInsert)[] = []
+      for (let i = 0; i < CANDIDATE_COUNT; i++) {
+        const id = generateId()
+        const username = `suggperf${i.toString(36)}`
+        candidateRows.push({
+          id,
+          username,
+          usernameLower: username,
+          email: `${username}@example.com`,
+          displayName: username,
+        })
+        counterRows.push({ userId: id, followersCount: i })
+      }
+      // Chunked: ~8000 rows × several columns approaches Postgres's per-
+      // statement parameter limit in one insert.
+      const CHUNK_SIZE = 2000
+      for (let i = 0; i < candidateRows.length; i += CHUNK_SIZE) {
+        await db.insert(users).values(candidateRows.slice(i, i + CHUNK_SIZE))
+      }
+      for (let i = 0; i < counterRows.length; i += CHUNK_SIZE) {
+        await db.insert(userCounters).values(counterRows.slice(i, i + CHUNK_SIZE))
+      }
+      // A higher statistics target for the specific column this query
+      // sorts by — the default (100) samples few enough rows on a table
+      // this size that ANALYZE's own random sampling can occasionally
+      // shift the planner's row-count/cost estimate enough to flip its
+      // choice between this query's two valid plans, observed directly
+      // while building this test (an intermittent, non-deterministic
+      // false failure across repeated real runs, no code change involved).
+      // A real production deployment benefits from the exact same setting
+      // for the exact same reason, not just this test — this line is a
+      // genuine tuning improvement, not a test-only workaround.
+      await db.execute(
+        sql`alter table user_counters alter column followers_count set statistics 1000`,
+      )
+
+      // The exact shape social-graph.repository.ts's findSuggestions
+      // builds — see its own comment for why the two LEFT JOINs.
+      async function currentPlan(): Promise<string> {
+        // A real deployment relies on autovacuum for this; a bulk insert
+        // within a single test run gets nowhere near autovacuum's own
+        // trigger threshold, so it needs to be explicit here.
+        await db.execute(sql`analyze users, user_counters`)
+        const planRows = await db.execute(sql`
+          explain (format text)
+          select u.id
+          from ${users} u
+          inner join ${userCounters} uc on uc.user_id = u.id
+          left join follows f on f.follower_id = ${aliceId}::bigint and f.followee_id = u.id
+          left join blocks b on (b.blocker_id = ${aliceId}::bigint and b.blocked_id = u.id)
+                              or (b.blocker_id = u.id and b.blocked_id = ${aliceId}::bigint)
+          where u.id <> ${aliceId}::bigint
+            and f.follower_id is null
+            and b.blocker_id is null
+          order by uc.followers_count desc
+          limit 20
+        `)
+        // EXPLAIN (FORMAT TEXT) returns one row *per line* of the plan, not
+        // the whole plan in a single row — every line needs joining before
+        // it's meaningful to search.
+        return Array.from(planRows as Iterable<{ 'QUERY PLAN': string }>)
+          .map((row) => row['QUERY PLAN'])
+          .join('\n')
+      }
+
+      // One retry (a fresh ANALYZE re-samples independently) rather than a
+      // hard first-try assertion: the statistics target bump above should
+      // make this unnecessary in practice, but a single non-deterministic
+      // sampling outcome still shouldn't be able to fail CI on its own —
+      // *consistently* choosing the full-scan plan across two independent
+      // ANALYZEs is what would indicate a real regression, not sampling noise.
+      let plan = await currentPlan()
+      if (plan.includes('Seq Scan on user_counters')) plan = await currentPlan()
+      expect(plan).not.toContain('Seq Scan on user_counters')
+
+      // Still correct at this scale, not just fast — the highest-
+      // followers_count candidate should be first.
+      const response = await app.inject({
+        method: 'GET',
+        url: '/v1/users/suggestions',
+        headers: { authorization: `Bearer ${aliceToken}` },
+      })
+      expect(response.statusCode).toBe(200)
+      expect(response.json().data[0]?.username).toBe(
+        `suggperf${(CANDIDATE_COUNT - 1).toString(36)}`,
+      )
+    }, 60_000)
   })
 })

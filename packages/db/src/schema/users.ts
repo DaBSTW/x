@@ -4,6 +4,7 @@ import {
   boolean,
   check,
   date,
+  index,
   integer,
   pgTable,
   smallint,
@@ -75,15 +76,46 @@ export type NewUser = typeof users.$inferInsert
 
 // Split from `users` so a like/follow spike doesn't contend for row locks on
 // the identity row (CODESTYLE.md §13, SPECS.md §4.2).
-export const userCounters = pgTable('user_counters', {
-  userId: bigint('user_id', { mode: 'bigint' })
-    .primaryKey()
-    .references(() => users.id, { onDelete: 'cascade' }),
-  followersCount: integer('followers_count').notNull().default(0),
-  followingCount: integer('following_count').notNull().default(0),
-  postsCount: integer('posts_count').notNull().default(0),
-  likesCount: integer('likes_count').notNull().default(0),
-})
+export const userCounters = pgTable(
+  'user_counters',
+  {
+    userId: bigint('user_id', { mode: 'bigint' })
+      .primaryKey()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    followersCount: integer('followers_count').notNull().default(0),
+    followingCount: integer('following_count').notNull().default(0),
+    postsCount: integer('posts_count').notNull().default(0),
+    likesCount: integer('likes_count').notNull().default(0),
+  },
+  (table) => [
+    // ROADMAP.md 3.4e's query audit — social-graph.repository.ts's "who to
+    // follow" suggestions sorts by this column with no other selective
+    // filter (the follow/block anti-joins exclude rows, they don't narrow
+    // by a value an index could seek on), so without this the planner has
+    // no way to avoid scanning and sorting every row in the table before
+    // ever reaching LIMIT — the one query in that audit whose cost scales
+    // with total registered users rather than a per-entity fan-out/count.
+    //
+    // .nullsFirst(), deliberately not drizzle's own .desc() default of
+    // NULLS LAST: a plain SQL `ORDER BY x DESC` with no explicit NULLS
+    // clause means NULLS FIRST (Postgres's own documented default), and an
+    // index built NULLS LAST cannot satisfy that ordering directly no
+    // matter how well it otherwise matches — Postgres's planner treats
+    // that as a genuinely different sort order, not something a NOT NULL
+    // constraint on this column (true here, but the planner doesn't
+    // exploit it for this) papers over. Found the hard way: the first
+    // version of this index (plain .desc()) measured *no better* than no
+    // index at all — still a full Seq Scan of both `users` and
+    // `user_counters` even with `enable_seqscan=off`, because there was no
+    // matching-order plan available, not because the planner preferred
+    // the scan. Matching the NULLS clause is what actually mattered — the
+    // same query stayed at ~14ms (full scan-and-sort) until this was
+    // corrected, then consistently ran in under 1ms (an Index Scan bounded
+    // by LIMIT, not table size) across repeated runs and repeated ANALYZEs
+    // — confirmed against a real seeded database (8,000 users).
+    index('idx_user_counters_followers').on(table.followersCount.desc().nullsFirst()),
+  ],
+)
 
 export type UserCounters = typeof userCounters.$inferSelect
 export type NewUserCounters = typeof userCounters.$inferInsert

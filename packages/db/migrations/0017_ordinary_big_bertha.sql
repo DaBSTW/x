@@ -1,0 +1,1 @@
+CREATE INDEX "idx_user_counters_followers" ON "user_counters" USING btree ("followers_count" DESC NULLS FIRST);
