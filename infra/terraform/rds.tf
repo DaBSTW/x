@@ -76,3 +76,31 @@ resource "aws_db_instance" "main" {
 
   tags = { Name = "x-${var.environment}-postgres" }
 }
+
+# SPECS.md §14.2's "réplicas de lectura" — RDS's own native read-replica
+# support (async streaming under the hood, the managed equivalent of what
+# docker-compose.yml's postgres-replica hand-rolls locally with a real
+# pg_basebackup, since there's no RDS for local Docker). App-facing reads
+# default here; writes and the 5 s read-your-writes window after one go to
+# aws_db_instance.main above — packages/db's createReplicatedDatabase and
+# apps/api's read-write-routing plugin are what implement that split, this
+# resource is only the physical target they read from. A read replica
+# inherits engine/engine_version/allocated_storage/db_name/credentials from
+# its source and errors if you try to set them again, so only what
+# genuinely differs is declared here.
+resource "aws_db_instance" "read_replica" {
+  identifier          = "x-${var.environment}-replica"
+  replicate_source_db = aws_db_instance.main.identifier
+  instance_class      = var.db_instance_class
+
+  vpc_security_group_ids = [aws_security_group.rds.id]
+  publicly_accessible    = false
+
+  # A replica's own backup would only ever duplicate the primary's, which
+  # already meets SPECS.md §16.4's RPO via aws_db_instance.main's PITR —
+  # skip_final_snapshot avoids a dangling manual snapshot left behind on teardown.
+  backup_retention_period = 0
+  skip_final_snapshot     = true
+
+  tags = { Name = "x-${var.environment}-postgres-replica" }
+}

@@ -74,6 +74,7 @@ import { registerTrendsRoutes } from './modules/trends/trends.routes.js'
 import { createTrendsService } from './modules/trends/trends.service.js'
 import dbPlugin from './plugins/db.js'
 import errorHandlerPlugin from './plugins/error-handler.js'
+import readWriteRoutingPlugin from './plugins/read-write-routing.js'
 import redisPlugin from './plugins/redis.js'
 import { createTokenService } from './plugins/tokens.js'
 
@@ -90,7 +91,15 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   await app.register(helmet)
   await app.register(cors, { origin: env.CORS_ORIGIN, credentials: true })
   await app.register(cookie)
-  await app.register(dbPlugin, { databaseUrl: env.DATABASE_URL })
+  await app.register(readWriteRoutingPlugin, { nodeEnv: env.NODE_ENV })
+  await app.register(dbPlugin, {
+    databaseUrl: env.DATABASE_URL,
+    // ROADMAP.md 3.4d / SPECS.md §14.2 — env.ts's own comment on why this
+    // is optional and what an unset value falls back to.
+    replicaUrls: env.DATABASE_REPLICA_URLS
+      ? env.DATABASE_REPLICA_URLS.split(',').map((url) => url.trim())
+      : [],
+  })
   await app.register(redisPlugin, { redisUrl: env.REDIS_URL })
 
   await app.register(swagger, {

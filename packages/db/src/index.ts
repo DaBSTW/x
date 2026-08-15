@@ -1,6 +1,11 @@
 export { createDatabase, schema } from './client.js'
 export type { Database } from './client.js'
 export { migrationsFolderUrl } from './migrations-path.js'
+export {
+  didWriteDuringRequest,
+  enterReadWriteContext,
+} from './read-write-context.js'
+export { createReplicatedDatabase } from './replicated-client.js'
 export * from './schema/auth.js'
 export * from './schema/conversations.js'
 export * from './schema/interactions.js'

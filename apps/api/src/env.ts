@@ -9,6 +9,14 @@ const envSchema = z
     WORKER_ID: z.coerce.number().int().min(0).max(1023).default(0),
 
     DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
+    // SPECS.md §14.2's "réplicas de lectura" — comma-separated, optional
+    // same reasoning as BLOCKED_TERMS below: unset (docker-compose.yml's
+    // own local-dev default, since a single developer never benefits from
+    // splitting read traffic) means createReplicatedDatabase falls back to
+    // the primary connection completely unwrapped, not that reads are
+    // skipped or broken. docker-compose.yml's postgres-replica service has
+    // the full picture of what a real value here would point at.
+    DATABASE_REPLICA_URLS: z.string().optional(),
     REDIS_URL: z.string().min(1, 'REDIS_URL is required'),
 
     // PEM keys, single line with literal "\n" — required outside development,

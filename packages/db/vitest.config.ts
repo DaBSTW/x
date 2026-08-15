@@ -13,12 +13,16 @@ export default defineConfig({
     exclude: ['**/node_modules/**', '**/migrations/**', '**/*.integration.test.ts'],
     coverage: {
       provider: 'v8',
-      // client.ts, migrate.ts and seed/run.ts are thin I/O wiring against a
-      // real Postgres — covered by integration tests (ROADMAP.md 3.4c's own
-      // client.pgbouncer.integration.test.ts, run separately via
-      // test:integration — the same split every other package with a real
-      // Testcontainers suite already uses), not unit tests.
-      include: ['src/seed/generate.ts'],
+      // client.ts, replicated-client.ts, migrate.ts and seed/run.ts are thin
+      // I/O wiring against a real Postgres — covered by integration tests
+      // (ROADMAP.md 3.4c's own client.pgbouncer.integration.test.ts and
+      // 3.4d's own replicated-client.integration.test.ts, run separately
+      // via test:integration — the same split every other package with a
+      // real Testcontainers suite already uses), not unit tests.
+      // read-write-context.ts is the exception among 3.4d's own new files:
+      // pure logic (an AsyncLocalStorage wrapper, no I/O of its own), so it
+      // belongs in this gate the same as generate.ts already is.
+      include: ['src/seed/generate.ts', 'src/read-write-context.ts'],
       thresholds: { lines: 80, statements: 80, branches: 80, functions: 80 },
     },
   },
