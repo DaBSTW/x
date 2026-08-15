@@ -23,6 +23,22 @@ const env: Env = {
   // still never actually connected to just to read the swagger spec off
   // the built instance, same as every other placeholder value here.
   OPENSEARCH_URL: 'http://localhost:9200',
+  // S3_* and KAFKA_BROKERS below are Env's own .default()'d fields (env.ts)
+  // — z.infer makes a defaulted field's *output* type required even though
+  // it's optional to *provide*, so this object needs every one of them
+  // spelled out, same as the ones above. createS3Client (app.ts) and
+  // createKafkaEventTopic (kafka-event-topic.ts) both connect lazily, same
+  // "no real infra needed just to read the swagger spec" posture as
+  // Postgres/Redis above — but unlike those two, both throw synchronously
+  // on a missing/undefined option rather than deferring the failure to
+  // first use, so leaving these out isn't a silent gap, it's a crash.
+  S3_ENDPOINT: 'http://localhost:9000',
+  S3_REGION: 'us-east-1',
+  S3_BUCKET: 'x-media',
+  S3_ACCESS_KEY_ID: 'x-minio',
+  S3_SECRET_ACCESS_KEY: 'x-minio-secret',
+  S3_FORCE_PATH_STYLE: true,
+  KAFKA_BROKERS: 'localhost:9092',
 }
 
 const app = await buildApp(env)
