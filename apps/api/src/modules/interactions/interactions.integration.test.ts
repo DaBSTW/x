@@ -140,6 +140,72 @@ describe('interactions routes', () => {
     expect(unlikeAgain.statusCode).toBe(204)
   })
 
+  // A fresh post per test, not the shared `postId` above — the whole point
+  // here is the *first* like/bookmark on a (user, post) pair racing itself,
+  // which the sequential "rejects a duplicate" tests above can't exercise
+  // no matter what order they run in (each already leaves that pair
+  // unliked/unbookmarked by the time it returns).
+  it('N concurrent likes for the same user+post: exactly one succeeds, the rest get 409 (roadmap 3.4h)', async () => {
+    const post = await app.inject({
+      method: 'POST',
+      url: '/v1/posts',
+      headers: auth(),
+      payload: { text: 'post para una carrera de likes' },
+    })
+    const racePostId = post.json().data.id
+
+    // interactions.service.ts's like() used to do a plain findLike()-then-
+    // insertLike() — correct sequentially, but two requests racing the same
+    // (userId, postId) can both pass findLike() before either commits its
+    // insert, and the one that loses the race used to surface Postgres' own
+    // likes_user_id_post_id_pk violation as a raw 500 instead of the 409
+    // this route's own response schema already promises. Found for real by
+    // ROADMAP.md 3.4h's k6 campaign under genuine concurrency — not by
+    // inspection — this reproduces it directly and proves the fix
+    // (interactions.service.ts catching it via @x/db's
+    // isUniqueConstraintViolation).
+    const responses = await Promise.all(
+      Array.from({ length: 10 }, () =>
+        app.inject({ method: 'POST', url: `/v1/posts/${racePostId}/like`, headers: auth() }),
+      ),
+    )
+    expect(responses.map((response) => response.statusCode).sort()).toEqual([
+      204,
+      ...Array(9).fill(409),
+    ])
+
+    // Redis, not GET /posts/:id's own counters.likes, is the authoritative
+    // read here — same reasoning as "100 concurrent likes settle to an
+    // exact counter" below: apps/workers' 5s flush to Postgres' own
+    // post_counters table never runs in this test.
+    const redis = new Redis(redisContainer.getConnectionUrl())
+    const raw = await redis.hgetall(postCountersKey(BigInt(racePostId)))
+    redis.disconnect()
+    expect(Number(raw.likes)).toBe(1)
+  })
+
+  it('N concurrent bookmarks for the same user+post: exactly one succeeds, the rest get 409 (roadmap 3.4h)', async () => {
+    const post = await app.inject({
+      method: 'POST',
+      url: '/v1/posts',
+      headers: auth(),
+      payload: { text: 'post para una carrera de bookmarks' },
+    })
+    const racePostId = post.json().data.id
+
+    // Same race, same fix, as the likes test above — bookmark() had the
+    // identical findBookmark()-then-insertBookmark() shape.
+    const responses = await Promise.all(
+      Array.from({ length: 10 }, () =>
+        app.inject({ method: 'POST', url: `/v1/posts/${racePostId}/bookmark`, headers: auth() }),
+      ),
+    )
+    expect(responses.map((response) => response.statusCode).sort()).toEqual([
+      204,
+      ...Array(9).fill(409),
+    ])
+  })
+
   it('bookmarks and unbookmarks', async () => {
     const bookmark = await app.inject({
       method: 'POST',

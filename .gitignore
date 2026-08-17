@@ -29,3 +29,4 @@ pnpm-lock.yaml.bak
 !*.tfvars.example
 crash.log
 **/load-tests/.timeline-load-fixture.json
+**/load-tests/.load-campaign-fixture.json

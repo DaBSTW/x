@@ -1,5 +1,6 @@
 export { createDatabase, schema } from './client.js'
 export type { Database } from './client.js'
+export { isUniqueConstraintViolation } from './errors.js'
 export { migrationsFolderUrl } from './migrations-path.js'
 export {
   didWriteDuringRequest,

@@ -1,4 +1,5 @@
 import type { Post } from '@x/contracts'
+import { isUniqueConstraintViolation } from '@x/db'
 import { ConflictError, NotFoundError, type NotificationJobData } from '@x/utils'
 import type { Redis } from 'ioredis'
 import { type CachedCounters, bumpCounter, zeroCounters } from '../../lib/post-counters-cache.js'
@@ -54,7 +55,20 @@ export function createInteractionsService(
     if (await repository.findLike(userId, postId)) {
       throw new ConflictError('already liked this post')
     }
-    await repository.insertLike(userId, postId)
+    try {
+      await repository.insertLike(userId, postId)
+    } catch (error) {
+      // The findLike check above is inherently racy under real concurrency
+      // (ROADMAP.md 3.4h's k6 campaign found this for real, not in theory:
+      // two requests for the same (userId, postId) both passing it before
+      // either commits) — the unique constraint below is the actual source
+      // of truth, this just gives losing the race the same ConflictError as
+      // losing the check above, instead of an unhandled 500.
+      if (isUniqueConstraintViolation(error, 'likes_user_id_post_id_pk')) {
+        throw new ConflictError('already liked this post')
+      }
+      throw error
+    }
     await bumpCounter(redis, postId, 'likes', 1, () => fetchBaseline(postId))
 
     if (post.authorId !== userId) {
@@ -81,7 +95,15 @@ export function createInteractionsService(
     if (await repository.findBookmark(userId, postId)) {
       throw new ConflictError('already bookmarked this post')
     }
-    await repository.insertBookmark(userId, postId)
+    try {
+      await repository.insertBookmark(userId, postId)
+    } catch (error) {
+      // Same race as like() above, same fix — see its comment.
+      if (isUniqueConstraintViolation(error, 'bookmarks_user_id_post_id_pk')) {
+        throw new ConflictError('already bookmarked this post')
+      }
+      throw error
+    }
     await bumpCounter(redis, postId, 'bookmarks', 1, () => fetchBaseline(postId))
   }
 

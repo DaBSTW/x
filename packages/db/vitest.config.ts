@@ -21,8 +21,9 @@ export default defineConfig({
       // real Testcontainers suite already uses), not unit tests.
       // read-write-context.ts is the exception among 3.4d's own new files:
       // pure logic (an AsyncLocalStorage wrapper, no I/O of its own), so it
-      // belongs in this gate the same as generate.ts already is.
-      include: ['src/seed/generate.ts', 'src/read-write-context.ts'],
+      // belongs in this gate the same as generate.ts already is. errors.ts
+      // (3.4h) is the same story — an instanceof + property check, no I/O.
+      include: ['src/seed/generate.ts', 'src/read-write-context.ts', 'src/errors.ts'],
       thresholds: { lines: 80, statements: 80, branches: 80, functions: 80 },
     },
   },
