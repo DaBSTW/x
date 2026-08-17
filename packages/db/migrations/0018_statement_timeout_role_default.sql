@@ -1,0 +1,19 @@
+-- ROADMAP.md 3.5a / SPECS.md §14.4's "BD 2 s" ("nunca timeout infinito").
+-- A role-level default, not a per-connection option (packages/db/src/
+-- client.ts's own comment has the full story of why): applies at
+-- authentication time to every future connection as this role, direct or
+-- through PgBouncer transaction-mode pooling alike — verified empirically
+-- that a *connection-level* startup parameter doesn't survive the second
+-- one (this repo's own PgBouncer rejects it outright as an unsupported
+-- startup parameter, a fatal error, not a silent no-op).
+--
+-- CURRENT_USER, not a literal role name — this migration runs as whatever
+-- role each deployment's own DATABASE_URL authenticates as, so it stays
+-- correct without hardcoding this sandbox's own "x".
+--
+-- migrate.ts and seed/run.ts explicitly opt back out of this for their own
+-- session (`SET statement_timeout = 0`) before doing anything else — the
+-- one place in this codebase that legitimately runs something slower
+-- (CREATE INDEX CONCURRENTLY, a full backfill, ...).
+ALTER ROLE CURRENT_USER SET statement_timeout = '2000ms';
+--> statement-breakpoint

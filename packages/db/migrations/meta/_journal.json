@@ -127,6 +127,13 @@
       "when": 1786811436447,
       "tag": "0017_ordinary_big_bertha",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1787007129634,
+      "tag": "0018_statement_timeout_role_default",
+      "breakpoints": true
     }
   ]
 }

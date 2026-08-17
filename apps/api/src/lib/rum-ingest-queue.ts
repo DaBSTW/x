@@ -13,6 +13,9 @@ export type RumIngestQueue = {
  * as trend-ingest-queue.ts/fanout-queue.ts.
  */
 export function createRumIngestQueue(redisUrl: string): RumIngestQueue {
+  // maxRetriesPerRequest: null is BullMQ's own hard requirement (its
+  // internal blocking-wait polling would otherwise error) — CODESTYLE.md
+  // §10's 200ms Redis budget deliberately doesn't apply to this connection.
   const connection = new Redis(redisUrl, { maxRetriesPerRequest: null })
   const queue = new Queue<RumIngestJobData>(RUM_INGEST_QUEUE_NAME, { connection })
 

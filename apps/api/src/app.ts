@@ -6,6 +6,7 @@ import { Client as OpenSearchClient } from '@opensearch-project/opensearch'
 import scalarApiReference from '@scalar/fastify-api-reference'
 import {
   INTERACTION_EVENTS_TOPIC,
+  INTERNAL_CALL_TIMEOUT_MS,
   type NotificationJobData,
   POST_CREATED_TOPIC,
   REALTIME_TICKET_TTL_SECONDS,
@@ -346,7 +347,14 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
 
   // Query-time only — apps/workers' search-indexer.worker.ts owns writing
   // to these indices (ROADMAP.md 2.3), this app only ever reads them.
-  const openSearchClient = new OpenSearchClient({ node: env.OPENSEARCH_URL })
+  // requestTimeout: SPECS.md §14.4 / CODESTYLE.md §10's "servicio interno
+  // 1 s" — this client only ever backs a live GET /search response here
+  // (unlike apps/workers' own OpenSearch client, left unbounded for its
+  // background indexing/reindex work — see that file's own comment).
+  const openSearchClient = new OpenSearchClient({
+    node: env.OPENSEARCH_URL,
+    requestTimeout: INTERNAL_CALL_TIMEOUT_MS,
+  })
   const searchRepository = createSearchRepository(openSearchClient)
   const searchService = createSearchService(
     searchRepository,

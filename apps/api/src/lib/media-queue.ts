@@ -13,6 +13,9 @@ export type MediaQueue = {
  * and notifications-queue.ts each use one instead of `app.redis`.
  */
 export function createMediaQueue(redisUrl: string): MediaQueue {
+  // maxRetriesPerRequest: null is BullMQ's own hard requirement (its
+  // internal blocking-wait polling would otherwise error) — CODESTYLE.md
+  // §10's 200ms Redis budget deliberately doesn't apply to this connection.
   const connection = new Redis(redisUrl, { maxRetriesPerRequest: null })
   const queue = new Queue<MediaProcessingJobData>(MEDIA_PROCESSING_QUEUE_NAME, { connection })
 

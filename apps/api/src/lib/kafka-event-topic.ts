@@ -1,3 +1,4 @@
+import { INTERNAL_CALL_TIMEOUT_MS } from '@x/utils'
 import { Kafka, type Producer, logLevel } from 'kafkajs'
 
 export type KafkaEventTopic<T> = {
@@ -51,6 +52,10 @@ export function createKafkaEventTopic<T>(options: KafkaEventTopicOptions<T>): Ka
     // rides out a genuine transient blip, and a real outage still fails
     // within a fraction of a second.
     retry: { retries: 2, initialRetryTime: 100, maxRetryTime: 500 },
+    // SPECS.md §14.4 / CODESTYLE.md §10's "servicio interno 1 s" — bounds
+    // each individual attempt above, distinct from (and tighter than) the
+    // retry policy's own spacing between attempts.
+    requestTimeout: INTERNAL_CALL_TIMEOUT_MS,
   })
   const producer: Producer = kafka.producer({ idempotent: true })
   let connected = false

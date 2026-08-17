@@ -1,3 +1,4 @@
+import { EXTERNAL_CALL_TIMEOUT_MS, withTimeout } from '@x/utils'
 import { cert, initializeApp } from 'firebase-admin/app'
 import { type Messaging, getMessaging } from 'firebase-admin/messaging'
 import { isFcmTokenDead } from './fcm-token-errors.js'
@@ -42,14 +43,22 @@ export function createFcmPushSender(serviceAccount: FcmServiceAccount): SendFcmP
 
   return async (deviceToken, payload) => {
     try {
-      await messaging.send({
-        token: deviceToken,
-        notification: { title: payload.title, body: payload.body },
-        // FCM's `data` payload is string-only — an absent url is encoded
-        // as `''` rather than omitted, so the client can always read
-        // `data.url` without first checking whether the key exists at all.
-        data: { url: payload.url ?? '' },
-      })
+      // SPECS.md §14.4 / CODESTYLE.md §10 — "externo 5 s". firebase-admin
+      // exposes no send()-level timeout option of its own, hence withTimeout
+      // (see its own comment for why a native option is preferred when one
+      // exists — Postgres'/Redis' own above — and this is the fallback).
+      await withTimeout(
+        messaging.send({
+          token: deviceToken,
+          notification: { title: payload.title, body: payload.body },
+          // FCM's `data` payload is string-only — an absent url is encoded
+          // as `''` rather than omitted, so the client can always read
+          // `data.url` without first checking whether the key exists at all.
+          data: { url: payload.url ?? '' },
+        }),
+        EXTERNAL_CALL_TIMEOUT_MS,
+        'fcm',
+      )
       return { expired: false }
     } catch (error) {
       if (isFcmTokenDead(error)) return { expired: true }

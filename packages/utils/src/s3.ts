@@ -23,7 +23,24 @@ export type S3Config = {
 
 const PRESIGNED_UPLOAD_TTL_SECONDS = 5 * 60
 
-/** MinIO in development, any S3-compatible provider in production (SPECS.md §3's `media` service). */
+/**
+ * MinIO in development, any S3-compatible provider in production (SPECS.md
+ * §3's `media` service).
+ *
+ * Deliberately no configurable request timeout here (SPECS.md §14.4 /
+ * CODESTYLE.md §10 would call this "servicio interno 1 s" otherwise) —
+ * every real caller of this client legitimately transfers payloads a fixed
+ * short budget can't be sized correctly for either way: apps/workers'
+ * upload of a transcoded HLS ladder can be genuinely large, and even
+ * apps/api's own media.service.ts's requireUploadedBuffer downloads the
+ * caller's *original* upload in full (getObjectBuffer) at finalize time,
+ * up to the video size limit (512 MB) — same file, same live request, so
+ * "getObjectBuffer only ever moves a few KB" isn't a safe assumption to
+ * bound this on the way headObjectSize's own metadata-only HEAD would be.
+ * An honest gap, not a silent one — timeouts.ts/client.ts/redis.ts/
+ * opensearch-client.ts above are where this checkpoint's "explicit
+ * timeout, no exception" rule is actually enforced.
+ */
 export function createS3Client(config: S3Config): S3Client {
   return new S3Client({
     endpoint: config.endpoint,

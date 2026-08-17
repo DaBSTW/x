@@ -7,14 +7,25 @@ import { markWroteDuringRequest, shouldPreferPrimary } from './read-write-contex
  * repository in this codebase can tell — same public shape as
  * createDatabase's own return type, so nothing downstream of `app.db`
  * changes (CODESTYLE.md §8.4) — but every select/selectDistinct/
- * selectDistinctOn/query/with/$with call actually goes to a randomly
+ * selectDistinctOn/query/with/$with/$count call actually goes to a randomly
  * chosen replica *unless* read-write-context.ts's shouldPreferPrimary()
  * says otherwise for whatever request is currently in flight, and every
- * insert/update/delete/transaction both goes to the primary *and* marks
- * the current request as having written (so that request's own subsequent
- * reads switch to the primary too — read-your-writes within a single
- * request, not just across requests via the cookie apps/api's
- * read-write-routing plugin sets).
+ * insert/update/delete/transaction/execute/refreshMaterializedView both
+ * goes to the primary *and* marks the current request as having written
+ * (so that request's own subsequent reads switch to the primary too —
+ * read-your-writes within a single request, not just across requests via
+ * the cookie apps/api's read-write-routing plugin sets).
+ *
+ * Every one of drizzle's own `PostgresJsDatabase` methods is listed
+ * explicitly below, deliberately — `...primary` only carries over
+ * *own-enumerable* properties (drizzle's internal `dialect`/`session`/`_`/
+ * `$client` state, real properties this object genuinely needs), never
+ * `primary`'s actual query methods: those live on its prototype chain, so
+ * the spread alone silently drops them. Caught for real, not by
+ * inspection: `execute` was missing from this list until
+ * ROADMAP.md 3.5a's own migrate.ts/seed/run.ts opt-out pattern needed it in
+ * a test, and `app.db.execute is not a function` surfaced the gap
+ * immediately.
  *
  * Deliberately hand-rolled rather than drizzle-orm/pg-core's own
  * `withReplicas` helper: its random-replica-pick default is all this
@@ -64,6 +75,8 @@ export function createReplicatedDatabase(primaryUrl: string, replicaUrls: string
       readTarget().selectDistinctOn(...args),
     with: (...args: Parameters<Database['with']>) => readTarget().with(...args),
     $with: (...args: Parameters<Database['$with']>) => readTarget().$with(...args),
+    // count(*) can only ever read — no separate write-tracked branch needed.
+    $count: (...args: Parameters<Database['$count']>) => readTarget().$count(...args),
     get query() {
       return readTarget().query
     },
@@ -90,5 +103,27 @@ export function createReplicatedDatabase(primaryUrl: string, replicaUrls: string
       markWroteDuringRequest()
       return primary.transaction(...args)
     },
-  } as Database
+    // Raw SQL is a generic escape hatch — could be a read or a write, and
+    // unlike transaction() above there's no call-site convention here to
+    // lean on. Same conservative default as transaction(): a write
+    // misrouted to a replica is a correctness bug (replicas reject writes
+    // outright), a read misrouted to the primary is just a missed
+    // optimization — the asymmetry, not an assumption about what most
+    // callers actually do with it, is why this defaults to primary.
+    execute: (...args: Parameters<Database['execute']>) => {
+      markWroteDuringRequest()
+      return primary.execute(...args)
+    },
+    // Modifies the view's own contents — a write in every sense that
+    // matters here, same reasoning as execute() above.
+    refreshMaterializedView: (...args: Parameters<Database['refreshMaterializedView']>) => {
+      markWroteDuringRequest()
+      return primary.refreshMaterializedView(...args)
+    },
+    // Structurally correct at runtime (every method above is a real,
+    // matching drizzle method) but TS's structural check on this many
+    // overlapping call signatures at once is stricter than a plain `as
+    // Database` tolerates — same "verified by hand, tell TS to stop
+    // fighting itself" posture as opensearch-client.ts's own `loosely<T>`.
+  } as unknown as Database
 }

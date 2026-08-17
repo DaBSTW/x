@@ -3,10 +3,26 @@ import { POSTS_SEARCH_INDEX, USERS_SEARCH_INDEX } from '@x/utils'
 
 export type OpenSearchConfig = {
   url: string
+  /**
+   * SPECS.md §14.4 / CODESTYLE.md §10 — "servicio interno 1 s". Optional
+   * and unset by default: apps/workers' own use of this factory (indexing
+   * writes off the CDC stream, and this file's own ensureSearchIndices —
+   * whose rare one-time legacy-index migration branch runs a real
+   * `_reindex`, and scripts/reindex-search.ts's blue-green one always does)
+   * is background work with no live request's latency budget riding on it,
+   * the same reasoning packages/db/src/client.ts's own statementTimeoutMs
+   * documents for migrate.ts/seed/run.ts. Only apps/api's app.ts opts in —
+   * the one case where a search query sits directly on a live HTTP
+   * response's critical path.
+   */
+  requestTimeoutMs?: number
 }
 
 export function createOpenSearchClient(config: OpenSearchConfig): Client {
-  return new Client({ node: config.url })
+  return new Client({
+    node: config.url,
+    ...(config.requestTimeoutMs !== undefined ? { requestTimeout: config.requestTimeoutMs } : {}),
+  })
 }
 
 // SPECS.md §10.1's own mapping is verbatim below for `posts` — `analyzer:

@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url'
+import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
 import { createDatabase } from './client.js'
 import { migrationsFolderUrl } from './migrations-path.js'
@@ -10,6 +11,17 @@ if (!connectionString) {
 }
 
 const db = createDatabase(connectionString)
+
+// migrations/0018_*.sql sets a role-level statement_timeout default
+// (ROADMAP.md 3.5a) — once that migration has run once, every later
+// invocation of this same script (including this one, for whatever
+// migration runs *after* 0018) would otherwise inherit it too, and DDL like
+// CREATE INDEX CONCURRENTLY on a real production-sized table can
+// legitimately take far longer. Unset for this script's own session only —
+// a role-level default is exactly that, a *default*, and this overrides it
+// for the connection that's about to do the one thing in this codebase
+// that needs to.
+await db.execute(sql`set statement_timeout = 0`)
 
 await migrate(db, { migrationsFolder: fileURLToPath(migrationsFolderUrl()) })
 

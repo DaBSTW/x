@@ -1,3 +1,4 @@
+import { EXTERNAL_CALL_TIMEOUT_MS, withTimeout } from '@x/utils'
 import nodemailer, { type Transporter } from 'nodemailer'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { Resend } from 'resend'
@@ -116,10 +117,23 @@ export function createMailer(options: CreateMailerOptions): Mailer {
 
   async function send(to: string, subject: string, text: string, html: string): Promise<void> {
     try {
+      // SPECS.md §14.4 / CODESTYLE.md §10 — "externo 5 s". Neither the
+      // Resend SDK nor nodemailer's SMTP transport exposes one uniform
+      // native option that covers both branches here, so this is the
+      // withTimeout fallback case (see its own comment) rather than a
+      // native per-dependency setting like Postgres'/Redis' above.
       if (resend) {
-        await resend.emails.send({ from: options.from, to, subject, html, text })
+        await withTimeout(
+          resend.emails.send({ from: options.from, to, subject, html, text }),
+          EXTERNAL_CALL_TIMEOUT_MS,
+          'resend',
+        )
       } else {
-        await smtpTransport.sendMail({ from: options.from, to, subject, text, html })
+        await withTimeout(
+          smtpTransport.sendMail({ from: options.from, to, subject, text, html }),
+          EXTERNAL_CALL_TIMEOUT_MS,
+          'smtp',
+        )
       }
     } catch (error) {
       options.logger.warn({ error, to }, 'email failed to send')

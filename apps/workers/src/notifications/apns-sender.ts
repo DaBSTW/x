@@ -1,4 +1,5 @@
 import { Notification, Provider } from '@parse/node-apn'
+import { EXTERNAL_CALL_TIMEOUT_MS, withTimeout } from '@x/utils'
 import { isApnsTokenDead } from './apns-token-errors.js'
 import type { PushPayload, SendPushResult } from './push-sender.js'
 
@@ -34,7 +35,13 @@ export function createApnsPushSender(credentials: ApnsCredentials): SendApnsPush
     notification.alert = { title: payload.title, body: payload.body }
     notification.payload = { url: payload.url }
 
-    const result = await provider.send(notification, deviceToken)
+    // SPECS.md §14.4 / CODESTYLE.md §10 — "externo 5 s", same withTimeout
+    // fallback as fcm-sender.ts (see its own comment).
+    const result = await withTimeout(
+      provider.send(notification, deviceToken),
+      EXTERNAL_CALL_TIMEOUT_MS,
+      'apns',
+    )
     // A single recipient was asked for, so at most one failure comes back.
     const failure = result.failed[0]
     if (!failure) return { expired: false }

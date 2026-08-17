@@ -1187,6 +1187,18 @@ describe('posts routes', () => {
     // at scale, not about re-proving posts.service.ts's create() path (that's
     // covered elsewhere). Chunked at 5,000 rows/statement to stay well under
     // Postgres's 65535-parameter limit per statement.
+    //
+    // migrations/0018_*.sql's role-level statement_timeout (ROADMAP.md 3.5a)
+    // applies to every connection this role makes, this test's own included
+    // — 20 chunked bulk inserts under this suite's real, sometimes
+    // contended, Testcontainers Postgres legitimately ran long enough to
+    // hit it once (caught by this test itself, not assumed). Reset right
+    // after: this file's `app.db` connection pool is shared across every
+    // other `it()` block here, and DEFAULT restores the role's own real
+    // budget for whichever one reuses this physical connection next —
+    // same "opt out for exactly the one legitimately slow operation"
+    // posture migrate.ts/seed/run.ts already established.
+    await app.db.execute(sql`set statement_timeout = 0`)
     const REPLY_COUNT = 50_000
     const BATCH_SIZE = 5_000
     let firstReplyId: bigint | undefined
@@ -1208,6 +1220,7 @@ describe('posts routes', () => {
       await app.db.insert(posts).values(postRows)
       await app.db.insert(postCounters).values(counterRows)
     }
+    await app.db.execute(sql`set statement_timeout = default`)
 
     // The bulk insert above never went through insertPost's `postsCount + 1`
     // update, so this is whatever the shared `poster` account already

@@ -1,3 +1,4 @@
+import { EXTERNAL_CALL_TIMEOUT_MS, withTimeout } from '@x/utils'
 import webpush from 'web-push'
 
 export type PushPayload = {
@@ -39,12 +40,19 @@ export function createWebPushSender(options: CreateWebPushSenderOptions): SendPu
 
   return async (subscription, payload) => {
     try {
-      await webpush.sendNotification(
-        {
-          endpoint: subscription.endpoint,
-          keys: { p256dh: subscription.p256dh, auth: subscription.authKey },
-        },
-        JSON.stringify(payload),
+      // SPECS.md §14.4 / CODESTYLE.md §10 — "externo 5 s", same withTimeout
+      // fallback as fcm-sender.ts/apns-sender.ts (see fcm-sender.ts's own
+      // comment on why).
+      await withTimeout(
+        webpush.sendNotification(
+          {
+            endpoint: subscription.endpoint,
+            keys: { p256dh: subscription.p256dh, auth: subscription.authKey },
+          },
+          JSON.stringify(payload),
+        ),
+        EXTERNAL_CALL_TIMEOUT_MS,
+        'web-push',
       )
       return { expired: false }
     } catch (error) {

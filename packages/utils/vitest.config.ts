@@ -39,6 +39,7 @@ export default defineConfig({
         'src/text/entities.ts',
         'src/text/index.ts',
         'src/timeline-constants.ts',
+        'src/timeouts.ts',
         'src/tokens.ts',
         'src/totp.ts',
         'src/trends.ts',

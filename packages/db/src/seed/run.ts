@@ -11,6 +11,10 @@ if (!connectionString) {
 }
 
 const db = createDatabase(connectionString)
+// Same reasoning as migrate.ts's own — migrations/0018_*.sql's role-level
+// statement_timeout default (ROADMAP.md 3.5a) would otherwise also bound
+// this script's own TRUNCATE + bulk insert of a much larger seed run.
+await db.execute(sql`set statement_timeout = 0`)
 const data = await generateSeedData(50, 500)
 
 await db.transaction(async (tx) => {

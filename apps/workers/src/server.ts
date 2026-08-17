@@ -3,8 +3,10 @@ import {
   COUNTER_FLUSH_INTERVAL_MS,
   FANOUT_CONSUMER_GROUP,
   INTERACTION_EVENTS_TOPIC,
+  INTERNAL_CALL_TIMEOUT_MS,
   NOTIFICATIONS_CONSUMER_GROUP,
   POST_CREATED_TOPIC,
+  REDIS_TIMEOUT_MS,
   SEARCH_INDEXER_CONSUMER_GROUP,
   dlqTopicName,
   ensureKafkaTopics,
@@ -36,6 +38,9 @@ import { createTrendIngestRepository } from './trends/trend-ingest.repository.js
 import { createTrendIngestWorker } from './trends/trend-ingest.worker.js'
 
 const env = parseEnv(process.env)
+// SPECS.md §14.4's "BD 2 s" applies automatically here — it's a role-level
+// Postgres default (packages/db/migrations/0018_*.sql), not something this
+// call configures. See packages/db/src/client.ts's own comment for why.
 const db = createDatabase(env.DATABASE_URL)
 
 // Both keys configured or neither — a lone key can't sign anything.
@@ -94,6 +99,13 @@ const workersKafka = new Kafka({
   clientId: 'x-workers',
   brokers: env.KAFKA_BROKERS.split(','),
   logLevel: logLevel.ERROR,
+  // SPECS.md §14.4 / CODESTYLE.md §10 — "servicio interno 1 s": Kafka/
+  // Redpanda is same-deployment infra, not a third-party API. Bounds how
+  // long any single broker request (produce, fetch, admin) waits for a
+  // response before kafkajs itself times it out — kafka-consumer.ts's own
+  // in-process retry/backoff (bounded separately, per message) still
+  // applies on top of this.
+  requestTimeout: INTERNAL_CALL_TIMEOUT_MS,
 })
 
 // Same non-fatal "ensure the infra this process depends on exists, but
@@ -120,7 +132,16 @@ try {
 const dlqProducer = workersKafka.producer({ idempotent: true })
 await dlqProducer.connect()
 
-const fanoutRedis = new Redis(env.REDIS_URL)
+// SPECS.md §14.4 / CODESTYLE.md §10 — "Redis 200 ms", every direct command
+// this process issues (ZADD/HINCRBY/SET/...) below. Not applied to the
+// separate bullmqConnection clients further down (media.worker.ts/
+// trend-ingest.worker.ts/rum-ingest.worker.ts) — those need
+// maxRetriesPerRequest: null specifically because BullMQ's own internal
+// blocking waits legitimately run far longer than 200ms, a different
+// concern this fixed short timeout would break, not satisfy.
+const REDIS_OPTIONS = { commandTimeout: REDIS_TIMEOUT_MS }
+
+const fanoutRedis = new Redis(env.REDIS_URL, REDIS_OPTIONS)
 const fanoutWorker = createFanoutWorker({
   repository: createFanoutRepository(db),
   kafka: workersKafka,
@@ -139,7 +160,7 @@ try {
   console.warn('Kafka/Redpanda unreachable at boot — fan-out will be unavailable:', error)
 }
 
-const notificationsRedis = new Redis(env.REDIS_URL)
+const notificationsRedis = new Redis(env.REDIS_URL, REDIS_OPTIONS)
 const notificationsWorker = createNotificationsWorker({
   repository: createNotificationsRepository(db),
   kafka: workersKafka,
@@ -157,7 +178,7 @@ try {
   console.warn('Kafka/Redpanda unreachable at boot — notifications will be unavailable:', error)
 }
 
-const countersRedis = new Redis(env.REDIS_URL)
+const countersRedis = new Redis(env.REDIS_URL, REDIS_OPTIONS)
 const countersFlushWorker = createCountersFlushWorker(
   createCountersRepository(db),
   countersRedis,
@@ -168,7 +189,7 @@ countersFlushWorker.start()
 // ROADMAP.md 3.3f — same "own Redis connection per worker" posture as
 // countersRedis above (each worker's own idempotency guard, not shared
 // connection pooling across unrelated workers).
-const coordinationRedis = new Redis(env.REDIS_URL)
+const coordinationRedis = new Redis(env.REDIS_URL, REDIS_OPTIONS)
 const coordinationSweepWorker = createCoordinationSweepWorker(
   createCoordinationRepository(db),
   coordinationRedis,

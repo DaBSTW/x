@@ -15,6 +15,9 @@ export type DbPluginOptions = {
 }
 
 export default fp(async function dbPlugin(app: FastifyInstance, options: DbPluginOptions) {
+  // SPECS.md §14.4's "BD 2 s" applies automatically here — it's a role-level
+  // Postgres default (migrations/0018_*.sql), not something this call
+  // configures. See packages/db/src/client.ts's own comment for why.
   const db = createReplicatedDatabase(options.databaseUrl, options.replicaUrls)
   app.decorate('db', db)
 })

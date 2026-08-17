@@ -21,6 +21,9 @@ export type MediaWorkerHandle = {
 }
 
 export function createMediaWorker(options: MediaWorkerOptions): MediaWorkerHandle {
+  // maxRetriesPerRequest: null is BullMQ's own hard requirement (its
+  // internal blocking-wait polling would otherwise error) — CODESTYLE.md
+  // §10's 200ms Redis budget deliberately doesn't apply to this connection.
   const bullmqConnection = new Redis(options.redisUrl, { maxRetriesPerRequest: null })
   const process = createMediaProcessor({
     repository: options.repository,

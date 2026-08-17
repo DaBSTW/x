@@ -163,6 +163,44 @@ describe('createReplicatedDatabase against real streaming replication', () => {
     }
   })
 
+  it('execute() goes to the primary and marks the request as having written, the same as insert() — ROADMAP.md 3.5a’s own regression, reproduced directly', async () => {
+    // The bug this reproduces: replicated-client.ts's wrapper spread
+    // `...primary` expecting it to carry over drizzle's own execute() —
+    // it doesn't (that method lives on primary's prototype chain, invisible
+    // to an object spread), so before this file's own fix the wrapped
+    // db.execute below was simply `undefined`, not misrouted — a
+    // `TypeError: db.execute is not a function`, caught for real by
+    // apps/api/src/modules/posts/posts.integration.test.ts's own bulk-insert
+    // helper (ROADMAP.md 3.5a's statement_timeout opt-out) the first time
+    // anything in this codebase called it through the wrapper.
+    const replicaRaw = createDatabase(replicaUrl())
+    const db = createReplicatedDatabase(primaryContainer.getConnectionUri(), [replicaUrl()])
+
+    await replicaRaw.execute(sql`select pg_wal_replay_pause()`)
+    try {
+      enterReadWriteContext(false) // a fresh request, no incoming cookie
+      const id = generateId()
+      const username = `rwc${id.toString().slice(-10)}`
+      // Raw SQL through the *wrapped* database, not primaryRaw/replicaRaw —
+      // this is what proves execute() itself is wired into the primary +
+      // write-tracking path, not just present as a callable function.
+      await db.execute(
+        sql`insert into users (id, username, username_lower, email, display_name)
+            values (${id}, ${username}, ${username.toLowerCase()}, ${`${username}@example.com`}, ${username})`,
+      )
+
+      // Read-your-writes proves execute() marked this request as having
+      // written: a plain select() with no special routing of its own now
+      // finds a row that only exists on the (paused, so definitely not yet
+      // replicated) replica's primary counterpart.
+      const rows = await db.select().from(users).where(eq(users.id, id)).limit(1)
+      expect(rows).toHaveLength(1)
+      expect(rows[0]?.id).toBe(id)
+    } finally {
+      await replicaRaw.execute(sql`select pg_wal_replay_resume()`)
+    }
+  })
+
   it('read-your-writes: an incoming cookie alone (no write yet this request) also forces primary reads', async () => {
     const replicaRaw = createDatabase(replicaUrl())
     const primaryRaw = createDatabase(primaryContainer.getConnectionUri())
