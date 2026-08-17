@@ -24,6 +24,7 @@ import { createKafkaEventTopic } from './lib/kafka-event-topic.js'
 import { createMailer } from './lib/mailer.js'
 import { createMediaQueue } from './lib/media-queue.js'
 import { createMediaStorage } from './lib/media-storage.js'
+import { createRumIngestQueue } from './lib/rum-ingest-queue.js'
 import { createTrendIngestQueue } from './lib/trend-ingest-queue.js'
 import { createAuthRepository } from './modules/auth/auth.repository.js'
 import { registerAuthRoutes } from './modules/auth/auth.routes.js'
@@ -60,6 +61,7 @@ import { registerPushRoutes } from './modules/push/push.routes.js'
 import { createPushService } from './modules/push/push.service.js'
 import { registerRealtimeRoutes } from './modules/realtime/realtime.routes.js'
 import { createRealtimeService } from './modules/realtime/realtime.service.js'
+import { registerRumRoutes } from './modules/rum/rum.routes.js'
 import { createSearchRepository } from './modules/search/search.repository.js'
 import { registerSearchRoutes } from './modules/search/search.routes.js'
 import { createSearchService } from './modules/search/search.service.js'
@@ -165,12 +167,14 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   })
   const mediaQueue = createMediaQueue(env.REDIS_URL)
   const trendIngestQueue = createTrendIngestQueue(env.REDIS_URL)
+  const rumIngestQueue = createRumIngestQueue(env.REDIS_URL)
   app.addHook('onClose', async () => {
     await Promise.all([
       fanoutTopic.close(),
       notificationsTopic.close(),
       mediaQueue.close(),
       trendIngestQueue.close(),
+      rumIngestQueue.close(),
     ])
   })
   const publishNotification = (data: NotificationJobData) =>
@@ -448,6 +452,13 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   await app.register(
     async (instance) => {
       await registerTrendsRoutes(instance, { trendsService })
+    },
+    { prefix: '/v1' },
+  )
+
+  await app.register(
+    async (instance) => {
+      await registerRumRoutes(instance, { rumIngestQueue, redis: app.redis })
     },
     { prefix: '/v1' },
   )

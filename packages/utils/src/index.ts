@@ -24,8 +24,14 @@ export {
   zeroCounterValues,
 } from './counters.js'
 export type { CounterField, CounterValues } from './counters.js'
-export { TREND_INGEST_QUEUE_NAME } from './queues.js'
-export type { FanoutJobData, TrendIngestJobData } from './queues.js'
+export { RUM_INGEST_QUEUE_NAME, TREND_INGEST_QUEUE_NAME } from './queues.js'
+export type {
+  FanoutJobData,
+  RumIngestJobData,
+  RumMetricName,
+  RumRating,
+  TrendIngestJobData,
+} from './queues.js'
 export {
   CELEBRITY_FOLLOWER_THRESHOLD,
   FANOUT_BATCH_SIZE,

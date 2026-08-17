@@ -38,6 +38,13 @@ export default defineConfig({
         // use-timeline it's meaningfully unit-testable without a real
         // backend at all.
         'lib/use-reduced-motion.ts',
+        // Same reasoning as use-reduced-motion.ts above — navigator.sendBeacon
+        // is a mockable browser API, not a real network call, and this file's
+        // route-pattern derivation is pure logic besides. web-vitals-reporter.tsx
+        // itself (Next.js's own useReportWebVitals/usePathname/useParams hooks)
+        // stays excluded, same as every other "mostly wires hooks together"
+        // component this comment already covers.
+        'lib/report-web-vitals.ts',
         'components/ui/button.tsx',
         'components/rich-text.tsx',
       ],

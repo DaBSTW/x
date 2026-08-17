@@ -11,6 +11,9 @@ const envSchema = z.object({
   // Mostly-I/O like fan-out/notifications above, not CPU-bound like media —
   // default matches those two, not media's lower one.
   TREND_INGEST_WORKER_CONCURRENCY: z.coerce.number().int().positive().default(4),
+  // Same reasoning as TREND_INGEST_WORKER_CONCURRENCY above — a single
+  // ClickHouse insert per job, no CPU-bound work.
+  RUM_INGEST_WORKER_CONCURRENCY: z.coerce.number().int().positive().default(4),
   // Lower than the others by default: sharp's transcoding is CPU-bound per
   // job, unlike fan-out/notifications' mostly-I/O work — ROADMAP.md 1.5.
   MEDIA_WORKER_CONCURRENCY: z.coerce.number().int().positive().default(2),

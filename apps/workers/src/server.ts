@@ -26,6 +26,9 @@ import { createFcmPushSender } from './notifications/fcm-sender.js'
 import { createNotificationsRepository } from './notifications/notifications.repository.js'
 import { createNotificationsWorker } from './notifications/notifications.worker.js'
 import { createWebPushSender } from './notifications/push-sender.js'
+import { ensureWebVitalsTable } from './rum/clickhouse-table.js'
+import { createRumIngestRepository } from './rum/rum-ingest.repository.js'
+import { createRumIngestWorker } from './rum/rum-ingest.worker.js'
 import { createOpenSearchClient, ensureSearchIndices } from './search/opensearch-client.js'
 import { createSearchIndexer } from './search/search-indexer.worker.js'
 import { createClickHouseClient, ensureHashtagMentionsTable } from './trends/clickhouse-client.js'
@@ -224,6 +227,24 @@ trendIngestWorker.worker.on('failed', (job, error) => {
   console.error(`trend-ingest job ${job?.id ?? '(unknown)'} failed:`, error)
 })
 
+// ROADMAP.md 3.4g — same shared clickhouseClient as trend-ingest above, a
+// second table on it, same non-fatal boot posture for the same reason:
+// losing this loses Core Web Vitals visibility, never a post, a like, a
+// DM, or (unlike ClickHouse itself being fully down) even trending topics.
+try {
+  await ensureWebVitalsTable(clickhouseClient)
+} catch (error) {
+  console.warn('ClickHouse unreachable at boot — Core Web Vitals RUM will be unavailable:', error)
+}
+const rumIngestWorker = createRumIngestWorker({
+  repository: createRumIngestRepository(clickhouseClient),
+  redisUrl: env.REDIS_URL,
+  concurrency: env.RUM_INGEST_WORKER_CONCURRENCY,
+})
+rumIngestWorker.worker.on('failed', (job, error) => {
+  console.error(`rum-ingest job ${job?.id ?? '(unknown)'} failed:`, error)
+})
+
 // ROADMAP.md 2.3 — same top-level-await self-healing as ClickHouse above,
 // and the same non-fatal posture for the same reason: ensuring the index
 // mappings exist is a self-contained piece worth having ready before the
@@ -256,7 +277,7 @@ try {
 }
 
 console.info(
-  'workers: fan-out, notifications, media, counters flush, coordination sweep, trend-ingest, and search-indexer workers ready',
+  'workers: fan-out, notifications, media, counters flush, coordination sweep, trend-ingest, rum-ingest, and search-indexer workers ready',
 )
 
 async function shutdown(): Promise<void> {
@@ -269,6 +290,7 @@ async function shutdown(): Promise<void> {
     notificationsWorker.close(),
     mediaWorker.close(),
     trendIngestWorker.close(),
+    rumIngestWorker.close(),
     searchIndexer.stop(),
   ])
   fanoutRedis.disconnect()
